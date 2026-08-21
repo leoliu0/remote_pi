@@ -185,6 +185,11 @@ class SyncService extends Service {
     final id = _newId();
     final now = DateTime.now();
     final isSteer = streamingBehavior == UserMessageStreamingBehavior.steer;
+    if (isSteer && (_streaming?.buffer.isNotEmpty ?? false)) {
+      final inReplyTo = _streaming!.inReplyTo;
+      _finalizeSegment();
+      _emitStreaming(StreamingMessage(inReplyTo: inReplyTo));
+    }
     // Optimistic pending row (#defaults: optimistic + dedupe by id).
     if (epk != null) {
       await _upsert(
