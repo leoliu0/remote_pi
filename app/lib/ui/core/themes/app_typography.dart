@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import 'package:app/ui/core/themes/app_colors.dart';
-
+import 'package:app/ui/core/themes/app_font_family.dart';
 /// Monospace font family — used for code, terminal-style chrome, and most of
 /// the app's UI text (the product's "coding agent" identity).
 ///
@@ -57,7 +57,11 @@ class AppTypography extends ThemeExtension<AppTypography> {
     required this.mono,
     required this.monoSmall,
     required this.sansBody,
+    this.fontFamily = AppFontFamily.system,
   });
+
+  /// Active font family configuration.
+  final AppFontFamily fontFamily;
 
   /// Primary monospace style (chat code, terminal chrome). Was `kMonoStyle`.
   final TextStyle mono;
@@ -71,17 +75,20 @@ class AppTypography extends ThemeExtension<AppTypography> {
   /// Build the style set for a given color palette so text colors track the
   /// active theme. [monoColor] is the resting mono text color (was the
   /// hardcoded `0xFFE6E6E6` in dark).
-  factory AppTypography.fromColors(AppColors c, {required Color monoColor}) {
+  factory AppTypography.fromColors(
+    AppColors c, {
+    required Color monoColor,
+    AppFontFamily fontFamily = AppFontFamily.system,
+  }) {
     return AppTypography(
-      mono: TextStyle(
-        fontFamily: kMonoFamily,
+      fontFamily: fontFamily,
+      mono: fontFamily.textStyle(
         fontSize: 12.5,
         color: monoColor,
         height: 1.5,
         letterSpacing: 0,
       ),
-      monoSmall: TextStyle(
-        fontFamily: kMonoFamily,
+      monoSmall: fontFamily.textStyle(
         fontSize: 11.0,
         color: c.muted2,
         height: 1.4,
@@ -96,24 +103,40 @@ class AppTypography extends ThemeExtension<AppTypography> {
     );
   }
 
+  /// Default dark typography with system font.
+  static final AppTypography defaultDark = AppTypography.dark();
+
+  /// Default light typography with system font.
+  static final AppTypography defaultLight = AppTypography.light();
+
   /// Dark typography — mono text matches the original `0xFFE6E6E6`.
-  static final AppTypography dark =
-      AppTypography.fromColors(AppColors.dark, monoColor: const Color(0xFFE6E6E6));
+  static AppTypography dark({AppFontFamily fontFamily = AppFontFamily.system}) =>
+      AppTypography.fromColors(
+        AppColors.dark,
+        monoColor: const Color(0xFFE6E6E6),
+        fontFamily: fontFamily,
+      );
 
   /// Light typography — mono text is a near-black for contrast on white.
-  static final AppTypography light =
-      AppTypography.fromColors(AppColors.light, monoColor: const Color(0xFF1A1A1A));
+  static AppTypography light({AppFontFamily fontFamily = AppFontFamily.system}) =>
+      AppTypography.fromColors(
+        AppColors.light,
+        monoColor: const Color(0xFF1A1A1A),
+        fontFamily: fontFamily,
+      );
 
   @override
   AppTypography copyWith({
     TextStyle? mono,
     TextStyle? monoSmall,
     TextStyle? sansBody,
+    AppFontFamily? fontFamily,
   }) {
     return AppTypography(
       mono: mono ?? this.mono,
       monoSmall: monoSmall ?? this.monoSmall,
       sansBody: sansBody ?? this.sansBody,
+      fontFamily: fontFamily ?? this.fontFamily,
     );
   }
 
@@ -124,6 +147,8 @@ class AppTypography extends ThemeExtension<AppTypography> {
       mono: TextStyle.lerp(mono, other.mono, t)!,
       monoSmall: TextStyle.lerp(monoSmall, other.monoSmall, t)!,
       sansBody: TextStyle.lerp(sansBody, other.sansBody, t)!,
+      fontFamily: t < 0.5 ? fontFamily : other.fontFamily,
     );
   }
 }
+

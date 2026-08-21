@@ -31,31 +31,36 @@ export interface FooterState {
   agentName?: string;
 }
 
+const K_STATUS = "remote-pi";
 const K_SESSION = "remote-pi:session";
 const K_RELAY = "remote-pi:relay";
 const K_PEER = "remote-pi:peer-active";
 
 export function updateFooter(ctx: FooterContext, state: FooterState): void {
-  if (state.session) {
-    const count = state.peerCount ?? 0;
-    ctx.ui.setStatus(K_SESSION, `📡 ${state.session} (${count})`);
-  } else {
-    ctx.ui.setStatus(K_SESSION, undefined);
-  }
+  // Clear legacy split slots
+  ctx.ui.setStatus(K_SESSION, undefined);
+  ctx.ui.setStatus(K_RELAY, undefined);
+  ctx.ui.setStatus(K_PEER, undefined);
+
+  const parts: string[] = [];
 
   if (state.relayOn) {
-    ctx.ui.setStatus(
-      K_RELAY,
-      state.hasPairings ? "🟢 relay" : "🟡 relay waiting for pairing",
-    );
-  } else {
-    ctx.ui.setStatus(K_RELAY, undefined);
+    parts.push(state.hasPairings ? "🟢 relay" : "🟡 relay waiting for pairing");
+  }
+
+  if (state.session) {
+    const count = state.peerCount ?? 0;
+    parts.push(`📡 ${state.session} (${count})`);
   }
 
   if (state.devicePaired) {
-    ctx.ui.setStatus(K_PEER, `📱 ${state.devicePaired}`);
+    parts.push(`📱 ${state.devicePaired}`);
+  }
+
+  if (parts.length > 0) {
+    ctx.ui.setStatus(K_STATUS, parts.join("  "));
   } else {
-    ctx.ui.setStatus(K_PEER, undefined);
+    ctx.ui.setStatus(K_STATUS, undefined);
   }
 
   // Terminal title — two parts only: `<agent-name> · <On|Off>`.

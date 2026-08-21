@@ -1,8 +1,8 @@
 import 'package:app/data/preferences/preferences.dart';
+import 'package:app/ui/core/themes/app_font_family.dart';
 import 'package:app/ui/core/themes/app_font_scale.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
-
 class _FakeSecureStorage implements FlutterSecureStorage {
   final Map<String, String> _store = {};
 
@@ -201,6 +201,48 @@ void main() {
       expect(calls, 1);
       await p.setFontScale(AppFontScale.small);
       expect(calls, 1);
+    });
+    test('fontFamily defaults to system and round-trips through storage', () async {
+      final store = _FakeSecureStorage();
+      final p = Preferences(store);
+      await p.load();
+      expect(p.fontFamily, AppFontFamily.system);
+
+      await p.setFontFamily(AppFontFamily.jetbrainsMono);
+      expect(p.fontFamily, AppFontFamily.jetbrainsMono);
+
+      final reloaded = Preferences(store);
+      await reloaded.load();
+      expect(reloaded.fontFamily, AppFontFamily.jetbrainsMono);
+    });
+
+    test('an unknown persisted font family falls back to system', () async {
+      final store = _FakeSecureStorage();
+      await store.write(key: 'prefs.font_family', value: 'comic_sans');
+      final p = Preferences(store);
+      await p.load();
+      expect(p.fontFamily, AppFontFamily.system);
+    });
+
+    test('toolCallDisplay defaults to full and round-trips through storage', () async {
+      final store = _FakeSecureStorage();
+      final p = Preferences(store);
+      await p.load();
+      expect(p.toolCallDisplay, ToolCallDisplay.full);
+      expect(p.hideToolCalls, isFalse);
+
+      await p.setToolCallDisplay(ToolCallDisplay.brief);
+      expect(p.toolCallDisplay, ToolCallDisplay.brief);
+      expect(p.hideToolCalls, isFalse);
+
+      await p.setToolCallDisplay(ToolCallDisplay.hidden);
+      expect(p.toolCallDisplay, ToolCallDisplay.hidden);
+      expect(p.hideToolCalls, isTrue);
+
+      final reloaded = Preferences(store);
+      await reloaded.load();
+      expect(reloaded.toolCallDisplay, ToolCallDisplay.hidden);
+      expect(reloaded.hideToolCalls, isTrue);
     });
 
     test('setSelectedRoom with null epk clears the selection', () async {

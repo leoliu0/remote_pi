@@ -853,6 +853,56 @@ let _lastConsumedSteerText: string | null = null;
 type AndroidQueuedItem = QueuedMessageItem & { editable: true };
 let _queuedItems: AndroidQueuedItem[] = [];
 
+/**
+ * Hydrate _messageBuffer from the active Pi sessionManager so existing
+ * turns (messages, tool calls, compactions) from before remote-pi connected
+ * or started are immediately available to the mobile app on session_sync.
+ */
+export function _hydrateMessageBufferFromSession(sessionManager: unknown): void {
+  if (!sessionManager || typeof sessionManager !== "object") return;
+  const sm = sessionManager as { getBranch?: () => unknown[]; getEntries?: () => unknown[] };
+  try {
+    const branch = (typeof sm.getBranch === "function" ? sm.getBranch() : null) ??
+                   (typeof sm.getEntries === "function" ? sm.getEntries() : null);
+    if (!Array.isArray(branch) || branch.length === 0) return;
+
+    const msgs: BufferMsg[] = [];
+    for (const entry of branch) {
+      if (!entry || typeof entry !== "object") continue;
+      const e = entry as { type?: string; message?: unknown; summary?: string; tokensBefore?: number; timestamp?: string | number };
+      const ts = typeof e.timestamp === "number"
+        ? e.timestamp
+        : typeof e.timestamp === "string"
+        ? new Date(e.timestamp).getTime()
+        : Date.now();
+
+      if (e.type === "message" && e.message && typeof e.message === "object") {
+        const m = e.message as BufferMsg;
+        msgs.push({
+          ...m,
+          timestamp: typeof m.timestamp === "number" ? m.timestamp : ts,
+        });
+      } else if (e.type === "compaction") {
+        msgs.push({
+          role: "compaction",
+          content: e.summary ?? "",
+          timestamp: ts,
+          tokensBefore: e.tokensBefore ?? 0,
+        });
+      }
+    }
+
+    if (msgs.length > 0) {
+      _messageBuffer = msgs;
+      if (_sessionStartedAt === null || _sessionStartedAt === 0) {
+        _sessionStartedAt = msgs[0]?.timestamp ?? Date.now();
+      }
+    }
+  } catch (_err) {
+    // Non-fatal fallback
+  }
+}
+
 type MeshEnvelope = { id: string; from: string; re: string | null; body: unknown };
 let _pendingMeshMessages: MeshEnvelope[] = [];
 let _agentRunActive = false;
@@ -2340,7 +2390,9 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   // bound to the current session.
   pi.on("session_start", (_event, ctx) => {
     _lastEventCtx = ctx;
-    // session_shutdown disposes per-session pi-ask subscriptions. A host that
+    if (ctx && (ctx as { sessionManager?: unknown }).sessionManager) {
+      _hydrateMessageBufferFromSession((ctx as { sessionManager?: unknown }).sessionManager);
+    }
     // reuses this module instance does NOT re-run the factory, so rebind the
     // bridge here; fresh-module hosts already created theirs in the factory.
     if (!_extensionUiBridge) {
@@ -2542,6 +2594,61 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
       else                                       { await _cmdRoot(ctx); }
     },
   });
+  // Shorthand alias: `/rc` routes identically to `/remote-pi`
+  pi.registerCommand("rc", {
+    description: "Connect (join local mesh + start relay), or run setup on first use",
+    getArgumentCompletions: async (prefix) => {
+      if (prefix.startsWith("revoke ") || prefix === "revoke") {
+        const shortPrefix = prefix === "revoke" ? "" : prefix.slice("revoke ".length);
+        return _shortidCompletions(shortPrefix, "revoke ");
+      }
+      return [
+        "setup", "status", "stop",
+        "pair", "devices", "revoke",
+        "rename",
+        "set-relay",
+        "relay", "relay start", "relay stop", "relay status", "relay url",
+        "config",
+        "peers",
+        "create", "remove", "daemons",
+        "daemon start", "daemon stop", "daemon restart",
+        "daemon send", "daemon status",
+        "cron",
+        "install", "uninstall",
+      ]
+        .filter((o) => o.startsWith(prefix))
+        .map((o) => ({ value: o, label: o }));
+    },
+    handler: async (args, ctx) => {
+      _lastCtx = ctx;
+      const sub = args.trim();
+      if      (sub === "")                       { await _cmdRoot(ctx); }
+      else if (sub === "setup")                  { await _cmdSetup(ctx); }
+      else if (sub === "status")                 { _cmdStatus(ctx); }
+      else if (sub === "stop")                   { await _cmdStop(ctx); }
+      else if (sub === "pair" || sub.startsWith("pair ")) { await _cmdPair(ctx, sub.slice("pair".length).trim()); }
+      else if (sub === "devices")                { await _cmdList(ctx); }
+      else if (sub.startsWith("revoke"))         { await _cmdRevoke(sub.slice("revoke".length).trim(), ctx); }
+      else if (sub.startsWith("set-relay"))      { _cmdSetRelay(sub.slice("set-relay".length).trim(), ctx); }
+      else if (sub === "relay" || sub.startsWith("relay ")) { await _cmdRelay(sub.slice("relay".length).trim(), ctx); }
+      else if (sub === "config")                 { _cmdConfig(ctx); }
+      else if (sub === "rename" || sub.startsWith("rename ")) { await _renameAgent(sub.slice("rename".length).trim()); }
+      else if (sub === "peers")                  { await _cmdPeers(ctx); }
+      else if (sub.startsWith("create"))         { await _cmdCreate(sub.slice("create".length).trim(), ctx); }
+      else if (sub.startsWith("remove"))         { await _cmdRemove(sub.slice("remove".length).trim(), ctx); }
+      else if (sub === "daemons")                { await _cmdDaemonsList(ctx); }
+      else if (sub === "daemon start" || sub.startsWith("daemon start "))     { await _cmdDaemonStart(ctx, sub.slice("daemon start".length).trim() || undefined); }
+      else if (sub === "daemon stop" || sub.startsWith("daemon stop "))       { await _cmdDaemonStop(ctx, sub.slice("daemon stop".length).trim() || undefined); }
+      else if (sub === "daemon restart" || sub.startsWith("daemon restart ")) { await _cmdDaemonRestart(ctx, sub.slice("daemon restart".length).trim() || undefined); }
+      else if (sub === "daemon status")          { await _cmdDaemonStatus(ctx); }
+      else if (sub.startsWith("daemon send"))    { await _cmdDaemonSend(sub.slice("daemon send".length).trim(), ctx); }
+      else if (sub === "cron" || sub.startsWith("cron ")) { await _cmdCron(sub.slice("cron".length).trim(), ctx); }
+      else if (sub === "install")                { _cmdInstall(ctx, { linkCli: true }); }
+      else if (sub === "uninstall")              { _cmdUninstall(ctx, { linkCli: true }); }
+      else                                       { await _cmdRoot(ctx); }
+    },
+  });
+
 
   // Nested registrations (one entry per public action). The flat handler
   // above already routes `/remote-pi <sub>` — these exist for the SDK's
@@ -4637,18 +4744,24 @@ function _handleSessionSync(
   msg: Extract<ClientMessage, { type: "session_sync" }>,
 ): void {
   _sendQueuedState(sender);
-  if (_sessionStartedAt === null) {
-    sender.send({
-      type: "session_history",
-      in_reply_to: msg.id,
-      session_started_at: 0,
-      events: [],
-      eos: true,
-      truncated: false,
-    });
-    return;
+  if (_messageBuffer.length === 0 && _lastEventCtx && typeof _lastEventCtx === "object" && "sessionManager" in _lastEventCtx) {
+    _hydrateMessageBufferFromSession(_lastEventCtx.sessionManager);
   }
-
+  if (_sessionStartedAt === null) {
+    if (_messageBuffer.length > 0) {
+      _sessionStartedAt = _messageBuffer[0]?.timestamp ?? Date.now();
+    } else {
+      sender.send({
+        type: "session_history",
+        in_reply_to: msg.id,
+        session_started_at: 0,
+        events: [],
+        eos: true,
+        truncated: false,
+      });
+      return;
+    }
+  }
   // Mirror semantics: always return the last N events. App SUBSTITUTES its
   // local cache with this response — no delta/since_ts logic.
   const serverLimit = _getSyncLimit();

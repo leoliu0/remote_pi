@@ -61,11 +61,13 @@ class _RemotePiAppState extends State<RemotePiApp> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     final meshSync = injector.get<MeshSyncService>();
+    final connMgr = injector.get<ConnectionManager>();
     switch (state) {
       case AppLifecycleState.resumed:
         meshSync.startPolling();
         // ignore: unawaited_futures
         meshSync.pullOnDemand();
+        connMgr.onAppResumed();
       case AppLifecycleState.inactive:
       case AppLifecycleState.paused:
       case AppLifecycleState.hidden:
@@ -95,8 +97,8 @@ class _RemotePiAppState extends State<RemotePiApp> with WidgetsBindingObserver {
       child: Consumer<Preferences>(
         builder: (context, prefs, _) => MaterialApp.router(
           title: 'Remote Pi',
-          theme: buildLightTheme(),
-          darkTheme: buildDarkTheme(),
+          theme: buildLightTheme(fontFamily: prefs.fontFamily),
+          darkTheme: buildDarkTheme(fontFamily: prefs.fontFamily),
           themeMode: prefs.themeMode,
           routerConfig: _router,
           debugShowCheckedModeBanner: false,

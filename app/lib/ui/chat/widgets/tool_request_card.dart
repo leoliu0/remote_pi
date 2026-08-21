@@ -16,12 +16,28 @@ import 'package:flutter/material.dart';
 // `onDecide` is kept on the API for forward compat — when the Pi adds a
 // real approval pause we can re-enable the controls. Today it is unused.
 
-class ToolRequestCard extends StatelessWidget {
+import 'package:lucide_icons_flutter/lucide_icons.dart';
+
+class ToolRequestCard extends StatefulWidget {
   final ToolEvent tool;
   final void Function(String toolCallId, ApproveDecision decision)? onDecide;
+  final bool brief;
 
-  const ToolRequestCard({super.key, required this.tool, this.onDecide});
+  const ToolRequestCard({
+    super.key,
+    required this.tool,
+    this.onDecide,
+    this.brief = false,
+  });
 
+  @override
+  State<ToolRequestCard> createState() => _ToolRequestCardState();
+}
+
+class _ToolRequestCardState extends State<ToolRequestCard> {
+  bool _expanded = false;
+
+  ToolEvent get tool => widget.tool;
   /// Plan/32 — one color drives the whole card so the outcome is unmistakable:
   /// running → blue, done → green, failed → red, denied/expired → grey.
   Color _statusColor(BuildContext context) {
@@ -37,8 +53,10 @@ class ToolRequestCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final color = _statusColor(context);
-    // Dim only the inert states (denied/expired); keep done/failed at full
-    // opacity so their green/red read clearly.
+    if (widget.brief && !_expanded) {
+      return _buildBriefPill(context, color);
+    }
+
     final dimmed =
         tool.status == ToolEventStatus.denied ||
         tool.status == ToolEventStatus.expired;
@@ -74,6 +92,91 @@ class ToolRequestCard extends StatelessWidget {
     );
   }
 
+  Widget _buildBriefPill(BuildContext context, Color color) {
+    final colors = context.colors;
+    final summary = _formatBriefSummary(tool.tool, tool.args);
+    final statusIcon = switch (tool.status) {
+      ToolEventStatus.pending || ToolEventStatus.allowed => '⏳',
+      ToolEventStatus.completed => '✓',
+      ToolEventStatus.failed => '✗',
+      ToolEventStatus.denied => '⊘',
+      ToolEventStatus.expired => '⏱',
+    };
+    final dimmed =
+        tool.status == ToolEventStatus.denied ||
+        tool.status == ToolEventStatus.expired;
+    final monoFont = context.typo.mono.fontFamily ?? kMonoFamily;
+
+    return Opacity(
+      opacity: dimmed ? 0.65 : 1.0,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: () => setState(() => _expanded = !_expanded),
+          borderRadius: BorderRadius.circular(8),
+          child: Container(
+            decoration: BoxDecoration(
+              color: colors.codeBg,
+              border: Border.all(color: color.withValues(alpha: 0.5)),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+            child: Row(
+              children: [
+                CustomPaint(
+                  size: const Size(12, 12),
+                  painter: _TerminalIconPainter(color: color),
+                ),
+                const SizedBox(width: 7),
+                Text(
+                  tool.tool.toUpperCase(),
+                  style: TextStyle(
+                    fontFamily: monoFont,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    color: color,
+                    letterSpacing: 0.4,
+                  ),
+                ),
+                if (summary.isNotEmpty) ...[
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      summary,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontFamily: monoFont,
+                        fontSize: 11.5,
+                        color: colors.text,
+                      ),
+                    ),
+                  ),
+                ] else
+                  const Spacer(),
+                const SizedBox(width: 6),
+                Text(
+                  statusIcon,
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: color,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(width: 4),
+                Icon(
+                  LucideIcons.chevronDown,
+                  size: 13,
+                  color: colors.muted,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildHeader(BuildContext context, Color color) {
     final statusLabel = switch (tool.status) {
       ToolEventStatus.pending || ToolEventStatus.allowed => 'RUNNING',
@@ -103,12 +206,19 @@ class ToolRequestCard extends StatelessWidget {
         Text(
           statusLabel,
           style: TextStyle(
-            fontFamily: kMonoFamily,
+            fontFamily: context.typo.mono.fontFamily ?? kMonoFamily,
             fontSize: 10,
             color: color,
             letterSpacing: 0.4,
           ),
         ),
+        if (widget.brief && _expanded) ...[
+          const SizedBox(width: 6),
+          GestureDetector(
+            onTap: () => setState(() => _expanded = false),
+            child: Icon(LucideIcons.chevronUp, size: 14, color: color),
+          ),
+        ],
       ],
     );
   }
@@ -173,14 +283,32 @@ class ToolRequestCard extends StatelessWidget {
     );
   }
 
+  static String _formatBriefSummary(String tool, dynamic args) {
+    if (args == null) return '';
+    final normalized = tool.toLowerCase();
+    if (args is Map) {
+      return switch (normalized) {
+        'bash' => ((args['command'] as String?) ?? '').replaceAll('\n', ' ').trim(),
+        'edit' || 'write' || 'read' =>
+          _stringArg(args, const ['file_path', 'path', 'file']),
+        'glob' => (args['pattern'] ?? args['path'] ?? '').toString(),
+        'grep' => (args['pattern'] ?? '').toString(),
+        'web_search' => (args['query'] ?? '').toString(),
+        'task' => (args['task'] ?? args['context'] ?? '').toString().replaceAll('\n', ' ').trim(),
+        _ => _formatArgs(tool, args).replaceAll('\n', ' ').trim(),
+      };
+    }
+    return args.toString().replaceAll('\n', ' ').trim();
+  }
+
   static String _formatArgs(String tool, dynamic args) {
     if (args == null) return '';
     final normalizedTool = tool.toLowerCase();
     if (args is Map) {
       return switch (normalizedTool) {
         'bash' => (args['command'] as String?) ?? '',
-        'edit' || 'write' =>
-          '$normalizedTool ${_stringArg(args, const ['file_path', 'path'])}',
+        'edit' || 'write' || 'read' =>
+          '$normalizedTool ${_stringArg(args, const ['file_path', 'path', 'file'])}',
         _ => args.entries.map((e) => '${e.key}=${e.value}').join(' '),
       };
     }

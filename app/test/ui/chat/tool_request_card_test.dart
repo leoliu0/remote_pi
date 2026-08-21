@@ -3,6 +3,7 @@ import 'package:app/ui/chat/widgets/tool_request_card.dart';
 import 'package:app/ui/core/themes/themes.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 Widget _wrap(Widget child) => MaterialApp(home: Scaffold(body: child));
 
@@ -154,6 +155,45 @@ void main() {
       // pending defaults
       await tester.pumpWidget(_wrap(const ToolRequestCard(tool: _bashTool)));
       expect(outcomeColor(tester, '⏳ Running…'), AppColors.dark.accent);
+    });
+
+    testWidgets('brief mode renders compact single-line pill', (tester) async {
+      const done = ToolEvent(
+        id: 'tc1',
+        toolCallId: 'tc1',
+        tool: 'Bash',
+        args: {'command': 'git status'},
+        status: ToolEventStatus.completed,
+      );
+      await tester.pumpWidget(_wrap(const ToolRequestCard(tool: done, brief: true)));
+      expect(find.text('BASH'), findsOneWidget);
+      expect(find.text('git status'), findsOneWidget);
+      expect(find.text('✓'), findsOneWidget);
+      // In brief collapsed state, the outcome text '✓ Done' is not rendered yet
+      expect(find.text('✓ Done'), findsNothing);
+    });
+
+    testWidgets('tapping brief pill expands to full details and collapses back', (tester) async {
+      const done = ToolEvent(
+        id: 'tc1',
+        toolCallId: 'tc1',
+        tool: 'Bash',
+        args: {'command': 'git status'},
+        status: ToolEventStatus.completed,
+      );
+      await tester.pumpWidget(_wrap(const ToolRequestCard(tool: done, brief: true)));
+      expect(find.text('✓ Done'), findsNothing);
+
+      // Tap the pill to expand
+      await tester.tap(find.text('BASH'));
+      await tester.pumpAndSettle();
+      expect(find.text('✓ Done'), findsOneWidget);
+      expect(find.text('DONE'), findsOneWidget);
+
+      // Tap collapse chevron
+      await tester.tap(find.byIcon(LucideIcons.chevronUp));
+      await tester.pumpAndSettle();
+      expect(find.text('✓ Done'), findsNothing);
     });
   });
 }

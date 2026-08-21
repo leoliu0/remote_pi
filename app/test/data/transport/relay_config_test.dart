@@ -127,6 +127,7 @@ void main() {
 
     test('kDefaultRelayUrl is https://', () {
       expect(kDefaultRelayUrl, startsWith('https://'));
+      expect(kDefaultRelayUrl, 'https://relay-rp1.jacobmoura.work');
     });
   });
 }

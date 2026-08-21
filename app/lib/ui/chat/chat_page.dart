@@ -366,7 +366,7 @@ class ChatPage extends StatelessWidget {
       s.length <= max ? s : '${s.substring(0, max - 1)}…';
 
   Widget _buildBody(BuildContext context, ChatState state, ChatViewModel vm) {
-    final hideToolCalls = context.watch<Preferences>().hideToolCalls;
+    final toolDisplay = context.watch<Preferences>().toolCallDisplay;
     return switch (state) {
       // Edge case: opened /chat without a peer (e.g. peer revoked while
       // user was here). The chat is not the place to pair — render
@@ -387,7 +387,7 @@ class ChatPage extends StatelessWidget {
         onAction: () => context.go('/pair'),
       ),
       ChatReady(:final messages, :final streaming) => () {
-        final visible = hideToolCalls
+        final visible = toolDisplay == ToolCallDisplay.hidden
             ? messages.where((m) => m is! ToolEvent).toList()
             : messages;
         // Empty body → the default placeholder (Pi brand icon + "Nothing
@@ -403,6 +403,7 @@ class ChatPage extends StatelessWidget {
           messages: visible,
           streaming: streaming,
           onDecide: (id, decision) => vm.approveTool(id, decision),
+          briefToolCalls: toolDisplay == ToolCallDisplay.brief,
         );
       }(),
     };
@@ -567,11 +568,13 @@ class _MessageList extends StatelessWidget {
   final List<ChatMessage> messages;
   final StreamingMessage? streaming;
   final void Function(String, ApproveDecision) onDecide;
+  final bool briefToolCalls;
 
   const _MessageList({
     required this.messages,
     required this.streaming,
     required this.onDecide,
+    this.briefToolCalls = false,
   });
 
   @override
@@ -607,7 +610,11 @@ class _MessageList extends StatelessWidget {
           child: switch (msg) {
             UserMsg() => UserBubble(msg),
             AssistantMsg() => AssistantBubble(msg),
-            ToolEvent() => ToolRequestCard(tool: msg, onDecide: onDecide),
+            ToolEvent() => ToolRequestCard(
+                tool: msg,
+                onDecide: onDecide,
+                brief: briefToolCalls,
+              ),
             CompactionMsg() => CompactionBubble(msg),
           },
         );

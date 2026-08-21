@@ -259,6 +259,27 @@ class ConnectionManager extends Service {
       _roomsController.add(_roomsSnapshot());
     }
   }
+  /// Called when the app returns to foreground from background/pause.
+  /// Cancels long backoff delays, resets missed pings, and immediately
+  /// verifies the active socket or reconnects instantly.
+  void onAppResumed() {
+    _retryAttempt = 0;
+    _missedPings = 0;
+    _cancelRetry();
+    final active = _activePeer;
+    if (active == null) return;
+
+    if (_status is StatusOnline) {
+      final cur = _status as StatusOnline;
+      try {
+        cur.channel.send(Ping(id: _newId()));
+      } catch (_) {
+        _connect(active);
+      }
+    } else {
+      _connect(active);
+    }
+  }
 
   void _propagateActiveRoom(String roomId, IChannel link) {
     // Sends a synthetic control frame ourselves NOT to the relay — we

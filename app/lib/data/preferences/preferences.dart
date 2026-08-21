@@ -2,8 +2,32 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart' show ThemeMode;
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
+import 'package:app/ui/core/themes/app_font_family.dart';
 import 'package:app/ui/core/themes/app_font_scale.dart';
 
+/// Display mode for tool calls in the chat view.
+enum ToolCallDisplay {
+  /// Full detail: tool header, code/command block, and outcome box.
+  full('Full'),
+
+  /// Brief single-line summary with tool and target, tap to expand.
+  brief('Brief'),
+
+  /// Hide tool calls completely from the chat list.
+  hidden('Hidden');
+
+  const ToolCallDisplay(this.label);
+  final String label;
+
+  static ToolCallDisplay fromName(String? raw) {
+    for (final v in ToolCallDisplay.values) {
+      if (v.name == raw) return v;
+    }
+    if (raw == 'true') return ToolCallDisplay.hidden;
+    if (raw == 'false') return ToolCallDisplay.full;
+    return ToolCallDisplay.full;
+  }
+}
 /// App-wide UI preferences (persisted across launches).
 ///
 /// Extends [ChangeNotifier] so widgets can `context.watch<Preferences>()`
@@ -12,13 +36,13 @@ import 'package:app/ui/core/themes/app_font_scale.dart';
 /// the first frame to hydrate the in-memory cache.
 class Preferences extends ChangeNotifier {
   final FlutterSecureStorage _store;
-  bool _hideToolCalls = false;
+  ToolCallDisplay _toolCallDisplay = ToolCallDisplay.full;
   String? _selectedPeerEpk;
   String? _relayUrl;
   bool _onboardingCompleted = false;
   ThemeMode _themeMode = ThemeMode.system;
   AppFontScale _fontScale = AppFontScale.standard;
-
+  AppFontFamily _fontFamily = AppFontFamily.system;
   Preferences([FlutterSecureStorage? store])
       : _store = store ?? const FlutterSecureStorage();
 
@@ -28,10 +52,13 @@ class Preferences extends ChangeNotifier {
   static const _kOnboardingCompletedKey = 'prefs.onboarding_completed';
   static const _kThemeModeKey = 'prefs.theme_mode';
   static const _kFontScaleKey = 'prefs.font_scale';
-
+  static const _kFontFamilyKey = 'prefs.font_family';
+  static const _kToolCallDisplayKey = 'prefs.tool_call_display';
   /// True → chat hides `ToolEvent` rows (only user/assistant text remain).
-  bool get hideToolCalls => _hideToolCalls;
+  bool get hideToolCalls => _toolCallDisplay == ToolCallDisplay.hidden;
 
+  /// Tool call display mode: full, brief, or hidden.
+  ToolCallDisplay get toolCallDisplay => _toolCallDisplay;
   /// Epoch of the peer the user last picked from Home — the one
   /// `/chat` will connect to when it mounts. Null = no peer selected yet
   /// (user is still browsing or hasn't paired). Persisted so reopening
@@ -84,17 +111,21 @@ class Preferences extends ChangeNotifier {
   /// `copyWith(fontSize: …)` overrides that a typography-only change would miss.
   AppFontScale get fontScale => _fontScale;
 
+  /// Preferred font family for the app UI.
+  AppFontFamily get fontFamily => _fontFamily;
   /// Hydrate from secure storage. Safe to call multiple times.
   Future<void> load() async {
     var changed = false;
 
     final raw = await _store.read(key: _kHideToolCallsKey);
-    final next = raw == 'true';
-    if (next != _hideToolCalls) {
-      _hideToolCalls = next;
+    final rawDisplay = await _store.read(key: _kToolCallDisplayKey);
+    final toolDisplay = rawDisplay != null
+        ? ToolCallDisplay.fromName(rawDisplay)
+        : (raw == 'true' ? ToolCallDisplay.hidden : ToolCallDisplay.full);
+    if (toolDisplay != _toolCallDisplay) {
+      _toolCallDisplay = toolDisplay;
       changed = true;
     }
-
     final selected = await _store.read(key: _kSelectedPeerEpkKey);
     final cleaned = (selected != null && selected.isNotEmpty) ? selected : null;
     if (cleaned != _selectedPeerEpk) {
@@ -129,19 +160,42 @@ class Preferences extends ChangeNotifier {
       changed = true;
     }
 
+    final fontFam =
+        AppFontFamily.fromName(await _store.read(key: _kFontFamilyKey));
+    if (fontFam != _fontFamily) {
+      _fontFamily = fontFam;
+      changed = true;
+    }
+
     if (changed) notifyListeners();
   }
 
   Future<void> setHideToolCalls(bool value) async {
-    if (_hideToolCalls == value) return;
-    _hideToolCalls = value;
+    final nextDisplay = value ? ToolCallDisplay.hidden : ToolCallDisplay.full;
+    if (_toolCallDisplay == nextDisplay) return;
+    _toolCallDisplay = nextDisplay;
+    await _store.write(key: _kHideToolCallsKey, value: value.toString());
+    await _store.write(key: _kToolCallDisplayKey, value: nextDisplay.name);
+    notifyListeners();
+  }
+
+  Future<void> setToolCallDisplay(ToolCallDisplay value) async {
+    if (_toolCallDisplay == value) return;
+    _toolCallDisplay = value;
+    await _store.write(key: _kToolCallDisplayKey, value: value.name);
     await _store.write(
       key: _kHideToolCallsKey,
-      value: value.toString(),
+      value: (value == ToolCallDisplay.hidden).toString(),
     );
     notifyListeners();
   }
 
+  Future<void> setFontFamily(AppFontFamily value) async {
+    if (_fontFamily == value) return;
+    _fontFamily = value;
+    await _store.write(key: _kFontFamilyKey, value: value.name);
+    notifyListeners();
+  }
   Future<void> setSelectedPeerEpk(String? value) async {
     final cleaned = (value != null && value.isNotEmpty) ? value : null;
     if (cleaned == _selectedPeerEpk) return;

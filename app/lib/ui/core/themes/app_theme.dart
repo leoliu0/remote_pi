@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 
 import 'package:app/ui/core/themes/app_colors.dart';
+import 'package:app/ui/core/themes/app_font_family.dart';
 import 'package:app/ui/core/themes/app_typography.dart';
-
 /// Builds the [ThemeData] for a given [AppColors] / [AppTypography] pair.
 ///
 /// Wires the semantic tokens into both the standard Material [ColorScheme]
@@ -15,8 +15,10 @@ ThemeData _buildTheme({
   required AppColors colors,
   required AppTypography typo,
 }) {
+  final monoFontFamily = typo.mono.fontFamily ?? kMonoFamily;
   return ThemeData(
     brightness: brightness,
+    fontFamily: monoFontFamily,
     scaffoldBackgroundColor: colors.bg,
     colorScheme: ColorScheme(
       brightness: brightness,
@@ -65,7 +67,7 @@ ThemeData _buildTheme({
       ),
       hintStyle: TextStyle(
         color: colors.muted,
-        fontFamily: kMonoFamily,
+        fontFamily: monoFontFamily,
         fontSize: 13,
       ),
       contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
@@ -74,15 +76,17 @@ ThemeData _buildTheme({
 }
 
 /// Dark theme — the app's original look.
-ThemeData buildDarkTheme() => _buildTheme(
+ThemeData buildDarkTheme({AppFontFamily fontFamily = AppFontFamily.system}) =>
+    _buildTheme(
       brightness: Brightness.dark,
       colors: AppColors.dark,
-      typo: AppTypography.dark,
+      typo: AppTypography.dark(fontFamily: fontFamily),
     );
 
 /// Light theme — derived palette (tune hexes in `app_colors.dart`).
-ThemeData buildLightTheme() => _buildTheme(
+ThemeData buildLightTheme({AppFontFamily fontFamily = AppFontFamily.system}) =>
+    _buildTheme(
       brightness: Brightness.light,
       colors: AppColors.light,
-      typo: AppTypography.light,
+      typo: AppTypography.light(fontFamily: fontFamily),
     );

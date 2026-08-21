@@ -197,49 +197,52 @@ class _RelaySectionState extends State<_RelaySection> {
                   ),
                 ),
               ),
-              const SizedBox(height: 10),
-              Align(
-                alignment: Alignment.centerLeft,
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    FilledButton(
-                      onPressed: _save,
-                      style: FilledButton.styleFrom(
-                        backgroundColor: colors.accent,
-                        foregroundColor: colors.onAccent,
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 18,
-                          vertical: 10,
-                        ),
-                        shape: const RoundedRectangleBorder(
-                          borderRadius: BorderRadius.all(Radius.circular(6)),
-                        ),
-                      ),
-                      child: Text(
-                        'Save',
-                        style: const TextStyle(
-                          fontFamily: kMonoFamily,
-                          fontSize: 13,
-                        ),
+              const SizedBox(height: 12),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  FilledButton(
+                    onPressed: _save,
+                    style: FilledButton.styleFrom(
+                      backgroundColor: colors.accent,
+                      foregroundColor: colors.onAccent,
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
                       ),
                     ),
-                    const SizedBox(width: 12),
-                    TextButton(
-                      onPressed: () {
-                        _ctrl.text = kDefaultRelayUrl;
-                        _save();
-                      },
-                      child: Text(
-                        'Use default Relay',
-                        style: const TextStyle(
-                          fontFamily: kMonoFamily,
-                          fontSize: 13,
-                        ),
+                    child: Text(
+                      'Save Relay URL',
+                      style: TextStyle(
+                        fontFamily: context.typo.mono.fontFamily ?? kMonoFamily,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
                       ),
                     ),
-                  ],
-                ),
+                  ),
+                  const SizedBox(height: 8),
+                  OutlinedButton(
+                    onPressed: () {
+                      _ctrl.text = kDefaultRelayUrl;
+                      _save();
+                    },
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: colors.text,
+                      side: BorderSide(color: colors.border),
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                    ),
+                    child: Text(
+                      'Reset to Default ($kDefaultRelayUrl)',
+                      style: TextStyle(
+                        fontFamily: context.typo.mono.fontFamily ?? kMonoFamily,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ],
           ),
@@ -296,6 +299,56 @@ class _DisplaySection extends StatelessWidget {
             ],
           ),
         ),
+        // Font family — selectable coding/system font family.
+        Padding(
+          padding: const EdgeInsets.fromLTRB(18, 12, 18, 4),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Font family',
+                style: context.typo.sansBody.copyWith(color: colors.text),
+              ),
+              const SizedBox(height: 10),
+              Container(
+                decoration: BoxDecoration(
+                  color: colors.codeBg,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: colors.border),
+                ),
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+                child: DropdownButtonHideUnderline(
+                  child: DropdownButton<AppFontFamily>(
+                    isExpanded: true,
+                    dropdownColor: colors.surface,
+                    value: prefs.fontFamily,
+                    icon: Icon(
+                      LucideIcons.chevronDown,
+                      size: 18,
+                      color: colors.muted,
+                    ),
+                    items: [
+                      for (final font in AppFontFamily.values)
+                        DropdownMenuItem(
+                          value: font,
+                          child: Text(
+                            font.label,
+                            style: font.textStyle(
+                              fontSize: 13.5,
+                              color: colors.text,
+                            ),
+                          ),
+                        ),
+                    ],
+                    onChanged: (f) {
+                      if (f != null) prefs.setFontFamily(f);
+                    },
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
         // Text size — the app hardcodes its font sizes and Flutter can't read
         // iOS's per-app Text Size, so without this the only way to enlarge chat
         // text is the OS-wide accessibility setting (issue #114).
@@ -324,22 +377,49 @@ class _DisplaySection extends StatelessWidget {
             ],
           ),
         ),
-        SwitchListTile(
-          contentPadding: const EdgeInsets.symmetric(horizontal: 18),
-          activeThumbColor: colors.accent,
-          title: Text(
-            'Hide tool calls in chat',
-            style: context.typo.sansBody.copyWith(color: colors.text),
+        // Tool calls display mode in chat: Full, Brief, or Hidden.
+        Padding(
+          padding: const EdgeInsets.fromLTRB(18, 12, 18, 4),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Tool calls in chat',
+                style: context.typo.sansBody.copyWith(color: colors.text),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'Full shows entire code blocks; Brief shows compact expandable pills; Hidden hides tools.',
+                style: context.typo.sansBody.copyWith(
+                  color: colors.muted,
+                  fontSize: 12,
+                ),
+              ),
+              const SizedBox(height: 10),
+              SizedBox(
+                width: double.infinity,
+                child: SegmentedButton<ToolCallDisplay>(
+                  showSelectedIcon: false,
+                  segments: const [
+                    ButtonSegment(
+                      value: ToolCallDisplay.full,
+                      label: Text('Full'),
+                    ),
+                    ButtonSegment(
+                      value: ToolCallDisplay.brief,
+                      label: Text('Brief'),
+                    ),
+                    ButtonSegment(
+                      value: ToolCallDisplay.hidden,
+                      label: Text('Hidden'),
+                    ),
+                  ],
+                  selected: {prefs.toolCallDisplay},
+                  onSelectionChanged: (s) => prefs.setToolCallDisplay(s.first),
+                ),
+              ),
+            ],
           ),
-          subtitle: Text(
-            'Only show your messages and the assistant replies.',
-            style: context.typo.sansBody.copyWith(
-              color: colors.muted,
-              fontSize: 12,
-            ),
-          ),
-          value: prefs.hideToolCalls,
-          onChanged: (v) => prefs.setHideToolCalls(v),
         ),
         const SizedBox(height: 8),
       ],

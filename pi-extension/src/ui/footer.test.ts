@@ -21,7 +21,7 @@ function makeMockCtx(): FooterContext & {
   };
 }
 
-describe("updateFooter — footer slots ('local' rendering)", () => {
+describe("updateFooter — footer slots (horizontal single-line rendering)", () => {
   test("session slot shows 'local' when joined to the mesh", () => {
     const ctx = makeMockCtx();
     const state: FooterState = {
@@ -30,22 +30,28 @@ describe("updateFooter — footer slots ('local' rendering)", () => {
       relayOn: false,
     };
     updateFooter(ctx, state);
-    const sessionSlot = ctx.statusCalls.find((c) => c.key === "remote-pi:session");
-    expect(sessionSlot?.value).toBe("📡 local (3)");
+    const statusSlot = ctx.statusCalls.find((c) => c.key === "remote-pi");
+    expect(statusSlot?.value).toBe("📡 local (3)");
   });
 
-  test("session slot cleared when not joined", () => {
+  test("combines relay and session horizontally on one line", () => {
+    const ctx = makeMockCtx();
+    const state: FooterState = {
+      session: "local",
+      peerCount: 1,
+      relayOn: true,
+      hasPairings: true,
+    };
+    updateFooter(ctx, state);
+    const statusSlot = ctx.statusCalls.find((c) => c.key === "remote-pi");
+    expect(statusSlot?.value).toBe("🟢 relay  📡 local (1)");
+  });
+
+  test("status slot cleared when nothing active", () => {
     const ctx = makeMockCtx();
     updateFooter(ctx, { relayOn: false });
-    const sessionSlot = ctx.statusCalls.find((c) => c.key === "remote-pi:session");
-    expect(sessionSlot?.value).toBeUndefined();
-  });
-
-  test("singular peer count keeps numeric form (no pluralization in footer)", () => {
-    const ctx = makeMockCtx();
-    updateFooter(ctx, { session: "local", peerCount: 1, relayOn: false });
-    const sessionSlot = ctx.statusCalls.find((c) => c.key === "remote-pi:session");
-    expect(sessionSlot?.value).toBe("📡 local (1)");
+    const statusSlot = ctx.statusCalls.find((c) => c.key === "remote-pi");
+    expect(statusSlot?.value).toBeUndefined();
   });
 });
 

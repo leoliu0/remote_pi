@@ -22,5 +22,5 @@ extension AppThemeX on BuildContext {
 
   /// Typographic styles for the active theme.
   AppTypography get typo =>
-      Theme.of(this).extension<AppTypography>() ?? AppTypography.dark;
+      Theme.of(this).extension<AppTypography>() ?? AppTypography.defaultDark;
 }
