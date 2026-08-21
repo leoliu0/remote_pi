@@ -2251,6 +2251,11 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     if (!ae) return;
     if (ae.type === "text_delta" && typeof ae.delta === "string") {
       _broadcastToActive({ type: "agent_chunk", in_reply_to: _currentTurnId, delta: ae.delta });
+    } else if (ae.type === "thinking_delta" || ae.type === "thought_delta" || ae.type === "reasoning_delta") {
+      const delta = (ae.delta ?? ae.thinking ?? ae.thought) as string | undefined;
+      if (delta && typeof delta === "string") {
+        _broadcastToActive({ type: "agent_chunk", in_reply_to: _currentTurnId, delta });
+      }
     } else if (ae.type === "tool_call" || ae.type === "tool_use" || ae.type === "tool_call_delta") {
       const tcid = (ae.toolCallId ?? ae.id ?? ae.tool_call_id) as string | undefined;
       const name = (ae.toolName ?? ae.name ?? ae.tool) as string | undefined;

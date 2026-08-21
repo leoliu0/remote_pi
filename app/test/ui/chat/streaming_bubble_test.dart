@@ -14,11 +14,13 @@ void main() {
     );
   }
 
-  testWidgets('empty buffer shows ONLY the blinking cursor', (tester) async {
+  testWidgets('empty buffer shows thinking indicator and blinking cursor', (
+    tester,
+  ) async {
     await pump(tester, const StreamingMessage(inReplyTo: 'x'));
     await tester.pump(); // single frame — the cursor animation repeats forever
     expect(find.byKey(const Key('streaming-cursor')), findsOneWidget);
-    expect(find.byType(Text), findsNothing);
+    expect(find.text('Thinking & analyzing…'), findsOneWidget);
   });
 
   testWidgets('cursor sits one line BELOW the response (not inline)', (
