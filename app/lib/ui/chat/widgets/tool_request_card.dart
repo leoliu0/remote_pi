@@ -152,9 +152,23 @@ class _ToolRequestCardState extends State<ToolRequestCard> {
                       ),
                     ),
                   ),
-                ] else
-                  const Spacer(),
-                const SizedBox(width: 6),
+                ] else ...[
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      tool.status == ToolEventStatus.pending ||
+                              tool.status == ToolEventStatus.allowed
+                          ? 'running…'
+                          : '',
+                      style: TextStyle(
+                        fontFamily: monoFont,
+                        fontSize: 11.5,
+                        color: colors.muted,
+                        fontStyle: FontStyle.italic,
+                      ),
+                    ),
+                  ),
+                ],
                 Text(
                   statusIcon,
                   style: TextStyle(
@@ -287,18 +301,63 @@ class _ToolRequestCardState extends State<ToolRequestCard> {
     if (args == null) return '';
     final normalized = tool.toLowerCase();
     if (args is Map) {
-      return switch (normalized) {
-        'bash' => ((args['command'] as String?) ?? '').replaceAll('\n', ' ').trim(),
-        'edit' || 'write' || 'read' =>
-          _stringArg(args, const ['file_path', 'path', 'file']),
+      final intent = args['i'] ?? args['title'] ?? args['description'];
+      final specific = switch (normalized) {
+        'bash' => ((args['command'] ?? args['cmd'] ?? args['code'] ?? args['c']) as String?)?.replaceAll('\n', ' ').trim(),
+        'edit' => _extractEditTarget(args),
+        'write' || 'read' => _stringArg(args, const ['file_path', 'path', 'file']),
         'glob' => (args['pattern'] ?? args['path'] ?? '').toString(),
-        'grep' => (args['pattern'] ?? '').toString(),
-        'web_search' => (args['query'] ?? '').toString(),
+        'grep' => (args['pattern'] ?? args['path'] ?? '').toString(),
+        'eval' => (args['title'] ?? args['code'] ?? args['expression'] ?? '').toString().replaceAll('\n', ' ').trim(),
+        'web_search' => (args['query'] ?? args['q'] ?? '').toString(),
         'task' => (args['task'] ?? args['context'] ?? '').toString().replaceAll('\n', ' ').trim(),
-        _ => _formatArgs(tool, args).replaceAll('\n', ' ').trim(),
+        'hub' => _formatHubArgs(args),
+        'ask' => _formatAskArgs(args),
+        'lsp' => '${args['action'] ?? ''} ${_stringArg(args, const ['file', 'path'])}'.trim(),
+        'browser' => '${args['action'] ?? ''} ${args['url'] ?? ''}'.trim(),
+        _ => null,
       };
+
+      if (specific != null && specific.isNotEmpty) {
+        return specific;
+      }
+      if (intent is String && intent.isNotEmpty) {
+        return intent.replaceAll('\n', ' ').trim();
+      }
+      return _formatArgs(tool, args).replaceAll('\n', ' ').trim();
     }
     return args.toString().replaceAll('\n', ' ').trim();
+  }
+
+  static String _extractEditTarget(Map args) {
+    final direct = _stringArg(args, const ['file_path', 'path', 'file']);
+    if (direct.isNotEmpty) return direct;
+    final input = args['input'];
+    if (input is String) {
+      final match = RegExp(r'\[([^#\n\]]+)').firstMatch(input);
+      if (match != null) return match.group(1)!.trim();
+    }
+    return '';
+  }
+
+  static String _formatHubArgs(Map args) {
+    final op = args['op'] ?? '';
+    final target = args['to'] ?? args['name'] ?? args['application'] ?? args['from'] ?? '';
+    if (target != null && target.toString().isNotEmpty) {
+      return '$op $target';
+    }
+    return op.toString();
+  }
+
+  static String _formatAskArgs(Map args) {
+    final questions = args['questions'];
+    if (questions is List && questions.isNotEmpty) {
+      final first = questions.first;
+      if (first is Map && first['question'] != null) {
+        return first['question'].toString();
+      }
+    }
+    return '';
   }
 
   static String _formatArgs(String tool, dynamic args) {

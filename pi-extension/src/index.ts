@@ -2230,34 +2230,53 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     _broadcastConsumedSteerForUserContent(message.content);
   });
 
-  pi.on("message_update", (event) => {
-    if (!_anyPeerActive() || !_currentTurnId) return;
-    const ae = event.assistantMessageEvent;
-    if (ae.type === "text_delta") {
-      _broadcastToActive({ type: "agent_chunk", in_reply_to: _currentTurnId, delta: ae.delta });
-    }
-  });
+  const _emittedToolRequests = new Set<string>();
 
-  // Notify every connected owner that a tool is about to run (visibility
-  // only, NOT approval). tool_execution_start fires before the tool
-  // executes; tool_execution_end closes the loop with the result. Together
-  // they render a "Tool running… done" timeline in each paired app.
-  pi.on("tool_execution_start", (event) => {
+  const _handleToolStart = (toolCallId?: string, toolName?: string, args?: unknown) => {
+    if (!toolCallId || typeof toolCallId !== "string" || !toolName || typeof toolName !== "string") return;
+    if (_emittedToolRequests.has(toolCallId)) return;
+    _emittedToolRequests.add(toolCallId);
     if (!_anyPeerActive()) return;
     _broadcastToActive({
       type: "tool_request",
-      tool_call_id: event.toolCallId,
-      tool: event.toolName,
-      args: _enrichToolArgs(event.toolName, event.args),
+      tool_call_id: toolCallId,
+      tool: toolName,
+      args: _enrichToolArgs(toolName, (args && typeof args === "object") ? args as Record<string, unknown> : {}),
     });
+  };
+
+  pi.on("message_update", (event) => {
+    if (!_anyPeerActive() || !_currentTurnId) return;
+    const ae = event.assistantMessageEvent as Record<string, unknown> | undefined;
+    if (!ae) return;
+    if (ae.type === "text_delta" && typeof ae.delta === "string") {
+      _broadcastToActive({ type: "agent_chunk", in_reply_to: _currentTurnId, delta: ae.delta });
+    } else if (ae.type === "tool_call" || ae.type === "tool_use" || ae.type === "tool_call_delta") {
+      const tcid = (ae.toolCallId ?? ae.id ?? ae.tool_call_id) as string | undefined;
+      const name = (ae.toolName ?? ae.name ?? ae.tool) as string | undefined;
+      const args = (ae.args ?? ae.arguments) as unknown;
+      if (tcid && name) _handleToolStart(tcid, name, args);
+    }
+  });
+
+  // Notify every connected owner the instant a tool is called / starts running
+  // (visibility only, NOT approval). Fires before the tool executes so the app
+  // immediately renders the running tool pill before any output arrives.
+  pi.on("tool_call", (event: unknown) => {
+    const ev = event as Record<string, unknown> | undefined;
+    const tcid = (ev?.toolCallId ?? ev?.id ?? ev?.tool_call_id) as string | undefined;
+    const name = (ev?.toolName ?? ev?.name ?? ev?.tool) as string | undefined;
+    const args = (ev?.args ?? ev?.arguments) as unknown;
+    if (tcid && name) _handleToolStart(tcid, name, args);
+  });
+
+  pi.on("tool_execution_start", (event) => {
+    _handleToolStart(event.toolCallId, event.toolName, event.args);
   });
 
   pi.on("tool_execution_end", (event) => {
+    _emittedToolRequests.delete(event.toolCallId);
     if (!_anyPeerActive()) return;
-    // Stringify like the history mapper (same helper) so the live text == what
-    // a session_sync replays for this tool. Raw `String(event.result)` turned
-    // a content-array/object into "[object Object]" and the success branch sent
-    // the object unstringified — both diverging from re-sync.
     const text = _stringifyToolResult(event.result);
     const msg: ServerMessage = event.isError
       ? { type: "tool_result", tool_call_id: event.toolCallId, error: text }
