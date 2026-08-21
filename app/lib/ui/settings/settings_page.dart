@@ -197,52 +197,49 @@ class _RelaySectionState extends State<_RelaySection> {
                   ),
                 ),
               ),
-              const SizedBox(height: 12),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  FilledButton(
-                    onPressed: _save,
-                    style: FilledButton.styleFrom(
-                      backgroundColor: colors.accent,
-                      foregroundColor: colors.onAccent,
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8),
+              const SizedBox(height: 10),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    FilledButton(
+                      onPressed: _save,
+                      style: FilledButton.styleFrom(
+                        backgroundColor: colors.accent,
+                        foregroundColor: colors.onAccent,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 18,
+                          vertical: 10,
+                        ),
+                        shape: const RoundedRectangleBorder(
+                          borderRadius: BorderRadius.all(Radius.circular(6)),
+                        ),
+                      ),
+                      child: Text(
+                        'Save',
+                        style: TextStyle(
+                          fontFamily: context.typo.mono.fontFamily ?? kMonoFamily,
+                          fontSize: 13,
+                        ),
                       ),
                     ),
-                    child: Text(
-                      'Save Relay URL',
-                      style: TextStyle(
-                        fontFamily: context.typo.mono.fontFamily ?? kMonoFamily,
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
+                    const SizedBox(width: 12),
+                    TextButton(
+                      onPressed: () {
+                        _ctrl.text = kDefaultRelayUrl;
+                        _save();
+                      },
+                      child: Text(
+                        'Use default Relay',
+                        style: TextStyle(
+                          fontFamily: context.typo.mono.fontFamily ?? kMonoFamily,
+                          fontSize: 13,
+                        ),
                       ),
                     ),
-                  ),
-                  const SizedBox(height: 8),
-                  OutlinedButton(
-                    onPressed: () {
-                      _ctrl.text = kDefaultRelayUrl;
-                      _save();
-                    },
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: colors.text,
-                      side: BorderSide(color: colors.border),
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                    ),
-                    child: Text(
-                      'Reset to Default ($kDefaultRelayUrl)',
-                      style: TextStyle(
-                        fontFamily: context.typo.mono.fontFamily ?? kMonoFamily,
-                        fontSize: 12,
-                      ),
-                    ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ],
           ),
