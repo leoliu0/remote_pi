@@ -47,8 +47,41 @@ ThemeData _buildTheme({
       ),
     ),
     textTheme: TextTheme(
-      bodyMedium: typo.sansBody,
-      bodySmall: typo.monoSmall,
+      bodyLarge: typo.mono.copyWith(fontSize: 14, color: colors.text),
+      bodyMedium: typo.mono.copyWith(fontSize: 13, color: colors.text),
+      bodySmall: typo.monoSmall.copyWith(fontSize: 11, color: colors.muted),
+      headlineLarge: typo.mono.copyWith(
+        fontSize: 16.5,
+        fontWeight: FontWeight.w700,
+        color: colors.text,
+        letterSpacing: -0.2,
+      ),
+      headlineMedium: typo.mono.copyWith(
+        fontSize: 15.0,
+        fontWeight: FontWeight.w700,
+        color: colors.text,
+        letterSpacing: -0.2,
+      ),
+      headlineSmall: typo.mono.copyWith(
+        fontSize: 14.0,
+        fontWeight: FontWeight.w700,
+        color: colors.text,
+      ),
+      titleLarge: typo.mono.copyWith(
+        fontSize: 13.5,
+        fontWeight: FontWeight.w600,
+        color: colors.text,
+      ),
+      titleMedium: typo.mono.copyWith(
+        fontSize: 13.0,
+        fontWeight: FontWeight.w600,
+        color: colors.text,
+      ),
+      titleSmall: typo.mono.copyWith(
+        fontSize: 12.0,
+        fontWeight: FontWeight.w600,
+        color: colors.muted,
+      ),
     ),
     inputDecorationTheme: InputDecorationTheme(
       filled: true,

@@ -24,21 +24,59 @@ class AgentMarkdown extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = context.colors;
     final typo = context.typo;
-    final markdown = GptMarkdown(
-      data,
-      style: typo.mono,
-      onLinkTap: (url, _) => _openLink(context, url),
-      // Inline `code` — subtle highlight, keeps the baseline.
-      highlightBuilder: (context, text, style) => Text(
-        text,
-        style: typo.mono.copyWith(
-          color: colors.highlight,
-          backgroundColor: colors.codeBg,
+    final markdown = Theme(
+      data: Theme.of(context).copyWith(
+        textTheme: Theme.of(context).textTheme.copyWith(
+          headlineLarge: typo.mono.copyWith(
+            fontSize: 16.5,
+            fontWeight: FontWeight.w700,
+            color: colors.text,
+            letterSpacing: -0.2,
+          ),
+          headlineMedium: typo.mono.copyWith(
+            fontSize: 15.0,
+            fontWeight: FontWeight.w700,
+            color: colors.text,
+            letterSpacing: -0.2,
+          ),
+          headlineSmall: typo.mono.copyWith(
+            fontSize: 14.0,
+            fontWeight: FontWeight.w700,
+            color: colors.text,
+          ),
+          titleLarge: typo.mono.copyWith(
+            fontSize: 13.5,
+            fontWeight: FontWeight.w600,
+            color: colors.text,
+          ),
+          titleMedium: typo.mono.copyWith(
+            fontSize: 13.0,
+            fontWeight: FontWeight.w600,
+            color: colors.text,
+          ),
+          titleSmall: typo.mono.copyWith(
+            fontSize: 12.0,
+            fontWeight: FontWeight.w600,
+            color: colors.muted,
+          ),
         ),
       ),
-      // Fenced ``` blocks — dark card + copy button.
-      codeBuilder: (context, name, code, closed) =>
-          _CodeBlock(language: name, code: code),
+      child: GptMarkdown(
+        data,
+        style: typo.mono,
+        onLinkTap: (url, _) => _openLink(context, url),
+        // Inline `code` — subtle highlight, keeps the baseline.
+        highlightBuilder: (context, text, style) => Text(
+          text,
+          style: typo.mono.copyWith(
+            color: colors.highlight,
+            backgroundColor: colors.codeBg,
+          ),
+        ),
+        // Fenced ``` blocks — dark card + copy button.
+        codeBuilder: (context, name, code, closed) =>
+            _CodeBlock(language: name, code: code),
+      ),
     );
     return selectable ? SelectionArea(child: markdown) : markdown;
   }
