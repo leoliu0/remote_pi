@@ -33,9 +33,8 @@
   ],
   "pi": {
     "extensions": [
-      "./dist"
-    ],
-    "image": "https://raw.githubusercontent.com/jacobaraujo7/remote_pi/main/branding/banner.png"
+      "./dist/index.js"
+    ]
   },
   "author": "Jacob Moura <jacobmoura7@gmail.com>",
   "license": "MIT",

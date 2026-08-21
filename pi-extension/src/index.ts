@@ -2668,6 +2668,18 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   pi.registerCommand("remote-pi config", { description: "Show the effective relay URL and where it came from", handler: async (_, ctx) => { _lastCtx = ctx; _cmdConfig(ctx); } });
   pi.registerCommand("remote-pi relay", { description: "Relay control: start | stop | status | url <http(s) url> (no arg toggles)", handler: async (args, ctx) => { _lastCtx = ctx; await _cmdRelay(args.trim(), ctx); } });
 
+  // Nested registrations for `/rc`
+  pi.registerCommand("rc setup",    { description: "Run the setup wizard and update local config", handler: async (_, ctx) => { _lastCtx = ctx; await _cmdSetup(ctx); } });
+  pi.registerCommand("rc status",   { description: "Show local mesh + relay status", handler: async (_, ctx) => { _lastCtx = ctx; _cmdStatus(ctx); } });
+  pi.registerCommand("rc stop",     { description: "Stop everything (leave local mesh + disconnect relay)", handler: async (_, ctx) => { _lastCtx = ctx; await _cmdStop(ctx); } });
+  pi.registerCommand("rc pair",     { description: "Show a QR code to pair a new mobile device (optional: --ttl <seconds>)", handler: async (args, ctx) => { _lastCtx = ctx; await _cmdPair(ctx, args.trim()); } });
+  pi.registerCommand("rc devices",  { description: "List paired mobile devices", handler: async (_, ctx) => { _lastCtx = ctx; await _cmdList(ctx); } });
+  pi.registerCommand("rc rename",   { description: "Rename this agent in the current session (updates mesh + relay room)", handler: async (args, ctx) => { _lastCtx = ctx; await _renameAgent(args.trim()); } });
+  pi.registerCommand("rc set-relay", { description: "Persist a new relay URL to user config", handler: async (args, ctx) => { _lastCtx = ctx; _cmdSetRelay(args.trim(), ctx); } });
+  pi.registerCommand("rc config",   { description: "Show the effective relay URL and where it came from", handler: async (_, ctx) => { _lastCtx = ctx; _cmdConfig(ctx); } });
+  pi.registerCommand("rc relay",    { description: "Relay control: start | stop | status | url <http(s) url> (no arg toggles)", handler: async (args, ctx) => { _lastCtx = ctx; await _cmdRelay(args.trim(), ctx); } });
+  pi.registerCommand("rc peers",    { description: "List local + cross-PC mesh peers, grouped by PC label", handler: async (_, ctx) => { _lastCtx = ctx; await _cmdPeers(ctx); } });
+
   // Plan/25 Wave D
   pi.registerCommand("remote-pi peers", {
     description: "List local + cross-PC mesh peers, grouped by PC label",
