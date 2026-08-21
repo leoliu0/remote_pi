@@ -135,7 +135,7 @@ void main() {
     await tester.pumpAndSettle();
     final field = tester.widget<TextField>(find.byType(TextField));
     expect(field.enabled, isTrue);
-    expect(field.decoration?.hintText, 'Steer current response…');
+    expect(field.decoration?.hintText, 'Send a message…');
     // The composer action button uses the heavier `600` weight variants
     // (see _ComposerActionButton._icon) — match those, not the plain glyphs.
     expect(find.byIcon(LucideIcons.square600), findsOneWidget); // stop

@@ -396,8 +396,7 @@ class _InputBarState extends State<InputBar> {
                       maxLines: 6,
                       keyboardType: TextInputType.multiline,
                       textInputAction: TextInputAction.newline,
-                      style: TextStyle(
-                        fontFamily: kMonoFamily,
+                      style: context.typo.mono.copyWith(
                         fontSize: 13,
                         color: colors.text,
                       ),
@@ -405,14 +404,12 @@ class _InputBarState extends State<InputBar> {
                       decoration: InputDecoration(
                         hintText: widget.disabled
                             ? 'Offline…'
-                            : widget.streaming
-                            ? 'Steer current response…'
                             : hasImage
                             ? 'Add a caption…'
                             : 'Send a message…',
-                        hintStyle: TextStyle(
+                        hintStyle: context.typo.mono.copyWith(
+                          fontSize: 13,
                           color: colors.muted,
-                          fontFamily: kMonoFamily,
                         ),
                         contentPadding: const EdgeInsets.symmetric(
                           horizontal: 14,
@@ -553,9 +550,8 @@ class _QueuedMessagePreview extends StatelessWidget {
                     children: [
                       Text(
                         editable ? 'Queued. Tap to edit.' : 'Queued follow-up.',
-                        style: TextStyle(
+                        style: context.typo.mono.copyWith(
                           color: colors.accent,
-                          fontFamily: kMonoFamily,
                           fontSize: 11,
                           fontWeight: FontWeight.w700,
                         ),
@@ -565,9 +561,8 @@ class _QueuedMessagePreview extends StatelessWidget {
                         text,
                         maxLines: 3,
                         overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
+                        style: context.typo.mono.copyWith(
                           color: colors.text,
-                          fontFamily: kMonoFamily,
                           fontSize: 12,
                           height: 1.25,
                         ),
@@ -736,8 +731,7 @@ class _TranscribingStrip extends StatelessWidget {
         const SizedBox(width: 10),
         Text(
           'transcribing…',
-          style: TextStyle(
-            fontFamily: kMonoFamily,
+          style: context.typo.mono.copyWith(
             fontSize: 12,
             color: colors.muted2,
           ),
