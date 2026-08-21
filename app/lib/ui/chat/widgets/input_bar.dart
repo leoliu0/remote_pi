@@ -155,6 +155,12 @@ class _InputBarState extends State<InputBar> {
     _controller.clear();
     widget.onSend(text);
   }
+  void _queue() {
+    final text = _controller.text.trim();
+    if (text.isEmpty) return;
+    _controller.clear();
+    widget.onSetQueued?.call(text);
+  }
 
   void _editQueued(QueuedMsg item) {
     if (!item.editable) return;
@@ -319,6 +325,13 @@ class _InputBarState extends State<InputBar> {
         !showStrip &&
         hasQuickActions;
 
+    final showQueueButton =
+        hasContent &&
+        !_empty &&
+        canInteract &&
+        !showStrip &&
+        widget.onSetQueued != null;
+
     // During a working turn with typed content, the main action sends steering;
     // keep a compact Stop affordance beside it so cancellation remains reachable.
     final showInlineStop =
@@ -327,7 +340,6 @@ class _InputBarState extends State<InputBar> {
         canInteract &&
         !showStrip &&
         widget.onCancel != null;
-
     return Container(
       padding: const EdgeInsets.fromLTRB(14, 10, 14, 22),
       decoration: BoxDecoration(
@@ -433,6 +445,8 @@ class _InputBarState extends State<InputBar> {
                     ),
                   ),
                   const SizedBox(width: 10),
+                  if (showQueueButton)
+                    _QueueButton(onTap: _queue),
                   _ComposerActionButton(
                     streaming: widget.streaming,
                     hasContent: hasContent,
@@ -947,6 +961,46 @@ class _ComposerActionButton extends StatelessWidget {
           key: ValueKey(_mode),
           color: visualEnabled ? colors.onAccent : colors.muted,
           size: 20,
+        ),
+      ),
+    );
+  }
+}
+
+class _QueueButton extends StatelessWidget {
+  const _QueueButton({required this.onTap});
+
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    return Container(
+      width: 38,
+      height: 38,
+      margin: const EdgeInsets.only(right: 8),
+      child: Tooltip(
+        message: 'Queue for next turn',
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            key: const Key('input-bar-queue'),
+            onTap: onTap,
+            borderRadius: BorderRadius.circular(19),
+            child: Container(
+              decoration: BoxDecoration(
+                color: colors.codeBg,
+                border: Border.all(color: colors.accent, width: 1.2),
+                borderRadius: BorderRadius.circular(19),
+              ),
+              alignment: Alignment.center,
+              child: Icon(
+                LucideIcons.listPlus,
+                color: colors.accent,
+                size: 20,
+              ),
+            ),
+          ),
         ),
       ),
     );

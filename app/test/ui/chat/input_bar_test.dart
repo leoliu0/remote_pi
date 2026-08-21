@@ -143,7 +143,7 @@ void main() {
     expect(find.byIcon(LucideIcons.mic600), findsNothing);
   });
 
-  testWidgets('streaming + text uses existing send button for steer', (
+  testWidgets('streaming + text offers steer and queue buttons', (
     tester,
   ) async {
     String? queued;
@@ -164,7 +164,7 @@ void main() {
 
     await tester.enterText(find.byType(TextField), 'steer me');
     await tester.pump();
-    expect(find.byKey(const Key('input-bar-queue')), findsNothing);
+    expect(find.byKey(const Key('input-bar-queue')), findsOneWidget);
     await tester.tap(find.byKey(const Key('input-bar-action')));
     await tester.pump();
 
@@ -174,8 +174,19 @@ void main() {
       tester.widget<TextField>(find.byType(TextField)).controller?.text,
       '',
     );
-  });
 
+    // Test queue button
+    await tester.enterText(find.byType(TextField), 'queue me next');
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('input-bar-queue')));
+    await tester.pump();
+
+    expect(queued, 'queue me next');
+    expect(
+      tester.widget<TextField>(find.byType(TextField)).controller?.text,
+      '',
+    );
+  });
   testWidgets('queued preview edits and clears by id', (tester) async {
     String? cleared;
     await tester.pumpWidget(
