@@ -14,6 +14,9 @@ import 'package:app/ui/chat/widgets/input_bar.dart';
 import 'package:app/ui/chat/widgets/message_bubble.dart';
 import 'package:app/ui/chat/widgets/streaming_bubble.dart';
 import 'package:app/ui/chat/widgets/tool_request_card.dart';
+import 'package:app/config/dependencies.dart';
+import 'package:app/ui/chat/quick_actions/viewmodels/quick_actions_viewmodel.dart';
+import 'package:app/ui/chat/quick_actions/widgets/model_picker_sheet.dart';
 import 'package:app/ui/chat/widgets/extension_ui_sheet.dart';
 import 'package:app/ui/settings/settings_sheet.dart';
 import 'package:app_settings/app_settings.dart';
@@ -243,6 +246,14 @@ class ChatPage extends StatelessWidget {
           // nav hints, so the bar is stable from frame 1. The dialog needs the
           // loaded PeerRecord; we read it at tap time (loaded within ms of
           // mount for the connection) and no-op in the unlikely pre-load tap.
+          IconButton(
+            icon: Icon(LucideIcons.sparkles, size: 18, color: colors.accent),
+            tooltip: 'Model settings',
+            onPressed: () {
+              final qaVm = injector.get<QuickActionsViewModel>();
+              showModelPickerSheet(context, vm: qaVm);
+            },
+          ),
           IconButton(
             icon: Icon(LucideIcons.info, size: 18, color: colors.muted2),
             tooltip: 'Session info',

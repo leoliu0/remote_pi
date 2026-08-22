@@ -130,6 +130,7 @@ void main() {
 
       // The info button renders immediately — even with no PeerRecord loaded
       // (activePeer == null here) — so it never pops in and shifts the AppBar.
+      expect(find.byIcon(LucideIcons.sparkles), findsOneWidget);
       expect(find.byIcon(LucideIcons.info), findsOneWidget);
       expect(find.byIcon(LucideIcons.settings), findsOneWidget);
       // Status dot uses initialOnline before the runtime resolves → shows
