@@ -24,51 +24,61 @@ class AgentMarkdown extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = context.colors;
     final typo = context.typo;
+    final baseMono = typo.mono.copyWith(
+      fontSize: 13.5,
+      height: 1.45,
+      color: colors.text,
+    );
+
     final markdown = Theme(
       data: Theme.of(context).copyWith(
         textTheme: Theme.of(context).textTheme.copyWith(
-          headlineLarge: typo.mono.copyWith(
+          headlineLarge: baseMono.copyWith(
+            fontSize: 18.0,
+            fontWeight: FontWeight.w700,
+            color: colors.text,
+            letterSpacing: -0.2,
+          ),
+          headlineMedium: baseMono.copyWith(
             fontSize: 16.5,
             fontWeight: FontWeight.w700,
             color: colors.text,
             letterSpacing: -0.2,
           ),
-          headlineMedium: typo.mono.copyWith(
+          headlineSmall: baseMono.copyWith(
+            fontSize: 15.5,
+            fontWeight: FontWeight.w700,
+            color: colors.text,
+          ),
+          titleLarge: baseMono.copyWith(
             fontSize: 15.0,
-            fontWeight: FontWeight.w700,
-            color: colors.text,
-            letterSpacing: -0.2,
-          ),
-          headlineSmall: typo.mono.copyWith(
-            fontSize: 14.0,
-            fontWeight: FontWeight.w700,
+            fontWeight: FontWeight.w600,
             color: colors.text,
           ),
-          titleLarge: typo.mono.copyWith(
+          titleMedium: baseMono.copyWith(
+            fontSize: 14.2,
+            fontWeight: FontWeight.w600,
+            color: colors.text,
+          ),
+          titleSmall: baseMono.copyWith(
             fontSize: 13.5,
             fontWeight: FontWeight.w600,
             color: colors.text,
           ),
-          titleMedium: typo.mono.copyWith(
-            fontSize: 13.0,
-            fontWeight: FontWeight.w600,
-            color: colors.text,
-          ),
-          titleSmall: typo.mono.copyWith(
-            fontSize: 12.0,
-            fontWeight: FontWeight.w600,
-            color: colors.muted,
-          ),
+          bodyLarge: baseMono,
+          bodyMedium: baseMono,
+          bodySmall: baseMono.copyWith(fontSize: 12.0, color: colors.muted),
         ),
       ),
       child: GptMarkdown(
         data,
-        style: typo.mono,
+        style: baseMono,
         onLinkTap: (url, _) => _openLink(context, url),
         // Inline `code` — subtle highlight, keeps the baseline.
         highlightBuilder: (context, text, style) => Text(
           text,
-          style: typo.mono.copyWith(
+          style: baseMono.copyWith(
+            fontSize: 13.0,
             color: colors.highlight,
             backgroundColor: colors.codeBg,
           ),
@@ -124,8 +134,7 @@ class _CodeBlock extends StatelessWidget {
                 Expanded(
                   child: Text(
                     language.isEmpty ? 'code' : language,
-                    style: TextStyle(
-                      fontFamily: kMonoFamily,
+                    style: typo.monoSmall.copyWith(
                       fontSize: 10,
                       color: colors.muted,
                       letterSpacing: 0.3,

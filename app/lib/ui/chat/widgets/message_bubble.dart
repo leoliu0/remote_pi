@@ -58,7 +58,11 @@ class UserBubble extends StatelessWidget {
                       // agent reply is already selectable via AgentMarkdown).
                       child: SelectableText(
                         message.text,
-                        style: typo.sansBody.copyWith(color: colors.text),
+                        style: typo.mono.copyWith(
+                          fontSize: 13.5,
+                          color: colors.text,
+                          height: 1.4,
+                        ),
                       ),
                     ),
             ),
