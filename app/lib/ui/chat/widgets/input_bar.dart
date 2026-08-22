@@ -8,6 +8,7 @@ import 'package:app/ui/chat/voice/states/voice_input_state.dart';
 import 'package:app/ui/chat/voice/viewmodels/voice_input_viewmodel.dart';
 import 'package:app/ui/chat/voice/widgets/recording_strip.dart';
 import 'package:app/ui/core/themes/themes.dart';
+import 'package:app/ui/chat/widgets/slash_commands.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
@@ -291,12 +292,10 @@ class _InputBarState extends State<InputBar> {
       _historyIndex = -1;
     }
     final next = _controller.text.isEmpty;
-    if (next == _empty) return;
     setState(() {
       _empty = next;
     });
   }
-
   @override
   void dispose() {
     _transcriptSub?.cancel();
@@ -546,6 +545,17 @@ class _InputBarState extends State<InputBar> {
                 ),
               if (_buildHistoryBar(context) != null)
                 _buildHistoryBar(context)!,
+              if (canInteract && filterSlashCommands(_controller.text).isNotEmpty)
+                SlashCommandMenu(
+                  items: filterSlashCommands(_controller.text),
+                  onSelect: (cmd) {
+                    _controller.text = '/${cmd.name} ';
+                    _controller.selection = TextSelection.collapsed(
+                      offset: _controller.text.length,
+                    );
+                    _focusNode.requestFocus();
+                  },
+                ),
               TextField(
                 // Intercept hardware Enter on the field's OWN focus
                 // node (the primary/leaf): plain Enter sends,

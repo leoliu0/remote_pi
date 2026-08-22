@@ -460,9 +460,6 @@ class ChatPage extends StatelessWidget {
       streaming: isWorking,
       messageHistory: messageHistory,
       onCancel: cancelId != null ? () => vm.cancel(cancelId) : null,
-      onOpenQuickActions: actionsEnabled
-          ? () => showQuickActionsSheet(context)
-          : null,
       queuedMessages: isReady ? state.queuedMessages : const [],
       onSetQueued: vm.queueMessage,
       onClearQueued: vm.clearQueuedMessage,
