@@ -860,41 +860,70 @@ let _queuedItems: AndroidQueuedItem[] = [];
  */
 export function _hydrateMessageBufferFromSession(sessionManager: unknown): void {
   if (!sessionManager || typeof sessionManager !== "object") return;
-  const sm = sessionManager as { getBranch?: () => unknown[]; getEntries?: () => unknown[] };
+  const sm = sessionManager as {
+    buildSessionContext?: () => { messages?: unknown[] };
+    getBranch?: () => unknown[];
+    getEntries?: () => unknown[];
+    messages?: unknown[];
+  };
   try {
-    const branch = (typeof sm.getBranch === "function" ? sm.getBranch() : null) ??
-                   (typeof sm.getEntries === "function" ? sm.getEntries() : null);
-    if (!Array.isArray(branch) || branch.length === 0) return;
-
     const msgs: BufferMsg[] = [];
-    for (const entry of branch) {
-      if (!entry || typeof entry !== "object") continue;
-      const e = entry as { type?: string; message?: unknown; summary?: string; tokensBefore?: number; timestamp?: string | number };
-      const ts = typeof e.timestamp === "number"
-        ? e.timestamp
-        : typeof e.timestamp === "string"
-        ? new Date(e.timestamp).getTime()
-        : Date.now();
+    if (typeof sm.getBranch === "function" || typeof sm.getEntries === "function") {
+      const branch = (typeof sm.getBranch === "function" ? sm.getBranch() : null) ??
+                     (typeof sm.getEntries === "function" ? sm.getEntries() : null);
+      if (Array.isArray(branch) && branch.length > 0) {
+        for (const entry of branch) {
+          if (!entry || typeof entry !== "object") continue;
+          const e = entry as Record<string, unknown>;
+          const ts = typeof e.timestamp === "number"
+            ? e.timestamp
+            : typeof e.timestamp === "string"
+            ? new Date(e.timestamp).getTime()
+            : Date.now();
 
-      if (e.type === "message" && e.message && typeof e.message === "object") {
-        const m = e.message as BufferMsg;
-        msgs.push({
-          ...m,
-          timestamp: typeof m.timestamp === "number" ? m.timestamp : ts,
-        });
-      } else if (e.type === "compaction" || e.type === "branch_summary") {
-        msgs.push({
-          role: "compaction",
-          content: e.summary ?? "",
-          timestamp: ts,
-          tokensBefore: e.tokensBefore ?? 0,
-        });
-      } else if (e.type === "custom_message" && (e as { content?: unknown }).content) {
-        msgs.push({
-          role: "user",
-          content: (e as { content: unknown }).content,
-          timestamp: ts,
-        });
+          if (e.type === "message" && e.message && typeof e.message === "object") {
+            const m = e.message as BufferMsg;
+            msgs.push({
+              ...m,
+              timestamp: typeof m.timestamp === "number" ? m.timestamp : ts,
+            });
+          } else if (e.type === "compaction" || e.type === "branch_summary") {
+            msgs.push({
+              role: "compaction",
+              content: typeof e.summary === "string" ? e.summary : "",
+              timestamp: ts,
+              tokensBefore: typeof e.tokensBefore === "number" ? e.tokensBefore : 0,
+            });
+          } else if (e.type === "custom_message" && e.content) {
+            msgs.push({
+              role: "user",
+              content: e.content,
+              timestamp: ts,
+            });
+          } else if (e.role === "user" || e.role === "assistant" || e.role === "toolResult") {
+            msgs.push({
+              ...e as unknown as BufferMsg,
+              timestamp: ts,
+            });
+          }
+        }
+      }
+    }
+    if (msgs.length === 0 && typeof sm.buildSessionContext === "function") {
+      const built = sm.buildSessionContext();
+      if (built && Array.isArray(built.messages)) {
+        for (const m of built.messages) {
+          if (m && typeof m === "object") {
+            msgs.push(m as BufferMsg);
+          }
+        }
+      }
+    }
+    if (msgs.length === 0 && Array.isArray(sm.messages)) {
+      for (const m of sm.messages) {
+        if (m && typeof m === "object") {
+          msgs.push(m as BufferMsg);
+        }
       }
     }
     if (msgs.length > 0) {
