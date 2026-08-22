@@ -15,6 +15,7 @@ import 'package:app/ui/chat/widgets/message_bubble.dart';
 import 'package:app/ui/chat/widgets/streaming_bubble.dart';
 import 'package:app/ui/chat/widgets/tool_request_card.dart';
 import 'package:app/ui/chat/widgets/extension_ui_sheet.dart';
+import 'package:app/ui/settings/settings_sheet.dart';
 import 'package:app_settings/app_settings.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
@@ -251,6 +252,11 @@ class ChatPage extends StatelessWidget {
                 _showSessionInfo(context, p, vm.activeRoom, roomName);
               }
             },
+          ),
+          IconButton(
+            icon: Icon(LucideIcons.settings, size: 18, color: colors.muted2),
+            tooltip: 'Settings',
+            onPressed: () => openSettings(context),
           ),
         ],
       ),

@@ -473,7 +473,6 @@ class SyncService extends Service {
         final text = _finalizeSegment();
         _clearSteeringLabel(inReplyTo);
         _setWorking(false, preview: text.isEmpty ? null : text);
-
       case AgentMessage(:final inReplyTo, :final text):
         // ignore: discarded_futures
         _upsert(
@@ -700,12 +699,12 @@ class SyncService extends Service {
     final historyIds = {for (final r in rows) _key(r.role, r.id)};
     await _enqueue(() async {
       final box = await _boxes.msgsBox(epk, room);
-      // Preserve local pending user rows the Pi hasn't echoed yet.
+      // Preserve local pending user rows and steering rows the Pi hasn't unified in history yet.
       final preserved = <MessageRecord>[];
       for (final v in box.values) {
         final r = MessageRecord.fromJson(_coerce(v));
         if (r.role == MsgRole.user &&
-            r.pending &&
+            (r.pending || r.steering) &&
             !historyIds.contains(_key(r.role, r.id))) {
           preserved.add(r);
         }
