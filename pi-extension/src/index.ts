@@ -700,7 +700,7 @@ async function _deliverImageUserMessage(
   const seededTurnId = !shouldSteer || _currentTurnId === null;
   if (seededTurnId) _currentTurnId = msg.id;
 
-  const wake = _wakeAgent(
+  const wake = await _wakeAgent(
     _contentFromUserMessage(msg),
     `app user_message id=${msg.id} (+${msg.images?.length ?? 0} image)`,
     "steer",
@@ -1027,7 +1027,7 @@ function _broadcastConsumedSteerForUserContent(content: unknown): void {
   _broadcastToActive({ type: "steer_consumed", id });
 }
 
-function _maybeDrainQueuedItem(): void {
+async function _maybeDrainQueuedItem(): Promise<void> {
   if (_isBusyForQueueDrain()) return;
   const item = _queuedItems.shift();
   if (!item) return;
@@ -1036,7 +1036,7 @@ function _maybeDrainQueuedItem(): void {
   const previousTurnId = _currentTurnId;
   _currentTurnId = item.id;
   const msg: ClientUserMessage = { type: "user_message", id: item.id, text: item.text };
-  const wake = _wakeAgent(item.text, `queued app user_message id=${item.id}`, "steer");
+  const wake = await _wakeAgent(item.text, `queued app user_message id=${item.id}`, "steer");
   if (!wake.ok) {
     _currentTurnId = previousTurnId;
     _queuedItems = [item, ..._queuedItems];
@@ -1051,7 +1051,6 @@ function _maybeDrainQueuedItem(): void {
   }
   _echoUserMessage(msg, false);
 }
-
 /** Test-only override of the message buffer. */
 /**
  * Test-only: emulate what `/remote-pi` does on the returning-user path
@@ -2362,6 +2361,10 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   });
 
   pi.on("agent_end", () => {
+    for (const steer of _pendingSteers) {
+      _broadcastToActive({ type: "steer_consumed", id: steer.id });
+    }
+    _pendingSteers = [];
     // Buffer is fed by `message_end`; here we only finalize the outbound
     // turn signal to every connected owner. No buffer mutation.
     if (_anyPeerActive() && _currentTurnId) {
@@ -4248,11 +4251,11 @@ type WakeAgentResult =
   | { ok: true }
   | { ok: false; detail: string };
 
-function _wakeAgent(
+async function _wakeAgent(
   content: Parameters<ExtensionAPI["sendUserMessage"]>[0],
   label: string,
   steeringBehavior?: SendUserMessageOptions["deliverAs"],
-): WakeAgentResult {
+): Promise<WakeAgentResult> {
   if (!_pi) {
     const detail = "agent session not bound yet";
     console.error(`[remote-pi] ${label}: ${detail} — message dropped`);
@@ -4262,9 +4265,25 @@ function _wakeAgent(
     const options = steeringBehavior
       ? ({ deliverAs: steeringBehavior })
       : undefined;
-    _pi.sendUserMessage(content, options);
+    await _pi.sendUserMessage(content, options);
     return { ok: true };
   } catch (err) {
+    if (steeringBehavior) {
+      try {
+        await _pi.sendUserMessage(content, { deliverAs: "followUp" });
+        return { ok: true };
+      } catch {
+        try {
+          await _pi.sendUserMessage(content);
+          return { ok: true };
+        } catch (retryErr) {
+          const detail = retryErr instanceof Error ? retryErr.message : String(retryErr);
+          console.error(`[remote-pi] ${label}: agent rejected incoming message retry: ${detail}`);
+          _safeNotify(`[remote-pi] failed to process incoming message: ${detail}`, "error");
+          return { ok: false, detail };
+        }
+      }
+    }
     const detail = err instanceof Error ? err.message : String(err);
     console.error(`[remote-pi] ${label}: agent rejected incoming message: ${detail}`);
     _safeNotify(`[remote-pi] failed to process incoming message: ${detail}`, "error");
@@ -4655,24 +4674,25 @@ export function _routeClientMessageFrom(
       // Always include a streaming delivery mode for app-originated messages.
       // The SDK ignores `deliverAs` when idle, but requires it when a turn is
       // already running. This avoids a race where Remote Pi's mirror has not
-      // seen turn_start/currentTurnId yet but the SDK is already busy.
-      const wake = _wakeAgent(
-        msg.text,
-        `app user_message id=${msg.id}`,
-        "steer",
-      );
-      if (!wake.ok) {
-        if (seededTurnId) _currentTurnId = previousTurnId;
-        sender.send({
-          type: "error",
-          code: "internal_error",
-          in_reply_to: msg.id,
-          message: `Agent rejected incoming message: ${wake.detail}`,
-        });
-        break;
-      }
-      if (shouldSteer) _trackPendingSteer(msg.id, msg.text);
-      _echoUserMessage(msg, shouldSteer);
+      void (async () => {
+        const wake = await _wakeAgent(
+          msg.text,
+          `app user_message id=${msg.id}`,
+          "steer",
+        );
+        if (!wake.ok) {
+          if (seededTurnId) _currentTurnId = previousTurnId;
+          sender.send({
+            type: "error",
+            code: "internal_error",
+            in_reply_to: msg.id,
+            message: `Agent rejected incoming message: ${wake.detail}`,
+          });
+          return;
+        }
+        if (shouldSteer) _trackPendingSteer(msg.id, msg.text);
+        _echoUserMessage(msg, shouldSteer);
+      })();
       break;
     }
     case "approve_tool":
