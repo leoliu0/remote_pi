@@ -63,12 +63,22 @@ class _ModelPickerBodyState extends State<_ModelPickerBody> {
 
   Future<void> _onPick(WireModel model) async {
     final vm = context.read<QuickActionsViewModel>();
+    final messenger = ScaffoldMessenger.maybeOf(context);
     try {
       await vm.setModel(model);
       if (!mounted) return;
       Navigator.of(context).pop();
-    } catch (_) {
-      // Error is surfaced as a snackbar via the parent sheet's listener.
+    } catch (e) {
+      final msg = e is ActionFailure
+          ? e.message
+          : 'Failed to switch to ${model.name}';
+      messenger?.showSnackBar(
+        SnackBar(
+          content: Text(msg),
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 4),
+        ),
+      );
     }
   }
 
