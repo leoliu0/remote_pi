@@ -153,13 +153,15 @@ class _InputBarState extends State<InputBar> {
       _controller.selection = TextSelection.collapsed(offset: text.length);
       _navigatingHistory = false;
       setState(() {});
-    } else if (_historyIndex == 0) {
+    } else {
+      // Reached the end below: restore draft if any, or clear to empty so the user can type fresh.
       _historyIndex = -1;
       _navigatingHistory = true;
       _controller.text = _savedDraft;
       _controller.selection =
           TextSelection.collapsed(offset: _savedDraft.length);
       _navigatingHistory = false;
+      _savedDraft = '';
       setState(() {});
     }
   }
