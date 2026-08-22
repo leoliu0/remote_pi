@@ -202,26 +202,26 @@ void main() {
       await p.setFontScale(AppFontScale.small);
       expect(calls, 1);
     });
-    test('fontFamily defaults to system and round-trips through storage', () async {
+    test('fontFamily defaults to jetbrainsMono and round-trips through storage', () async {
       final store = _FakeSecureStorage();
       final p = Preferences(store);
       await p.load();
-      expect(p.fontFamily, AppFontFamily.system);
-
-      await p.setFontFamily(AppFontFamily.jetbrainsMono);
       expect(p.fontFamily, AppFontFamily.jetbrainsMono);
+
+      await p.setFontFamily(AppFontFamily.firaCode);
+      expect(p.fontFamily, AppFontFamily.firaCode);
 
       final reloaded = Preferences(store);
       await reloaded.load();
-      expect(reloaded.fontFamily, AppFontFamily.jetbrainsMono);
+      expect(reloaded.fontFamily, AppFontFamily.firaCode);
     });
 
-    test('an unknown persisted font family falls back to system', () async {
+    test('an unknown persisted font family falls back to jetbrainsMono', () async {
       final store = _FakeSecureStorage();
       await store.write(key: 'prefs.font_family', value: 'comic_sans');
       final p = Preferences(store);
       await p.load();
-      expect(p.fontFamily, AppFontFamily.system);
+      expect(p.fontFamily, AppFontFamily.jetbrainsMono);
     });
 
     test('toolCallDisplay defaults to full and round-trips through storage', () async {

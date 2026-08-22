@@ -190,10 +190,9 @@ class _TitleBlock extends StatelessWidget {
                 : 'Last paired: ${_relativeTime(peer.pairedAt)}',
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: TextStyle(
+            style: context.typo.mono.copyWith(
               color: hasModel ? colors.accent : colors.muted,
               fontSize: 12,
-              fontFamily: kMonoFamily,
             ),
           );
         }),
@@ -224,9 +223,8 @@ class _Avatar extends StatelessWidget {
       alignment: Alignment.center,
       child: Text(
         initial,
-        style: TextStyle(
+        style: context.typo.mono.copyWith(
           color: colors.accent,
-          fontFamily: kMonoFamily,
           fontSize: 16,
           fontWeight: FontWeight.w600,
         ),

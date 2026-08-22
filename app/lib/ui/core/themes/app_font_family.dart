@@ -3,14 +3,14 @@ import 'package:google_fonts/google_fonts.dart';
 
 /// User-selectable font family for the app UI and monospace text.
 enum AppFontFamily {
-  system('System (Courier)'),
   jetbrainsMono('JetBrains Mono'),
   firaCode('Fira Code'),
   sourceCodePro('Source Code Pro'),
   ibmPlexMono('IBM Plex Mono'),
   robotoMono('Roboto Mono'),
   inconsolata('Inconsolata'),
-  inter('Inter');
+  inter('Inter'),
+  system('System (Courier)');
 
   const AppFontFamily(this.label);
 
@@ -116,11 +116,11 @@ enum AppFontFamily {
     }
   }
 
-  /// Parse a persisted value. Unknown/missing falls back to [system].
+  /// Parse a persisted value. Unknown/missing falls back to [jetbrainsMono].
   static AppFontFamily fromName(String? raw) {
     for (final v in AppFontFamily.values) {
       if (v.name == raw) return v;
     }
-    return AppFontFamily.system;
+    return AppFontFamily.jetbrainsMono;
   }
 }

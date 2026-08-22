@@ -167,8 +167,7 @@ class ChatPage extends StatelessWidget {
               children: [
                 Text(
                   _truncate(roomName, 28),
-                  style: TextStyle(
-                    fontFamily: kMonoFamily,
+                  style: context.typo.mono.copyWith(
                     fontSize: 13,
                     color: colors.text,
                     letterSpacing: -0.2,
@@ -183,8 +182,7 @@ class ChatPage extends StatelessWidget {
                       child: Text(
                         _truncate(peerLabel, 24),
                         overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontFamily: kMonoFamily,
+                        style: context.typo.mono.copyWith(
                           fontSize: 10,
                           color: colors.muted,
                         ),
@@ -224,8 +222,7 @@ class ChatPage extends StatelessWidget {
                             const SizedBox(width: 4),
                             Text(
                               label,
-                              style: TextStyle(
-                                fontFamily: kMonoFamily,
+                              style: context.typo.mono.copyWith(
                                 fontSize: 10,
                                 color: color,
                               ),
@@ -290,9 +287,9 @@ class ChatPage extends StatelessWidget {
           ),
           title: Text(
             'Session info',
-            style: TextStyle(
-              fontFamily: kMonoFamily,
+            style: dCtx.typo.mono.copyWith(
               fontSize: 15,
+              fontWeight: FontWeight.w600,
               color: colors.text,
             ),
           ),
@@ -314,7 +311,7 @@ class ChatPage extends StatelessWidget {
               onPressed: () => Navigator.of(dCtx).pop(),
               child: Text(
                 'Close',
-                style: TextStyle(fontFamily: kMonoFamily, color: colors.accent),
+                style: dCtx.typo.mono.copyWith(color: colors.accent),
               ),
             ),
           ],
@@ -729,8 +726,7 @@ class _InfoRow extends StatelessWidget {
         children: [
           Text(
             label.toUpperCase(),
-            style: TextStyle(
-              fontFamily: kMonoFamily,
+            style: context.typo.mono.copyWith(
               fontSize: 10,
               color: colors.muted,
               letterSpacing: 0.4,
@@ -739,8 +735,7 @@ class _InfoRow extends StatelessWidget {
           const SizedBox(height: 2),
           SelectableText(
             value,
-            style: TextStyle(
-              fontFamily: kMonoFamily,
+            style: context.typo.mono.copyWith(
               fontSize: 13,
               color: colors.text,
             ),

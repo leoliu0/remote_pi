@@ -231,8 +231,7 @@ class HomePage extends StatelessWidget {
         const SizedBox(width: 8),
         Text(
           'Relay',
-          style: TextStyle(
-            fontFamily: kMonoFamily,
+          style: context.typo.mono.copyWith(
             color: colors.text,
             fontSize: 13,
           ),
@@ -240,8 +239,7 @@ class HomePage extends StatelessWidget {
         const SizedBox(width: 6),
         Text(
           '·',
-          style: TextStyle(
-            fontFamily: kMonoFamily,
+          style: context.typo.mono.copyWith(
             color: colors.muted,
             fontSize: 13,
           ),
@@ -249,8 +247,7 @@ class HomePage extends StatelessWidget {
         const SizedBox(width: 6),
         Text(
           statusLabel,
-          style: TextStyle(
-            fontFamily: kMonoFamily,
+          style: context.typo.mono.copyWith(
             color: statusColor,
             fontSize: 13,
           ),
@@ -442,14 +439,21 @@ class HomePage extends StatelessWidget {
         final colors = dCtx.colors;
         return AlertDialog(
           backgroundColor: colors.bg,
-          title: Text('Rename session', style: TextStyle(color: colors.text)),
+          title: Text(
+            'Rename session',
+            style: dCtx.typo.mono.copyWith(
+              fontSize: 15,
+              fontWeight: FontWeight.w600,
+              color: colors.text,
+            ),
+          ),
           content: TextField(
             controller: controller,
             autofocus: true,
-            style: TextStyle(color: colors.text, fontFamily: kMonoFamily),
+            style: dCtx.typo.mono.copyWith(color: colors.text),
             decoration: InputDecoration(
               hintText: it.room.cwd ?? 'Session',
-              hintStyle: TextStyle(color: colors.muted),
+              hintStyle: dCtx.typo.mono.copyWith(color: colors.muted),
               enabledBorder: OutlineInputBorder(
                 borderSide: BorderSide(color: colors.border),
               ),
@@ -600,8 +604,7 @@ class _LonelyEmptyState extends StatelessWidget {
                 const SizedBox(height: 18),
                 Text(
                   'Nothing here…',
-                  style: TextStyle(
-                    fontFamily: kMonoFamily,
+                  style: context.typo.mono.copyWith(
                     color: colors.muted2,
                     fontSize: 14,
                     fontWeight: FontWeight.w500,
@@ -609,10 +612,9 @@ class _LonelyEmptyState extends StatelessWidget {
                 ),
                 const SizedBox(height: 6),
                 Text(
-                  'When a paired Pi opens a session, it shows up here.',
+                  'Scan a QR from your Mac to start.',
                   textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontFamily: kMonoFamily,
+                  style: context.typo.mono.copyWith(
                     color: colors.muted,
                     fontSize: 11,
                     height: 1.4,

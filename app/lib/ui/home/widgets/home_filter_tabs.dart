@@ -74,8 +74,7 @@ class HomeFilterTabs extends StatelessWidget {
                   label,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontFamily: kMonoFamily,
+                  style: context.typo.mono.copyWith(
                     fontSize: 12.5,
                     fontWeight: FontWeight.w600,
                     color: selected ? colors.onAccent : colors.muted,
@@ -85,8 +84,7 @@ class HomeFilterTabs extends StatelessWidget {
               const SizedBox(width: 6),
               Text(
                 '$count',
-                style: TextStyle(
-                  fontFamily: kMonoFamily,
+                style: context.typo.mono.copyWith(
                   fontSize: 11,
                   fontWeight: FontWeight.w600,
                   color: selected ? colors.onAccent : colors.muted2,
@@ -141,8 +139,7 @@ class HomeFilterEmptyState extends StatelessWidget {
                 const SizedBox(height: 18),
                 Text(
                   title,
-                  style: TextStyle(
-                    fontFamily: kMonoFamily,
+                  style: context.typo.mono.copyWith(
                     color: colors.muted2,
                     fontSize: 14,
                     fontWeight: FontWeight.w500,
@@ -152,8 +149,7 @@ class HomeFilterEmptyState extends StatelessWidget {
                 Text(
                   subtitle,
                   textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontFamily: kMonoFamily,
+                  style: context.typo.mono.copyWith(
                     color: colors.muted,
                     fontSize: 11,
                     height: 1.4,

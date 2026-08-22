@@ -38,8 +38,7 @@ ThemeData _buildTheme({
       backgroundColor: colors.bg,
       foregroundColor: colors.text,
       elevation: 0,
-      titleTextStyle: TextStyle(
-        fontFamily: kSansFamily,
+      titleTextStyle: typo.mono.copyWith(
         fontSize: 17,
         fontWeight: FontWeight.w600,
         color: colors.text,

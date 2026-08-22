@@ -42,7 +42,7 @@ class Preferences extends ChangeNotifier {
   bool _onboardingCompleted = false;
   ThemeMode _themeMode = ThemeMode.system;
   AppFontScale _fontScale = AppFontScale.standard;
-  AppFontFamily _fontFamily = AppFontFamily.system;
+  AppFontFamily _fontFamily = AppFontFamily.jetbrainsMono;
   Preferences([FlutterSecureStorage? store])
       : _store = store ?? const FlutterSecureStorage();
 

@@ -21,8 +21,7 @@ class PeerSectionHeader extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(20, 18, 20, 6),
       child: Text(
         label.toUpperCase(),
-        style: TextStyle(
-          fontFamily: kMonoFamily,
+        style: context.typo.mono.copyWith(
           fontSize: 11,
           color: colors.muted,
           fontWeight: FontWeight.w600,
