@@ -37,7 +37,7 @@ import type {
   ExtensionContext,
   ExtensionFactory,
 } from "@earendil-works/pi-coding-agent";
-import { SettingsManager, convertToPng } from "@earendil-works/pi-coding-agent";
+import { SessionManager, SettingsManager, convertToPng } from "@earendil-works/pi-coding-agent";
 import { type Ed25519Keypair } from "./pairing/crypto.js";
 import { buildQRUri, qrSession, renderQRAscii, clampPairTtlMs, TOKEN_TTL_MS } from "./pairing/qr.js";
 import {
@@ -858,14 +858,21 @@ let _queuedItems: AndroidQueuedItem[] = [];
  * turns (messages, tool calls, compactions) from before remote-pi connected
  * or started are immediately available to the mobile app on session_sync.
  */
-export function _hydrateMessageBufferFromSession(sessionManager: unknown): void {
-  if (!sessionManager || typeof sessionManager !== "object") return;
-  const sm = sessionManager as {
+export function _hydrateMessageBufferFromSession(sessionManager?: unknown, fallbackCwd?: string): void {
+  let sm = (sessionManager && typeof sessionManager === "object" ? sessionManager : null) as {
     buildSessionContext?: () => { messages?: unknown[] };
     getBranch?: () => unknown[];
     getEntries?: () => unknown[];
     messages?: unknown[];
-  };
+  } | null;
+  if (!sm && fallbackCwd) {
+    try {
+      sm = (SessionManager.continueRecent(fallbackCwd) as unknown) as typeof sm;
+    } catch {
+      // Non-fatal
+    }
+  }
+  if (!sm) return;
   try {
     const msgs: BufferMsg[] = [];
     if (typeof sm.getBranch === "function" || typeof sm.getEntries === "function") {
@@ -4819,23 +4826,13 @@ function _handleSessionSync(
   const sm =
     (_lastEventCtx && typeof _lastEventCtx === "object" && "sessionManager" in _lastEventCtx ? (_lastEventCtx as { sessionManager?: unknown }).sessionManager : null) ??
     (_lastCtx && typeof _lastCtx === "object" && "sessionManager" in _lastCtx ? (_lastCtx as { sessionManager?: unknown }).sessionManager : null);
-  if (sm) {
-    _hydrateMessageBufferFromSession(sm);
-  }
-  if (_sessionStartedAt === null) {
-    if (_messageBuffer.length > 0) {
-      _sessionStartedAt = _messageBuffer[0]?.timestamp ?? Date.now();
-    } else {
-      sender.send({
-        type: "session_history",
-        in_reply_to: msg.id,
-        session_started_at: 0,
-        events: [],
-        eos: true,
-        truncated: false,
-      });
-      return;
-    }
+  const cwd =
+    (_lastEventCtx && "cwd" in _lastEventCtx && typeof _lastEventCtx.cwd === "string" ? _lastEventCtx.cwd : null) ??
+    (_lastCtx && "cwd" in _lastCtx && typeof _lastCtx.cwd === "string" ? _lastCtx.cwd : null) ??
+    process.cwd();
+  _hydrateMessageBufferFromSession(sm, cwd);
+  if (_sessionStartedAt === null || _sessionStartedAt === 0) {
+    _sessionStartedAt = _messageBuffer.length > 0 ? (_messageBuffer[0]?.timestamp ?? Date.now()) : Date.now();
   }
   // Mirror semantics: always return the last N events. App SUBSTITUTES its
   // local cache with this response — no delta/since_ts logic.
