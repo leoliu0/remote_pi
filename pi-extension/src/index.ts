@@ -1183,17 +1183,16 @@ let _lockedName: string | null = null;
 
 // ── Session sync limit (mirror cache cap) ─────────────────────────────────────
 //
-// Configurable via REMOTE_PI_SYNC_LIMIT env var (positive int, default 30).
+// Configurable via REMOTE_PI_SYNC_LIMIT env var (positive int, default 1000).
 // Read on every session_sync so QA can `export REMOTE_PI_SYNC_LIMIT=N` between
 // runs without restarting the extension. The value is also clamped against
 // the client-provided `limit` (server is authoritative).
-const SYNC_LIMIT_DEFAULT = 30;
+const SYNC_LIMIT_DEFAULT = 1000;
 function _getSyncLimit(): number {
   const raw = process.env["REMOTE_PI_SYNC_LIMIT"];
   const parsed = raw ? parseInt(raw, 10) : NaN;
   return Number.isFinite(parsed) && parsed > 0 ? parsed : SYNC_LIMIT_DEFAULT;
 }
-
 // ── Relay reconnect state ─────────────────────────────────────────────────────
 // Backoffs in ms: 1s, 2s, 5s, 10s, 30s, then stays at 30s.
 const RECONNECT_BACKOFFS_MS = [1_000, 2_000, 5_000, 10_000, 30_000];

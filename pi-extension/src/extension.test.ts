@@ -3504,8 +3504,8 @@ describe("session sync", () => {
     expect(h.inner["truncated"]).toBe(false);
   });
 
-  test("buffer with 50 events + env=30 → returns 30, truncated:true", async () => {
-    delete process.env["REMOTE_PI_SYNC_LIMIT"];  // default 30
+  test("buffer with 50 events + default env → returns all 50, truncated:false", async () => {
+    delete process.env["REMOTE_PI_SYNC_LIMIT"];  // default 1000
     await _pairForTest("peer-ss-mirror-5");
 
     const ts = 1_700_000_000_000;
@@ -3528,10 +3528,10 @@ describe("session sync", () => {
       .map(decodeSentCt)
       .find((d) => d.inner.type === "session_history")!;
     const events = h.inner["events"] as Array<{ ts: number }>;
-    expect(events.length).toBe(30);
-    expect(events[0]!.ts).toBe(ts + 20);   // last 30 of 50 (indices 20..49)
-    expect(events[29]!.ts).toBe(ts + 49);
-    expect(h.inner["truncated"]).toBe(true);
+    expect(events.length).toBe(50);
+    expect(events[0]!.ts).toBe(ts + 0);
+    expect(events[49]!.ts).toBe(ts + 49);
+    expect(h.inner["truncated"]).toBe(false);
   });
 
   test("REMOTE_PI_SYNC_LIMIT=10 → server respects env override", async () => {
