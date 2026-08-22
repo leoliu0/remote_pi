@@ -1,11 +1,7 @@
 import 'package:app/config/dependencies.dart';
 import 'package:app/data/preferences/preferences.dart';
-import 'package:app/data/transport/connection_manager.dart';
 import 'package:app/data/transport/relay_config.dart';
 import 'package:app/pairing/storage.dart';
-import 'package:app/protocol/protocol.dart';
-import 'package:app/ui/chat/quick_actions/viewmodels/quick_actions_viewmodel.dart';
-import 'package:app/ui/chat/quick_actions/widgets/model_picker_sheet.dart';
 import 'package:app/ui/core/themes/themes.dart';
 import 'package:app/ui/settings/states/settings_state.dart';
 import 'package:app/ui/settings/viewmodels/settings_viewmodel.dart';
@@ -53,8 +49,6 @@ class SettingsPage extends StatelessWidget {
       body: ListView(
         padding: const EdgeInsets.symmetric(vertical: 8),
         children: [
-          const _ModelSection(),
-          Divider(color: colors.border, height: 1),
           const _DisplaySection(),
           Divider(color: colors.border, height: 1),
           const _RelaySection(),
@@ -110,64 +104,6 @@ class _AddPairingButton extends StatelessWidget {
           style: const TextStyle(fontFamily: kMonoFamily, fontSize: 13),
         ),
       ),
-    );
-  }
-}
-class _ModelSection extends StatelessWidget {
-  const _ModelSection();
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    final conn = injector.get<ConnectionManager>();
-    final activePeer = conn.activePeer;
-    final activeRoomId = conn.activeRoomId;
-    final rooms = activePeer != null ? conn.roomsFor(activePeer.remoteEpk) : const <RoomInfo>[];
-    final activeRoom = rooms.where((r) => r.roomId == activeRoomId).firstOrNull;
-    final modelName = activeRoom?.model;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        const _SectionHeader('Model & Thinking'),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(18, 4, 18, 12),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                modelName != null && modelName.isNotEmpty
-                    ? 'Active model: $modelName'
-                    : 'Active model: Default',
-                style: context.typo.mono.copyWith(
-                  fontSize: 13,
-                  color: colors.text,
-                ),
-              ),
-              const SizedBox(height: 10),
-              SizedBox(
-                width: double.infinity,
-                child: FilledButton.icon(
-                  onPressed: () {
-                    final qaVm = injector.get<QuickActionsViewModel>();
-                    showModelPickerSheet(context, vm: qaVm);
-                  },
-                  icon: const Icon(LucideIcons.sparkles, size: 16),
-                  label: const Text('Change Model / Provider'),
-                  style: FilledButton.styleFrom(
-                    backgroundColor: colors.surface,
-                    foregroundColor: colors.accent,
-                    side: BorderSide(color: colors.border),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
     );
   }
 }
