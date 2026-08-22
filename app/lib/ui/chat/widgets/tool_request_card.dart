@@ -303,13 +303,35 @@ class _ToolRequestCardState extends State<ToolRequestCard> {
     if (args is Map) {
       final intent = args['i'] ?? args['title'] ?? args['description'];
       final specific = switch (normalized) {
-        'bash' => ((args['command'] ?? args['cmd'] ?? args['code'] ?? args['c']) as String?)?.replaceAll('\n', ' ').trim(),
-        'edit' => _extractEditTarget(args),
-        'write' || 'read' => _stringArg(args, const ['file_path', 'path', 'file']),
-        'glob' => (args['pattern'] ?? args['path'] ?? '').toString(),
-        'grep' => (args['pattern'] ?? args['path'] ?? '').toString(),
+        'bash' => () {
+            final cmd = ((args['command'] ?? args['cmd'] ?? args['code'] ?? args['c']) as String?)?.replaceAll('\n', ' ').trim();
+            if (intent is String && intent.isNotEmpty) {
+              return cmd != null && cmd.isNotEmpty ? '$cmd ($intent)' : intent;
+            }
+            return cmd;
+          }(),
+        'edit' => () {
+            final target = _extractEditTarget(args);
+            if (intent is String && intent.isNotEmpty) {
+              return target.isNotEmpty ? '$target ($intent)' : intent;
+            }
+            return target;
+          }(),
+        'write' => () {
+            final target = _stringArg(args, const ['file_path', 'path', 'file']);
+            if (intent is String && intent.isNotEmpty) {
+              return target.isNotEmpty ? '$target ($intent)' : intent;
+            }
+            return target;
+          }(),
+        'ast_edit' => () {
+            final paths = args['paths'] is List ? (args['paths'] as List).join(', ') : '';
+            if (intent is String && intent.isNotEmpty) {
+              return paths.isNotEmpty ? '$paths ($intent)' : intent;
+            }
+            return paths;
+          }(),
         'eval' => (args['title'] ?? args['code'] ?? args['expression'] ?? '').toString().replaceAll('\n', ' ').trim(),
-        'web_search' => (args['query'] ?? args['q'] ?? '').toString(),
         'task' => (args['task'] ?? args['context'] ?? '').toString().replaceAll('\n', ' ').trim(),
         'hub' => _formatHubArgs(args),
         'ask' => _formatAskArgs(args),
@@ -317,7 +339,6 @@ class _ToolRequestCardState extends State<ToolRequestCard> {
         'browser' => '${args['action'] ?? ''} ${args['url'] ?? ''}'.trim(),
         _ => null,
       };
-
       if (specific != null && specific.isNotEmpty) {
         return specific;
       }

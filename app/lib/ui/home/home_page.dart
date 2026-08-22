@@ -340,6 +340,7 @@ class HomePage extends StatelessWidget {
     final isLive = vm.isRoomLive(it.peer.remoteEpk, it.room.roomId);
     final isReconnecting = !vm.isRelayConnected;
     final isWorking = vm.isRoomWorking(it.peer.remoteEpk, it.room.roomId);
+    final isFinishedUnread = vm.isRoomFinishedUnread(it.peer.remoteEpk, it.room.roomId);
     // Plan/tablet — highlight the open session, but only in the two-pane
     // layout (on phone the list is covered by the pushed chat, so a
     // persistent highlight would be meaningless).
@@ -357,6 +358,7 @@ class HomePage extends StatelessWidget {
           isLive: isLive,
           isReconnecting: isReconnecting,
           isWorking: isWorking,
+          isFinishedUnread: isFinishedUnread,
           isSelected: isSelected,
           room: it.room,
           onOpen: () => _open(context, vm, it.peer, it.room),

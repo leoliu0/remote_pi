@@ -398,7 +398,24 @@ class ChatPage extends StatelessWidget {
       ChatReady(:final messages, :final streaming) => () {
         final visible = toolDisplay == ToolCallDisplay.hidden
             ? messages.where((m) => m is! ToolEvent).toList()
-            : messages;
+            : toolDisplay == ToolCallDisplay.brief
+                ? messages.where((m) {
+                    if (m is! ToolEvent) return true;
+                    final name = m.tool.toLowerCase();
+                    const readOnlyTools = {
+                      'read',
+                      'grep',
+                      'glob',
+                      'find',
+                      'ls',
+                      'view',
+                      'mcp__read',
+                      'mcp__grep',
+                      'mcp__glob',
+                    };
+                    return !readOnlyTools.contains(name);
+                  }).toList()
+                : messages;
         // Empty body → the default placeholder (Pi brand icon + "Nothing
         // here"), shown whenever there's nothing to render — including while
         // reconnecting (the reconnect handshake never swaps the body).
@@ -459,6 +476,7 @@ class ChatPage extends StatelessWidget {
           isPresenceOffline,
       streaming: isWorking,
       messageHistory: messageHistory,
+      dynamicSkills: vm.dynamicSkills,
       onCancel: cancelId != null ? () => vm.cancel(cancelId) : null,
       queuedMessages: isReady ? state.queuedMessages : const [],
       onSetQueued: vm.queueMessage,

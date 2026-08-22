@@ -142,6 +142,7 @@ class ConnectionManager extends Service {
   int _missedPings = 0;
   int _retryAttempt = 0;
   // Tracks the last-running connect token so the watchdog can tell
+  final Set<String> _unreadFinishedRooms = {};
   // whether a connect is in flight (without poking at the live token).
   bool _connectInFlight = false;
 
@@ -742,6 +743,15 @@ class ConnectionManager extends Service {
             current.working == nextWorking) {
           break; // dedup: nothing actually changed
         }
+        if (current.working && !nextWorking) {
+          final isCurrentActive =
+              _activePeer?.remoteEpk == key && _activeRoomId == roomId;
+          if (!isCurrentActive) {
+            _unreadFinishedRooms.add('$key:$roomId');
+          }
+        } else if (nextWorking) {
+          _unreadFinishedRooms.remove('$key:$roomId');
+        }
         list[idx] = current.copyWith(
           model: nextModel,
           thinking: nextThinking,
@@ -919,11 +929,30 @@ class ConnectionManager extends Service {
     final list = _roomsByPeer[key];
     if (list == null) return;
     final idx = list.indexWhere((r) => r.roomId == roomId);
-    if (idx < 0 || list[idx].working == working) return;
+    final wasWorking = list[idx].working;
+    if (wasWorking && !working) {
+      final isCurrentActive =
+          _activePeer?.remoteEpk == key && _activeRoomId == roomId;
+      if (!isCurrentActive) {
+        _unreadFinishedRooms.add('$key:$roomId');
+      }
+    } else if (working) {
+      _unreadFinishedRooms.remove('$key:$roomId');
+    }
     list[idx] = list[idx].copyWith(working: working);
     _scheduleRoomsEmit();
     // ignore: unawaited_futures
     _persistRoomsForPeer(key);
+  }
+
+  bool isRoomUnreadFinished(String epk, String roomId) =>
+      _unreadFinishedRooms.contains('${toStandardB64(epk)}:$roomId');
+
+  void markRoomViewed(String epk, String roomId) {
+    final key = toStandardB64(epk);
+    if (_unreadFinishedRooms.remove('$key:$roomId')) {
+      _scheduleRoomsEmit();
+    }
   }
 
   /// Plan-17 follow-up — hydrate `_roomsByPeer` from disk on boot so

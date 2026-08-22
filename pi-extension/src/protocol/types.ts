@@ -323,6 +323,11 @@ export type ServerMessage =
       eos: boolean;
       truncated: boolean;
     }
+  | {
+      type: "skills_list";
+      in_reply_to?: string;
+      skills: Array<{ name: string; description: string }>;
+    }
   // Plan/28 — Replies for typed app actions.
   // `action_ok` / `action_error` carry the original `ActionName` so the
   // app can demultiplex by action type rather than having to remember

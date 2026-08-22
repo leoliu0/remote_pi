@@ -2,6 +2,7 @@ import 'package:app/pairing/storage.dart';
 import 'package:app/protocol/protocol.dart';
 import 'package:app/ui/core/themes/themes.dart';
 import 'package:flutter/material.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 /// A row in the Home list.
 ///
@@ -20,6 +21,8 @@ class SessionTile extends StatelessWidget {
   /// Plan-18 follow-up — `true` when the agent in this room is
   /// currently producing a response. Highest-priority colour (blue).
   final bool isWorking;
+  /// `true` when a turn finished while the user was away and hasn't viewed it.
+  final bool isFinishedUnread;
   final RoomInfo? room;
   final VoidCallback onOpen;
   /// Plan/tablet — `true` when this is the session shown in the tablet's
@@ -39,6 +42,7 @@ class SessionTile extends StatelessWidget {
     this.room,
     this.isReconnecting = false,
     this.isWorking = false,
+    this.isFinishedUnread = false,
     this.isSelected = false,
     this.onLongPress,
   });
@@ -77,6 +81,7 @@ class SessionTile extends StatelessWidget {
                   isLive: isLive,
                   isReconnecting: isReconnecting,
                   isWorking: isWorking,
+                  isFinishedUnread: isFinishedUnread,
                 ),
               ],
             ),
@@ -105,27 +110,83 @@ class _PresenceDot extends StatelessWidget {
   final bool isLive;
   final bool isReconnecting;
   final bool isWorking;
+  final bool isFinishedUnread;
+
   const _PresenceDot({
     required this.isLive,
     required this.isReconnecting,
     this.isWorking = false,
+    this.isFinishedUnread = false,
   });
 
   @override
   Widget build(BuildContext context) {
-    // Plan-18 follow-up — 4-state dot. Priority high → low:
-    //   working (agent streaming)   → blue
-    //   reconnecting (relay down)   → amber
-    //   live (relay up + announced) → green
-    //   else (cached / offline)     → grey
     final colors = context.colors;
-    final Color color = isWorking
-        ? colors.working
-        : isReconnecting
-            ? colors.warning
-            : isLive
-                ? colors.success
-                : colors.muted;
+
+    if (isWorking) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+        decoration: BoxDecoration(
+          color: colors.working.withValues(alpha: 0.15),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: colors.working, width: 1),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 7,
+              height: 7,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: colors.working,
+              ),
+            ),
+            const SizedBox(width: 4),
+            Text(
+              'working',
+              style: context.typo.mono.copyWith(
+                fontSize: 10,
+                color: colors.working,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    if (isFinishedUnread) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+        decoration: BoxDecoration(
+          color: colors.success.withValues(alpha: 0.15),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: colors.success, width: 1),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(LucideIcons.check, size: 10, color: colors.success),
+            const SizedBox(width: 3),
+            Text(
+              'Done',
+              style: context.typo.mono.copyWith(
+                fontSize: 10,
+                color: colors.success,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    final Color color = isReconnecting
+        ? colors.warning
+        : isLive
+            ? colors.success
+            : colors.muted;
     return Container(
       width: 10,
       height: 10,

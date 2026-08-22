@@ -1,3 +1,4 @@
+import 'package:app/protocol/protocol.dart';
 import 'package:app/ui/core/themes/themes.dart';
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
@@ -159,14 +160,31 @@ const List<SlashCommandItem> kSlashCommands = [
   ),
 ];
 
-List<SlashCommandItem> filterSlashCommands(String input) {
+List<SlashCommandItem> filterSlashCommands(
+  String input, [
+  List<WireSkill>? dynamicSkills,
+]) {
   if (!input.startsWith('/')) return const [];
   final raw = input.substring(1);
   if (raw.contains(' ')) return const []; // Command name already completed
   final query = raw.trim().toLowerCase();
-  if (query.isEmpty) return kSlashCommands;
 
-  return kSlashCommands.where((cmd) {
+  final List<SlashCommandItem> catalog = [
+    ...kSlashCommands,
+    if (dynamicSkills != null)
+      for (final s in dynamicSkills)
+        if (!kSlashCommands.any((c) => c.name == s.name))
+          SlashCommandItem(
+            name: s.name,
+            description: s.description,
+            category: 'Skill',
+            icon: LucideIcons.sparkles,
+          ),
+  ];
+
+  if (query.isEmpty) return catalog;
+
+  return catalog.where((cmd) {
     return cmd.name.toLowerCase().contains(query) ||
         cmd.description.toLowerCase().contains(query);
   }).toList();

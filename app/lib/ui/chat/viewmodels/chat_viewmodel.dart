@@ -88,6 +88,8 @@ class ChatViewModel extends ViewModel<ChatState> {
     return null;
   }
 
+  List<WireSkill> get dynamicSkills => _sync.dynamicSkills;
+
   bool get isRoomLive {
     final epk = _activePeer?.remoteEpk;
     if (epk == null) return false;

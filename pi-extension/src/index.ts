@@ -110,10 +110,10 @@ import { runSetupWizard, type WizardUI } from "./session/setup_wizard.js";
 import { updateFooter, type FooterState } from "./ui/footer.js";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { chmodSync, mkdtempSync, mkdirSync, copyFileSync, existsSync, unlinkSync, readFileSync, writeFileSync, realpathSync } from "node:fs";
+import { chmodSync, mkdtempSync, mkdirSync, copyFileSync, existsSync, unlinkSync, readFileSync, writeFileSync, realpathSync, readdirSync, statSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { spawnSync } from "node:child_process";
-import { hostname, tmpdir } from "node:os";
+import { hostname, tmpdir, homedir } from "node:os";
 import {
   kDefaultRelayUrl,
   resolveRelayUrl,
@@ -4864,6 +4864,14 @@ function _handleSessionSync(
   for (const req of _extensionUiBridge?.pendingRequests() ?? []) {
     sender.send(req);
   }
+
+  // Discover live skills dynamically on host and push to client
+  const liveSkills = _discoverLiveSkills(cwd);
+  sender.send({
+    type: "skills_list",
+    in_reply_to: msg.id,
+    skills: liveSkills,
+  });
 }
 
 /**
@@ -5190,10 +5198,67 @@ export function _mapAgentMessagesToEvents(
       );
     }
   }
-
   return events;
 }
 
+export function _discoverLiveSkills(cwd?: string): Array<{ name: string; description: string }> {
+  const skillsMap = new Map<string, { name: string; description: string }>();
+
+  function parseSkillFrontmatter(content: string): { name?: string; description?: string } | null {
+    const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+    if (!match) return null;
+    const yaml = match[1] ?? "";
+    const nameMatch = yaml.match(/^name:\s*(.+)$/m);
+    const descMatch = yaml.match(/^description:\s*(.+)$/m);
+    return {
+      name: nameMatch ? nameMatch[1]?.trim().replace(/^["']|["']$/g, "") : undefined,
+      description: descMatch ? descMatch[1]?.trim().replace(/^["']|["']$/g, "") : undefined,
+    };
+  }
+
+  function scanDir(dir: string): void {
+    if (!existsSync(dir)) return;
+    try {
+      const entries = readdirSync(dir);
+      for (const entry of entries) {
+        const full = join(dir, entry);
+        try {
+          const st = statSync(full);
+          if (st.isDirectory()) {
+            const skillFile = join(full, "SKILL.md");
+            if (existsSync(skillFile)) {
+              const content = readFileSync(skillFile, "utf-8");
+              const fm = parseSkillFrontmatter(content);
+              const name = fm?.name || entry;
+              const description = fm?.description || `Skill in ${entry}`;
+              skillsMap.set(name, { name, description });
+            }
+          }
+        } catch {
+          // ignore
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  const home = homedir();
+  const dirs = [
+    join(home, ".pi", "agent", "skills"),
+    join(home, ".pi", "remote", "skills"),
+    join(home, ".omp", "skills"),
+    join(home, ".agents", "skills"),
+    join(home, ".agents", "skills.disabled-20260625"),
+    ...(cwd ? [join(cwd, "skills"), join(cwd, ".skills")] : []),
+  ];
+
+  for (const d of dirs) {
+    scanDir(d);
+  }
+
+  return Array.from(skillsMap.values());
+}
 // ── Standalone CLI ────────────────────────────────────────────────────────────
 
 /**

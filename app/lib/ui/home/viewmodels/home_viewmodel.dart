@@ -68,6 +68,9 @@ class HomeViewModel extends ViewModel<HomeState> {
   bool isRoomWorking(String epk, String roomId) =>
       _conn.isRoomWorking(epk, roomId);
 
+  /// `true` when `(epk, roomId)` finished a turn while not actively viewed.
+  bool isRoomFinishedUnread(String epk, String roomId) =>
+      _conn.isRoomUnreadFinished(epk, roomId);
   Future<void> _load() async {
     final peers = await _storage.listPeers();
     if (_disposed) return;
@@ -196,6 +199,7 @@ class HomeViewModel extends ViewModel<HomeState> {
     // even if the manager is mid-connect (room is applied on the next
     // send and any active StatusOnline channel).
     _conn.switchRoom(effectiveRoom);
+    _conn.markRoomViewed(epk, effectiveRoom);
   }
 
   /// Helper for widgets: pass a peer's url-safe epk → returns standard

@@ -124,6 +124,10 @@ class SyncService extends Service {
   String? get queuedText =>
       _queuedMessages.isEmpty ? null : _queuedMessages.first.text;
   Stream<List<QueuedMsg>> get queuedStream => _queuedController.stream;
+  final _skillsController = StreamController<List<WireSkill>>.broadcast();
+  List<WireSkill> _dynamicSkills = const [];
+  Stream<List<WireSkill>> get dynamicSkillsStream => _skillsController.stream;
+  List<WireSkill> get dynamicSkills => _dynamicSkills;
 
   /// True while the active session's agent is producing a reply (whole turn).
   bool get isWorking => _working;
@@ -664,6 +668,12 @@ class SyncService extends Service {
       case ActionError():
       case ModelsList():
         break;
+      case SkillsList(:final skills):
+        _dynamicSkills = skills;
+        if (!_skillsController.isClosed) {
+          _skillsController.add(skills);
+        }
+        break;
     }
   }
 
@@ -1178,6 +1188,7 @@ class SyncService extends Service {
   void dispose() {
     _flushTimer?.cancel();
     _syncDebounce?.cancel();
+    _skillsController.close();
     _cancelAllSendTimers();
     _connSub?.cancel();
     _msgSub?.cancel();

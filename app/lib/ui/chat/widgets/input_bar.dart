@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:app/data/images/image_picker_service.dart';
 import 'package:app/domain/session_state.dart';
+import 'package:app/protocol/protocol.dart';
 import 'package:app/ui/chat/attachment/states/attachment_state.dart';
 import 'package:app/ui/chat/attachment/viewmodels/attachment_viewmodel.dart';
 import 'package:app/ui/chat/voice/states/voice_input_state.dart';
@@ -65,6 +66,7 @@ class InputBar extends StatefulWidget {
   final VoidCallback? onOpenAttach;
 
   /// Optional user message history for Up/Down arrow cycling (oldest to newest).
+  final List<WireSkill> dynamicSkills;
   final List<String> messageHistory;
   const InputBar({
     super.key,
@@ -81,6 +83,7 @@ class InputBar extends StatefulWidget {
     this.onOpenAttach,
     this.messageHistory = const [],
     this.disabled = false,
+    this.dynamicSkills = const [],
     this.streaming = false,
   });
 
@@ -545,9 +548,9 @@ class _InputBarState extends State<InputBar> {
                 ),
               if (_buildHistoryBar(context) != null)
                 _buildHistoryBar(context)!,
-              if (canInteract && filterSlashCommands(_controller.text).isNotEmpty)
+              if (canInteract && filterSlashCommands(_controller.text, widget.dynamicSkills).isNotEmpty)
                 SlashCommandMenu(
-                  items: filterSlashCommands(_controller.text),
+                  items: filterSlashCommands(_controller.text, widget.dynamicSkills),
                   onSelect: (cmd) {
                     _controller.text = '/${cmd.name} ';
                     _controller.selection = TextSelection.collapsed(

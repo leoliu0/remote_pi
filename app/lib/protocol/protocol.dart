@@ -791,6 +791,7 @@ sealed class ServerMessage {
       // the SDK's extension_ui_request RPC contract; optional `ask` envelope
       // carries pi-ask's full question so the app renders multi/preview/notes.
       'extension_ui_request' => ExtensionUiRequest.fromJson(json),
+      'skills_list' => SkillsList.fromJson(json),
       // forward-compat: unknown types are not fatal — callers catch and log
       _ => throw UnsupportedTypeException(type ?? ''),
     };
@@ -1526,6 +1527,38 @@ class AskEnrichmentWire {
             .map((m) => AskQuestionWire.fromJson(m.cast<String, dynamic>()))
             .toList(growable: false),
       );
+}
+
+class SkillsList extends ServerMessage {
+  final String? inReplyTo;
+  final List<WireSkill> skills;
+
+  SkillsList({this.inReplyTo, required this.skills});
+
+  factory SkillsList.fromJson(Map<String, dynamic> j) => SkillsList(
+    inReplyTo: j['in_reply_to'] as String?,
+    skills: (j['skills'] as List<dynamic>?)
+            ?.map((e) => WireSkill.fromJson(e as Map<String, dynamic>))
+            .toList() ??
+        const [],
+  );
+}
+
+class WireSkill {
+  final String name;
+  final String description;
+
+  const WireSkill({required this.name, required this.description});
+
+  factory WireSkill.fromJson(Map<String, dynamic> j) => WireSkill(
+    name: (j['name'] as String?) ?? '',
+    description: (j['description'] as String?) ?? '',
+  );
+
+  Map<String, dynamic> toJson() => {
+    'name': name,
+    'description': description,
+  };
 }
 
 /// ServerMessage: interactive extension prompt. Mirrors RpcExtensionUIRequest.
