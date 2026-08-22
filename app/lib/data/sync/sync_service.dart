@@ -785,7 +785,7 @@ class SyncService extends Service {
         case AgentMessageEvt(:final inReplyTo, :final text):
           out.add(
             MessageRecord(
-              id: inReplyTo,
+              id: 'agent_${e.ts}_$seq',
               seq: seq++,
               role: MsgRole.assistant,
               text: text,

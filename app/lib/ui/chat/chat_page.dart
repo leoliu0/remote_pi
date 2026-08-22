@@ -618,7 +618,7 @@ class _MessageList extends StatelessWidget {
         final msgIdx = messages.length - 1 - (i - (hasActiveTurn ? 1 : 0));
         final msg = messages[msgIdx];
         return KeyedSubtree(
-          key: ValueKey(msg.id),
+          key: ValueKey('${msg.runtimeType}_${msg.id}_$msgIdx'),
           child: switch (msg) {
             UserMsg() => UserBubble(msg),
             AssistantMsg() => AssistantBubble(msg),
