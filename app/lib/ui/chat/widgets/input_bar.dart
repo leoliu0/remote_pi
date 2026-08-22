@@ -617,12 +617,11 @@ class _InputBarState extends State<InputBar> {
                     enabled: attachEnabled,
                     onTap: widget.onOpenAttach,
                   ),
-                  if (_combinedHistory.isNotEmpty && !widget.disabled) ...[
-                    const SizedBox(width: 4),
-                    _HistoryRecallButton(
-                      onTap: _recallPreviousMessage,
-                    ),
-                  ],
+                  const SizedBox(width: 4),
+                  _HistoryRecallButton(
+                    enabled: _combinedHistory.isNotEmpty && !widget.disabled,
+                    onTap: _recallPreviousMessage,
+                  ),
                   const Spacer(),
                   if (showQueueButton) ...[
                     _QueueButton(onTap: _queue),
@@ -838,8 +837,12 @@ class _AttachButton extends StatelessWidget {
 }
 
 class _HistoryRecallButton extends StatelessWidget {
-  const _HistoryRecallButton({required this.onTap});
+  const _HistoryRecallButton({
+    required this.enabled,
+    required this.onTap,
+  });
 
+  final bool enabled;
   final VoidCallback onTap;
 
   @override
@@ -852,12 +855,14 @@ class _HistoryRecallButton extends StatelessWidget {
         padding: EdgeInsets.zero,
         iconSize: 20,
         splashRadius: 20,
-        tooltip: 'Browse command history (↑)',
+        tooltip: enabled ? 'Browse command history (↑)' : 'No command history',
         icon: Icon(
           LucideIcons.history,
-          color: context.colors.muted2,
+          color: enabled
+              ? context.colors.muted2
+              : context.colors.muted.withValues(alpha: 0.35),
         ),
-        onPressed: onTap,
+        onPressed: enabled ? onTap : null,
       ),
     );
   }

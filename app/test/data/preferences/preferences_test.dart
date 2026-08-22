@@ -224,11 +224,11 @@ void main() {
       expect(p.fontFamily, AppFontFamily.jetbrainsMono);
     });
 
-    test('toolCallDisplay defaults to full and round-trips through storage', () async {
+    test('toolCallDisplay defaults to brief and round-trips through storage', () async {
       final store = _FakeSecureStorage();
       final p = Preferences(store);
       await p.load();
-      expect(p.toolCallDisplay, ToolCallDisplay.full);
+      expect(p.toolCallDisplay, ToolCallDisplay.brief);
       expect(p.hideToolCalls, isFalse);
 
       await p.setToolCallDisplay(ToolCallDisplay.brief);

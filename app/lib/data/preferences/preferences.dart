@@ -25,7 +25,7 @@ enum ToolCallDisplay {
     }
     if (raw == 'true') return ToolCallDisplay.hidden;
     if (raw == 'false') return ToolCallDisplay.full;
-    return ToolCallDisplay.full;
+    return ToolCallDisplay.brief;
   }
 }
 /// App-wide UI preferences (persisted across launches).
@@ -36,7 +36,7 @@ enum ToolCallDisplay {
 /// the first frame to hydrate the in-memory cache.
 class Preferences extends ChangeNotifier {
   final FlutterSecureStorage _store;
-  ToolCallDisplay _toolCallDisplay = ToolCallDisplay.full;
+  ToolCallDisplay _toolCallDisplay = ToolCallDisplay.brief;
   String? _selectedPeerEpk;
   String? _relayUrl;
   bool _onboardingCompleted = false;
@@ -121,7 +121,7 @@ class Preferences extends ChangeNotifier {
     final rawDisplay = await _store.read(key: _kToolCallDisplayKey);
     final toolDisplay = rawDisplay != null
         ? ToolCallDisplay.fromName(rawDisplay)
-        : (raw == 'true' ? ToolCallDisplay.hidden : ToolCallDisplay.full);
+        : (raw == 'true' ? ToolCallDisplay.hidden : ToolCallDisplay.brief);
     if (toolDisplay != _toolCallDisplay) {
       _toolCallDisplay = toolDisplay;
       changed = true;
