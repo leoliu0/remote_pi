@@ -482,4 +482,38 @@ void main() {
     expect(find.text('cmd 3'), findsNothing);
     expect(find.byKey(const Key('input-bar-history-recall')), findsOneWidget);
   });
+
+  testWidgets('Up recall button is available while typing and preserves typed draft', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: InputBar(
+            disabled: false,
+            streaming: false,
+            messageHistory: const ['prior prompt'],
+            onSend: (_) {},
+          ),
+        ),
+      ),
+    );
+
+    // Type a draft
+    await tester.enterText(find.byType(TextField), 'half written draft');
+    await tester.pump();
+
+    // Up recall icon remains available
+    expect(find.byKey(const Key('input-bar-history-recall')), findsOneWidget);
+
+    // Tap Up icon -> recalls 'prior prompt'
+    await tester.tap(find.byKey(const Key('input-bar-history-recall')));
+    await tester.pump();
+    expect(find.text('prior prompt'), findsOneWidget);
+
+    // Tap Down icon -> restores 'half written draft'
+    await tester.tap(find.byKey(const Key('input-bar-history-down')));
+    await tester.pump();
+    expect(find.text('half written draft'), findsOneWidget);
+  });
 }

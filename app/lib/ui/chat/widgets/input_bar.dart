@@ -180,7 +180,7 @@ class _InputBarState extends State<InputBar> {
         mainAxisAlignment: MainAxisAlignment.end,
         children: [
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
             decoration: BoxDecoration(
               color: colors.surface,
               borderRadius: BorderRadius.circular(4),
@@ -189,23 +189,23 @@ class _InputBarState extends State<InputBar> {
             child: Text(
               '${_historyIndex + 1}/${history.length}',
               style: context.typo.mono.copyWith(
-                fontSize: 10,
+                fontSize: 9.5,
                 color: colors.muted,
                 fontWeight: FontWeight.w600,
               ),
             ),
           ),
-          const SizedBox(width: 2),
+          const SizedBox(width: 1),
           IconButton(
             key: const Key('input-bar-history-up'),
             icon: Icon(
               LucideIcons.arrowUp,
-              size: 15,
+              size: 14,
               color: canGoOlder ? colors.text : colors.muted.withValues(alpha: 0.3),
             ),
             padding: EdgeInsets.zero,
-            constraints: const BoxConstraints(minWidth: 26, minHeight: 26),
-            splashRadius: 13,
+            constraints: const BoxConstraints(minWidth: 22, minHeight: 22),
+            splashRadius: 11,
             onPressed: canGoOlder ? _recallPreviousMessage : null,
             tooltip: 'Older command (↑)',
           ),
@@ -213,39 +213,35 @@ class _InputBarState extends State<InputBar> {
             key: const Key('input-bar-history-down'),
             icon: Icon(
               LucideIcons.arrowDown,
-              size: 15,
+              size: 14,
               color: colors.text,
             ),
             padding: EdgeInsets.zero,
-            constraints: const BoxConstraints(minWidth: 26, minHeight: 26),
-            splashRadius: 13,
+            constraints: const BoxConstraints(minWidth: 22, minHeight: 22),
+            splashRadius: 11,
             onPressed: _recallNextMessage,
             tooltip: 'Newer command / draft (↓)',
           ),
-          const SizedBox(width: 6),
+          const SizedBox(width: 4),
         ],
       );
     }
 
-    if (_empty) {
-      return Tooltip(
-        message: 'Browse history (↑)',
-        child: IconButton(
-          key: const Key('input-bar-history-recall'),
-          icon: Icon(
-            LucideIcons.arrowUp,
-            size: 16,
-            color: colors.muted,
-          ),
-          padding: EdgeInsets.zero,
-          constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-          splashRadius: 16,
-          onPressed: _recallPreviousMessage,
+    return Tooltip(
+      message: 'Browse history (↑)',
+      child: IconButton(
+        key: const Key('input-bar-history-recall'),
+        icon: Icon(
+          LucideIcons.arrowUp,
+          size: 15,
+          color: colors.muted.withValues(alpha: 0.8),
         ),
-      );
-    }
-
-    return null;
+        padding: EdgeInsets.zero,
+        constraints: const BoxConstraints(minWidth: 24, minHeight: 24),
+        splashRadius: 12,
+        onPressed: _recallPreviousMessage,
+      ),
+    );
   }
   @override
   void initState() {
@@ -576,12 +572,14 @@ class _InputBarState extends State<InputBar> {
                           fontSize: 13,
                           color: colors.muted,
                         ),
+                        isDense: true,
                         suffixIcon: _buildHistorySuffix(context),
-                        contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 14,
-                          vertical: 10,
+                        suffixIconConstraints: const BoxConstraints(
+                          minWidth: 24,
+                          minHeight: 24,
+                          maxHeight: 32,
                         ),
-                        fillColor: colors.inputFill,
+                        contentPadding: const EdgeInsets.fromLTRB(14, 10, 8, 10),
                         border: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(19),
                           borderSide: BorderSide(color: colors.border),
