@@ -117,67 +117,91 @@ class UserBubble extends StatelessWidget {
 /// A system message distinct from user/assistant: shows that the Pi compacted
 /// the context, with the recap summary and the reclaimed token count. Mirrors
 /// the TUI's CompactionSummaryMessageComponent.
-class CompactionBubble extends StatelessWidget {
+class CompactionBubble extends StatefulWidget {
   final CompactionMsg message;
   const CompactionBubble(this.message, {super.key});
 
   @override
+  State<CompactionBubble> createState() => _CompactionBubbleState();
+}
+
+class _CompactionBubbleState extends State<CompactionBubble> {
+  bool _expanded = false;
+
+  @override
   Widget build(BuildContext context) {
-    final tokens = message.tokensBefore;
-    final summary = message.summary;
+    final tokens = widget.message.tokensBefore;
+    final summary = widget.message.summary.trim();
     final colors = context.colors;
+    final hasSummary = summary.isNotEmpty;
+
     return Center(
       child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 360),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-          decoration: BoxDecoration(
-            color: colors.surface,
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(color: colors.border),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
+        constraints: const BoxConstraints(maxWidth: 380),
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: hasSummary ? () => setState(() => _expanded = !_expanded) : null,
+            borderRadius: BorderRadius.circular(8),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: colors.surface,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: colors.border.withValues(alpha: 0.8)),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Icon(LucideIcons.check, size: 13, color: colors.success),
-                  const SizedBox(width: 6),
-                  Expanded(
-                    child: Text(
-                      'Context compacted',
-                      style: TextStyle(
-                        fontFamily: kMonoFamily,
-                        fontSize: 12,
-                        color: colors.text,
-                        fontWeight: FontWeight.w600,
+                  Row(
+                    children: [
+                      Icon(LucideIcons.check, size: 12, color: colors.success),
+                      const SizedBox(width: 5),
+                      Expanded(
+                        child: Text(
+                          'Context compacted',
+                          style: context.typo.mono.copyWith(
+                            fontSize: 11.5,
+                            color: colors.text,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
                       ),
-                    ),
+                      if (tokens != null) ...[
+                        Text(
+                          '~$tokens tokens',
+                          style: context.typo.mono.copyWith(
+                            fontSize: 10.5,
+                            color: colors.muted,
+                          ),
+                        ),
+                        const SizedBox(width: 4),
+                      ],
+                      if (hasSummary)
+                        Icon(
+                          _expanded ? LucideIcons.chevronUp : LucideIcons.chevronDown,
+                          size: 12,
+                          color: colors.muted,
+                        ),
+                    ],
                   ),
-                  if (tokens != null)
+                  if (hasSummary) ...[
+                    const SizedBox(height: 3),
                     Text(
-                      '~$tokens tokens',
-                      style: TextStyle(
-                        fontFamily: kMonoFamily,
+                      summary,
+                      maxLines: _expanded ? null : 1,
+                      overflow: _expanded ? TextOverflow.visible : TextOverflow.ellipsis,
+                      style: context.typo.mono.copyWith(
                         fontSize: 11,
-                        color: colors.muted,
+                        color: colors.muted2,
+                        height: 1.3,
                       ),
                     ),
+                  ],
                 ],
               ),
-              if (summary.isNotEmpty) ...[
-                const SizedBox(height: 6),
-                Text(
-                  summary,
-                  style: TextStyle(
-                    fontFamily: kMonoFamily,
-                    fontSize: 12,
-                    color: colors.muted2,
-                  ),
-                ),
-              ],
-            ],
+            ),
           ),
         ),
       ),

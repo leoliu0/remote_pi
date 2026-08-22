@@ -38,4 +38,20 @@ void main() {
     expect(find.text('done'), findsOneWidget);
     expect(find.textContaining('tokens'), findsNothing);
   });
+
+  testWidgets('toggles expansion on tap when summary is present', (tester) async {
+    await pump(
+      tester,
+      const CompactionMsg(
+        id: 'c3',
+        summary: 'Line 1\nLine 2\nLine 3',
+        tokensBefore: 5000,
+      ),
+    );
+
+    expect(find.byType(InkWell), findsOneWidget);
+    await tester.tap(find.byType(InkWell));
+    await tester.pump();
+    expect(find.text('Line 1\nLine 2\nLine 3'), findsOneWidget);
+  });
 }

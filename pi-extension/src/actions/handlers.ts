@@ -195,7 +195,7 @@ export function handleSessionCompact(
     // compaction prompt (best-effort: the model writes the summary).
     ctx.compact({
       customInstructions:
-        "Always write the compaction summary in English, even if the conversation is in another language.",
+        "Always write a brief, concise compaction summary in English (1-2 sentences maximum), even if the conversation is in another language.",
     });
   });
 }
