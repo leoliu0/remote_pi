@@ -588,24 +588,16 @@ class _MessageList extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final hasActiveTurn = streaming != null || isWorking;
-    final itemCount = messages.length + (hasActiveTurn ? 1 : 0);
+    final hasHistory = messages.isNotEmpty;
+    final totalCount =
+        messages.length + (hasActiveTurn ? 1 : 0) + (hasHistory ? 1 : 0);
 
-    // `reverse: true` anchors the viewport to the bottom (offset 0 = newest)
-    // and keeps it there as content arrives — no manual scroll-to-bottom is
-    // needed. The previous animateTo-on-every-rebuild fought this and caused
-    // overlapping animations (flicker / runaway scroll) during streaming.
     return ListView.separated(
       reverse: true,
       padding: const EdgeInsets.fromLTRB(16, 18, 16, 12),
-      itemCount: itemCount,
+      itemCount: totalCount,
       separatorBuilder: (context, idx) => const SizedBox(height: 14),
       itemBuilder: (_, i) {
-        // Index 0 = bottom = newest. Stable keys are REQUIRED here: when the
-        // streaming bubble appears/disappears at index 0 every other item's
-        // index shifts by 1, and without keys Flutter re-matches elements by
-        // position — briefly painting the wrong message at a slot (the
-        // momentary C/B/A → B/C/A reorder). Keying by message id makes it
-        // match by identity instead.
         if (hasActiveTurn && i == 0) {
           return KeyedSubtree(
             key: const ValueKey('streaming'),
@@ -615,7 +607,27 @@ class _MessageList extends StatelessWidget {
             ),
           );
         }
-        final msgIdx = messages.length - 1 - (i - (hasActiveTurn ? 1 : 0));
+
+        final historyOffset = hasActiveTurn ? 1 : 0;
+        final indexInMessages = i - historyOffset;
+
+        if (indexInMessages == messages.length) {
+          return Center(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              child: Text(
+                '— Start of session history —',
+                style: context.typo.monoSmall.copyWith(
+                  fontSize: 11,
+                  color: context.colors.muted.withValues(alpha: 0.6),
+                  letterSpacing: 0.2,
+                ),
+              ),
+            ),
+          );
+        }
+
+        final msgIdx = messages.length - 1 - indexInMessages;
         final msg = messages[msgIdx];
         return KeyedSubtree(
           key: ValueKey('${msg.runtimeType}_${msg.id}_$msgIdx'),

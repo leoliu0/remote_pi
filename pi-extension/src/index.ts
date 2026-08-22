@@ -882,16 +882,21 @@ export function _hydrateMessageBufferFromSession(sessionManager: unknown): void 
           ...m,
           timestamp: typeof m.timestamp === "number" ? m.timestamp : ts,
         });
-      } else if (e.type === "compaction") {
+      } else if (e.type === "compaction" || e.type === "branch_summary") {
         msgs.push({
           role: "compaction",
           content: e.summary ?? "",
           timestamp: ts,
           tokensBefore: e.tokensBefore ?? 0,
         });
+      } else if (e.type === "custom_message" && (e as { content?: unknown }).content) {
+        msgs.push({
+          role: "user",
+          content: (e as { content: unknown }).content,
+          timestamp: ts,
+        });
       }
     }
-
     if (msgs.length > 0) {
       _messageBuffer = msgs;
       if (_sessionStartedAt === null || _sessionStartedAt === 0) {
@@ -1181,19 +1186,18 @@ let _cwdLock: AcquiredLock | null = null;
 // a live race). Null until the lock is acquired.
 let _lockedName: string | null = null;
 
- // ── Session sync limit (mirror cache cap) ─────────────────────────────────────
- //
- // Configurable via REMOTE_PI_SYNC_LIMIT env var (positive int, default 10000).
- // Read on every session_sync so QA can `export REMOTE_PI_SYNC_LIMIT=N` between
- // runs without restarting the extension. The value is also clamped against
- // the client-provided `limit` (server is authoritative).
- const SYNC_LIMIT_DEFAULT = 10000;
- function _getSyncLimit(): number {
-   const raw = process.env["REMOTE_PI_SYNC_LIMIT"];
-   const parsed = raw ? parseInt(raw, 10) : NaN;
-   return Number.isFinite(parsed) && parsed > 0 ? parsed : SYNC_LIMIT_DEFAULT;
- }
-// ── Relay reconnect state ─────────────────────────────────────────────────────
+// ── Session sync limit (mirror cache cap) ─────────────────────────────────────
+//
+// Configurable via REMOTE_PI_SYNC_LIMIT env var (positive int, default 50000).
+// Read on every session_sync so QA can `export REMOTE_PI_SYNC_LIMIT=N` between
+// runs without restarting the extension. The value is also clamped against
+// the client-provided `limit` (server is authoritative).
+const SYNC_LIMIT_DEFAULT = 50000;
+function _getSyncLimit(): number {
+  const raw = process.env["REMOTE_PI_SYNC_LIMIT"];
+  const parsed = raw ? parseInt(raw, 10) : NaN;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : SYNC_LIMIT_DEFAULT;
+}
 // Backoffs in ms: 1s, 2s, 5s, 10s, 30s, then stays at 30s.
 const RECONNECT_BACKOFFS_MS = [1_000, 2_000, 5_000, 10_000, 30_000];
 let _reconnectTimer: ReturnType<typeof setTimeout> | null = null;
