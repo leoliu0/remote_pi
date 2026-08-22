@@ -207,6 +207,7 @@ class SyncService extends Service {
         ),
       );
       if (!isSteer) {
+        _clearSteeringLabels();
         _setWorking(true, preview: _preview(text, image), replyTo: id);
       }
       // Arm the no-echo backstop for this row. The timeout is keyed off the
@@ -877,9 +878,12 @@ class SyncService extends Service {
         // a bubble persisted across an app restart / quick session-switch is
         // reaped by its `ts` instead of spinning forever (already-stale → fires
         // immediately). Timers were cleared by _resetTurnState before this load.
-        if (r.role == MsgRole.user && r.pending) _armSendTimeout(r.id, r.ts);
+        if (r.role == MsgRole.user && r.pending) {
+          _armSendTimeout(r.id, r.ts);
+        } else if (r.role == MsgRole.user && r.steering) {
+          await box.put(seq, r.copyWith(steering: false).toJson());
+        }
       }
-      _indexLoaded = true;
     });
   }
 
