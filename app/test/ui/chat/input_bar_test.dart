@@ -448,7 +448,7 @@ void main() {
     await tester.pump();
 
     expect(find.text('cmd 3'), findsOneWidget);
-    expect(find.text('1/3'), findsOneWidget);
+    expect(find.text('History 1/3'), findsOneWidget);
     expect(find.byKey(const Key('input-bar-history-up')), findsOneWidget);
     expect(find.byKey(const Key('input-bar-history-down')), findsOneWidget);
 
@@ -456,30 +456,31 @@ void main() {
     await tester.tap(find.byKey(const Key('input-bar-history-up')));
     await tester.pump();
     expect(find.text('cmd 2'), findsOneWidget);
-    expect(find.text('2/3'), findsOneWidget);
+    expect(find.text('History 2/3'), findsOneWidget);
 
     // Tap Up again -> recalls 'cmd 1' (3/3)
     await tester.tap(find.byKey(const Key('input-bar-history-up')));
     await tester.pump();
     expect(find.text('cmd 1'), findsOneWidget);
-    expect(find.text('3/3'), findsOneWidget);
+    expect(find.text('History 3/3'), findsOneWidget);
 
     // Tap Down -> moves forward to 'cmd 2' (2/3)
     await tester.tap(find.byKey(const Key('input-bar-history-down')));
     await tester.pump();
     expect(find.text('cmd 2'), findsOneWidget);
-    expect(find.text('2/3'), findsOneWidget);
+    expect(find.text('History 2/3'), findsOneWidget);
 
     // Tap Down -> moves forward to 'cmd 3' (1/3)
     await tester.tap(find.byKey(const Key('input-bar-history-down')));
     await tester.pump();
     expect(find.text('cmd 3'), findsOneWidget);
-    expect(find.text('1/3'), findsOneWidget);
+    expect(find.text('History 1/3'), findsOneWidget);
 
-    // Tap Down -> restores empty draft and returns to initial single recall icon
+    // Tap Down -> restores empty draft and closes history bar
     await tester.tap(find.byKey(const Key('input-bar-history-down')));
     await tester.pump();
     expect(find.text('cmd 3'), findsNothing);
+    expect(find.text('History 1/3'), findsNothing);
     expect(find.byKey(const Key('input-bar-history-recall')), findsOneWidget);
   });
 

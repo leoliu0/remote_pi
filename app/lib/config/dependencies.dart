@@ -92,10 +92,20 @@ Future<void> setupDependencies() async {
   // ConnectionManager — factory function injected manually (function typedefs
   // cannot be resolved by auto_injector via Type.new).
   _injector.addService<ConnectionManager>(
-    () => ConnectionManager(
-      factory: _productionConnectionFactory,
-      storage: _injector.get<PairingStorage>(),
-    ),
+    () {
+      final conn = ConnectionManager(
+        factory: _productionConnectionFactory,
+        storage: _injector.get<PairingStorage>(),
+      );
+      String? lastRelay = prefs.relayUrl;
+      prefs.addListener(() {
+        if (prefs.relayUrl != lastRelay) {
+          lastRelay = prefs.relayUrl;
+          unawaited(conn.reconnect(preferredEpk: prefs.selectedPeerEpk));
+        }
+      });
+      return conn;
+    },
   );
 
   // Plan 29 — on-device speech-to-text. Singleton: it owns a broadcast

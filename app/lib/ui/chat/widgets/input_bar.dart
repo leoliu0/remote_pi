@@ -166,82 +166,96 @@ class _InputBarState extends State<InputBar> {
     }
   }
 
-  Widget? _buildHistorySuffix(BuildContext context) {
+  Widget? _buildHistoryBar(BuildContext context) {
     if (widget.disabled) return null;
-    final hasImage = widget.attachment?.hasImage ?? false;
-    if (hasImage) return null;
     final history = _combinedHistory;
-    if (history.isEmpty) return null;
+    if (_historyIndex < 0 || history.isEmpty) return null;
 
     final colors = context.colors;
+    final canGoOlder = _historyIndex + 1 < history.length;
 
-    if (_historyIndex >= 0) {
-      final canGoOlder = _historyIndex + 1 < history.length;
-      return Row(
-        mainAxisSize: MainAxisSize.min,
-        mainAxisAlignment: MainAxisAlignment.end,
-        children: [
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-            decoration: BoxDecoration(
-              color: colors.surface,
-              borderRadius: BorderRadius.circular(4),
-              border: Border.all(color: colors.border.withValues(alpha: 0.6)),
-            ),
-            child: Text(
-              '${_historyIndex + 1}/${history.length}',
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+        decoration: BoxDecoration(
+          color: colors.surface,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: colors.border),
+        ),
+        child: Row(
+          children: [
+            Icon(LucideIcons.history, size: 13, color: colors.muted),
+            const SizedBox(width: 6),
+            Text(
+              'History ${_historyIndex + 1}/${history.length}',
               style: context.typo.mono.copyWith(
-                fontSize: 9.5,
-                color: colors.muted,
+                fontSize: 11,
+                color: colors.text,
                 fontWeight: FontWeight.w600,
               ),
             ),
-          ),
-          const SizedBox(width: 1),
-          IconButton(
-            key: const Key('input-bar-history-up'),
-            icon: Icon(
-              LucideIcons.arrowUp,
-              size: 14,
-              color: canGoOlder ? colors.text : colors.muted.withValues(alpha: 0.3),
+            const Spacer(),
+            InkWell(
+              key: const Key('input-bar-history-up'),
+              onTap: canGoOlder ? _recallPreviousMessage : null,
+              borderRadius: BorderRadius.circular(4),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      LucideIcons.arrowUp,
+                      size: 13,
+                      color: canGoOlder
+                          ? colors.accent
+                          : colors.muted.withValues(alpha: 0.3),
+                    ),
+                    const SizedBox(width: 2),
+                    Text(
+                      'Older',
+                      style: context.typo.mono.copyWith(
+                        fontSize: 11,
+                        color: canGoOlder
+                            ? colors.accent
+                            : colors.muted.withValues(alpha: 0.3),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             ),
-            padding: EdgeInsets.zero,
-            constraints: const BoxConstraints(minWidth: 22, minHeight: 22),
-            splashRadius: 11,
-            onPressed: canGoOlder ? _recallPreviousMessage : null,
-            tooltip: 'Older command (↑)',
-          ),
-          IconButton(
-            key: const Key('input-bar-history-down'),
-            icon: Icon(
-              LucideIcons.arrowDown,
-              size: 14,
-              color: colors.text,
+            const SizedBox(width: 8),
+            InkWell(
+              key: const Key('input-bar-history-down'),
+              onTap: _recallNextMessage,
+              borderRadius: BorderRadius.circular(4),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      LucideIcons.arrowDown,
+                      size: 13,
+                      color: colors.accent,
+                    ),
+                    const SizedBox(width: 2),
+                    Text(
+                      _historyIndex > 0 ? 'Newer' : 'Clear',
+                      style: context.typo.mono.copyWith(
+                        fontSize: 11,
+                        color: colors.accent,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             ),
-            padding: EdgeInsets.zero,
-            constraints: const BoxConstraints(minWidth: 22, minHeight: 22),
-            splashRadius: 11,
-            onPressed: _recallNextMessage,
-            tooltip: 'Newer command / draft (↓)',
-          ),
-          const SizedBox(width: 4),
-        ],
-      );
-    }
-
-    return Tooltip(
-      message: 'Browse history (↑)',
-      child: IconButton(
-        key: const Key('input-bar-history-recall'),
-        icon: Icon(
-          LucideIcons.arrowUp,
-          size: 15,
-          color: colors.muted.withValues(alpha: 0.8),
+          ],
         ),
-        padding: EdgeInsets.zero,
-        constraints: const BoxConstraints(minWidth: 24, minHeight: 24),
-        splashRadius: 12,
-        onPressed: _recallPreviousMessage,
       ),
     );
   }
@@ -489,6 +503,7 @@ class _InputBarState extends State<InputBar> {
         hasQuickActions;
 
     final showQueueButton =
+        widget.streaming &&
         hasContent &&
         !_empty &&
         canInteract &&
@@ -529,6 +544,8 @@ class _InputBarState extends State<InputBar> {
                       ? () => widget.onClearQueued?.call(item.id)
                       : null,
                 ),
+              if (_buildHistoryBar(context) != null)
+                _buildHistoryBar(context)!,
               Row(
                 children: [
                   _QuickActionsButton(
@@ -539,7 +556,13 @@ class _InputBarState extends State<InputBar> {
                     enabled: attachEnabled,
                     onTap: widget.onOpenAttach,
                   ),
-                  const SizedBox(width: 10),
+                  if (_combinedHistory.isNotEmpty && !widget.disabled) ...[
+                    const SizedBox(width: 4),
+                    _HistoryRecallButton(
+                      onTap: _recallPreviousMessage,
+                    ),
+                  ],
+                  const SizedBox(width: 8),
                   // Text field (doubles as the image caption when one is set).
                   Expanded(
                     child: TextField(
@@ -574,14 +597,11 @@ class _InputBarState extends State<InputBar> {
                           fontSize: 13,
                           color: colors.muted,
                         ),
-                        isDense: true,
-                        suffixIcon: _buildHistorySuffix(context),
-                        suffixIconConstraints: const BoxConstraints(
-                          minWidth: 24,
-                          minHeight: 24,
-                          maxHeight: 32,
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 14,
+                          vertical: 10,
                         ),
-                        contentPadding: const EdgeInsets.fromLTRB(14, 10, 8, 10),
+                        fillColor: colors.inputFill,
                         border: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(19),
                           borderSide: BorderSide(color: colors.border),
@@ -813,6 +833,32 @@ class _AttachButton extends StatelessWidget {
               : context.colors.muted.withValues(alpha: 0.35),
         ),
         onPressed: enabled ? onTap : null,
+      ),
+    );
+  }
+}
+
+class _HistoryRecallButton extends StatelessWidget {
+  const _HistoryRecallButton({required this.onTap});
+
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 32,
+      height: 32,
+      child: IconButton(
+        key: const Key('input-bar-history-recall'),
+        padding: EdgeInsets.zero,
+        iconSize: 18,
+        splashRadius: 18,
+        tooltip: 'Browse command history (↑)',
+        icon: Icon(
+          LucideIcons.history,
+          color: context.colors.muted2,
+        ),
+        onPressed: onTap,
       ),
     );
   }

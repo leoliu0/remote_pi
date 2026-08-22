@@ -77,6 +77,11 @@ class SettingsViewModel extends ViewModel<SettingsState> {
     return null;
   }
 
+  Future<void> resetRelayUrl() async {
+    await _prefs.setRelayUrl(null);
+    await _conn.reconnect(preferredEpk: _prefs.selectedPeerEpk);
+  }
+
   /// Revoke pairing locally. Drops the peer from the relay's presence
   /// subscription too so we stop receiving updates about a peer that no
   /// longer exists on this device. Clears the selected pointer when it

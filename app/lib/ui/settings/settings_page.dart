@@ -226,9 +226,21 @@ class _RelaySectionState extends State<_RelaySection> {
                     ),
                     const SizedBox(width: 12),
                     TextButton(
-                      onPressed: () {
+                      onPressed: () async {
                         _ctrl.text = kDefaultRelayUrl;
-                        _save();
+                        final messenger = ScaffoldMessenger.of(context);
+                        await vm.resetRelayUrl();
+                        if (!mounted) return;
+                        setState(() => _error = null);
+                        messenger.showSnackBar(
+                          const SnackBar(
+                            content: Text(
+                              'Relay reset to default',
+                              style: TextStyle(fontFamily: kMonoFamily),
+                            ),
+                            duration: Duration(seconds: 2),
+                          ),
+                        );
                       },
                       child: Text(
                         'Use default Relay',
