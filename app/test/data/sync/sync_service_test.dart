@@ -380,6 +380,35 @@ void main() {
     s.sync.dispose();
   });
 
+  test('agent_message after agent_done rewrites the streamed assistant row', () async {
+    final s = await setup();
+    s.ch.push(AgentChunk(
+      inReplyTo: 'r1',
+      delta: 'Here:\\n\\n![chart](/tmp/test_chart.png)',
+    ));
+    await _settle();
+    s.ch.push(AgentDone(inReplyTo: 'r1'));
+    await _settle();
+
+    final before = messages(s.epk).where((m) => m.role == MsgRole.assistant).toList();
+    expect(before, hasLength(1));
+    expect(before.first.text, contains('/tmp/test_chart.png'));
+
+    s.ch.push(AgentMessage(
+      inReplyTo: 'r1',
+      text: 'Here:\\n\\n![chart](data:image/png;base64,QUJD)',
+    ));
+    await _settle();
+
+    final after = messages(s.epk).where((m) => m.role == MsgRole.assistant).toList();
+    expect(after, hasLength(1));
+    expect(after.first.id, before.first.id);
+    expect(after.first.text, contains('data:image/png;base64,QUJD'));
+    expect(after.first.text, isNot(contains('/tmp/test_chart.png')));
+    s.conn.dispose();
+    s.sync.dispose();
+  });
+
   test('cancel sends a Cancel frame for the active turn target', () async {
     final s = await setup();
     s.ch.push(UserInput(id: 'u1', text: 'hi'));

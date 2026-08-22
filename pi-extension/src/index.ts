@@ -2354,16 +2354,6 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
       }
       const buffered = { ...(m as unknown as BufferMsg), content: inlinedContent };
       _messageBuffer.push(buffered);
-      if (_anyPeerActive() && _currentTurnId && m.stopReason !== "error") {
-        const fullText = _extractAssistantText(inlinedContent);
-        if (fullText) {
-          _broadcastToActive({
-            type: "agent_message",
-            in_reply_to: _currentTurnId,
-            text: fullText,
-          });
-        }
-      }
     } else if (m.role === "user" || m.role === "toolResult") {
       _messageBuffer.push(m as unknown as BufferMsg);
     }
@@ -2389,10 +2379,26 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
       _broadcastToActive({ type: "steer_consumed", id: steer.id });
     }
     _pendingSteers = [];
-    // Buffer is fed by `message_end`; here we only finalize the outbound
-    // turn signal to every connected owner. No buffer mutation.
+    // Finalize the turn, then rewrite the last assistant bubble with any
+    // local markdown images inlined as data URIs. Must come AFTER agent_done:
+    // the app persists streamed `/tmp/...` paths on done, then this replaces
+    // that row so the phone can render the image.
     if (_anyPeerActive() && _currentTurnId) {
-      _broadcastToActive({ type: "agent_done", in_reply_to: _currentTurnId });
+      const turnId = _currentTurnId;
+      _broadcastToActive({ type: "agent_done", in_reply_to: turnId });
+      for (let i = _messageBuffer.length - 1; i >= 0; i--) {
+        const last = _messageBuffer[i];
+        if (last?.role !== "assistant") continue;
+        const fullText = _extractAssistantText(last.content);
+        if (fullText) {
+          _broadcastToActive({
+            type: "agent_message",
+            in_reply_to: turnId,
+            text: fullText,
+          });
+        }
+        break;
+      }
       _currentTurnId = null;
     }
     _flushPendingReceivedImagePreviews();

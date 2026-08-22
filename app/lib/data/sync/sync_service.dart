@@ -479,15 +479,19 @@ class SyncService extends Service {
         _clearSteeringLabel(inReplyTo);
         _setWorking(false, preview: text.isEmpty ? null : text);
       case AgentMessage(:final inReplyTo, :final text):
+        // Live finalize writes `agent_<uuid>` rows. History / replay uses
+        // `inReplyTo`. Prefer the latest assistant bubble so a post-done
+        // inlined data-URI rewrite replaces the streamed `/tmp/...` path.
+        final targetId = _latestAssistantId() ?? inReplyTo;
         // ignore: discarded_futures
         _upsert(
           MsgRole.assistant,
-          inReplyTo,
+          targetId,
           (seq, existing) =>
               existing != null
                   ? existing.copyWith(text: text)
                   : MessageRecord(
-                      id: inReplyTo,
+                      id: targetId,
                       seq: seq,
                       role: MsgRole.assistant,
                       text: text,
@@ -870,6 +874,20 @@ class SyncService extends Service {
   // ---------------------------------------------------------------------------
 
   String _key(MsgRole role, String id) => '${role.name}:$id';
+
+  String? _latestAssistantId() {
+    final prefix = '${MsgRole.assistant.name}:';
+    String? id;
+    var best = -1;
+    for (final e in _idToSeq.entries) {
+      if (!e.key.startsWith(prefix)) continue;
+      if (e.value >= best) {
+        best = e.value;
+        id = e.key.substring(prefix.length);
+      }
+    }
+    return id;
+  }
 
   Future<void> _loadIndex() {
     final epk = _activeEpk;
