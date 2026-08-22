@@ -14,9 +14,10 @@
 /// styles would leave every one-off size unscaled, which is most of the chat.
 enum AppFontScale {
   small('Small', 0.9),
-  standard('Default', 1.0),
-  large('Large', 1.15),
-  extraLarge('XL', 1.3);
+  standard('Medium', 1.0),
+  large('Default', 1.15),
+  extraLarge('XL', 1.3),
+  huge('XXL', 1.45);
 
   const AppFontScale(this.label, this.factor);
 
@@ -26,12 +27,11 @@ enum AppFontScale {
   /// Multiplier applied to every text size in the app.
   final double factor;
 
-  /// Parse a persisted value. Unknown/legacy/missing → [standard], so a bad
-  /// stored string can never leave the app with unreadable text.
+  /// Parse a persisted value. Unknown/legacy/missing → [large] (1.15x).
   static AppFontScale fromName(String? raw) {
     for (final v in AppFontScale.values) {
       if (v.name == raw) return v;
     }
-    return AppFontScale.standard;
+    return AppFontScale.large;
   }
 }
