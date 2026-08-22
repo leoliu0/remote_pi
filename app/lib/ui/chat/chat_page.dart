@@ -594,9 +594,7 @@ class _MessageList extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final hasActiveTurn = streaming != null || isWorking;
-    final hasHistory = messages.isNotEmpty;
-    final totalCount =
-        messages.length + (hasActiveTurn ? 1 : 0) + (hasHistory ? 1 : 0);
+    final totalCount = messages.length + (hasActiveTurn ? 1 : 0);
 
     return ListView.separated(
       reverse: true,
@@ -616,23 +614,6 @@ class _MessageList extends StatelessWidget {
 
         final historyOffset = hasActiveTurn ? 1 : 0;
         final indexInMessages = i - historyOffset;
-
-        if (indexInMessages == messages.length) {
-          return Center(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 8),
-              child: Text(
-                '— Start of session history —',
-                style: context.typo.monoSmall.copyWith(
-                  fontSize: 11,
-                  color: context.colors.muted.withValues(alpha: 0.6),
-                  letterSpacing: 0.2,
-                ),
-              ),
-            ),
-          );
-        }
-
         final msgIdx = messages.length - 1 - indexInMessages;
         final msg = messages[msgIdx];
         return KeyedSubtree(

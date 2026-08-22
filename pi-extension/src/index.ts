@@ -2354,6 +2354,10 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   // room_meta over the relay (plan/32) below — that's independent of the
   // broker and drives the app's working indicator.
   pi.on("turn_start", (_event, ctx) => {
+    _lastEventCtx = ctx as unknown as typeof _lastEventCtx;
+    if (ctx && (ctx as { sessionManager?: unknown }).sessionManager) {
+      _hydrateMessageBufferFromSession((ctx as { sessionManager?: unknown }).sessionManager);
+    }
     // Late model hydration: if the model was still unknown at connect (resolved
     // lazily by the SDK), grab it on the first turn and fan it out — so a daemon
     // whose model only materialises at turn 1 still reports it to the app.
@@ -4783,8 +4787,11 @@ function _handleSessionSync(
   msg: Extract<ClientMessage, { type: "session_sync" }>,
 ): void {
   _sendQueuedState(sender);
-  if (_lastEventCtx && typeof _lastEventCtx === "object" && "sessionManager" in _lastEventCtx) {
-    _hydrateMessageBufferFromSession(_lastEventCtx.sessionManager);
+  const sm =
+    (_lastEventCtx && typeof _lastEventCtx === "object" && "sessionManager" in _lastEventCtx ? (_lastEventCtx as { sessionManager?: unknown }).sessionManager : null) ??
+    (_lastCtx && typeof _lastCtx === "object" && "sessionManager" in _lastCtx ? (_lastCtx as { sessionManager?: unknown }).sessionManager : null);
+  if (sm) {
+    _hydrateMessageBufferFromSession(sm);
   }
   if (_sessionStartedAt === null) {
     if (_messageBuffer.length > 0) {
@@ -5108,32 +5115,42 @@ export function _mapAgentMessagesToEvents(
       if (images.length > 0) ev.images = images;
       events.push(ev);
     } else if (m.role === "assistant") {
-      const content = Array.isArray(m.content) ? m.content : [];
       const usage = m.usage
         ? { input_tokens: m.usage.input ?? 0, output_tokens: m.usage.output ?? 0 }
         : undefined;
-      for (const raw of content) {
-        if (!raw || typeof raw !== "object") continue;
-        const block = raw as { type?: string; text?: unknown; id?: unknown; name?: unknown; arguments?: unknown };
-        if (block.type === "text") {
-          const text = String(block.text ?? "");
-          if (!text) continue;
-          const ev: SessionHistoryEvent = {
+      if (typeof m.content === "string") {
+        if (m.content.length > 0) {
+          events.push({
             ts,
             type: "agent_message",
             in_reply_to: lastUserId ?? `sync_${ts}`,
-            text,
+            text: m.content,
             ...(usage ? { usage } : {}),
-          };
-          events.push(ev);
-        } else if (block.type === "toolCall") {
-          events.push({
-            ts,
-            type: "tool_request",
-            tool_call_id: String(block.id ?? ""),
-            tool: String(block.name ?? ""),
-            args: (block.arguments as Record<string, unknown>) ?? {},
           });
+        }
+      } else if (Array.isArray(m.content)) {
+        for (const raw of m.content) {
+          if (!raw || typeof raw !== "object") continue;
+          const block = raw as { type?: string; text?: unknown; id?: unknown; name?: unknown; arguments?: unknown };
+          if (block.type === "text") {
+            const text = String(block.text ?? "");
+            if (!text) continue;
+            events.push({
+              ts,
+              type: "agent_message",
+              in_reply_to: lastUserId ?? `sync_${ts}`,
+              text,
+              ...(usage ? { usage } : {}),
+            });
+          } else if (block.type === "toolCall") {
+            events.push({
+              ts,
+              type: "tool_request",
+              tool_call_id: String(block.id ?? ""),
+              tool: String(block.name ?? ""),
+              args: (block.arguments as Record<string, unknown>) ?? {},
+            });
+          }
         }
       }
     } else if (m.role === "toolResult") {
