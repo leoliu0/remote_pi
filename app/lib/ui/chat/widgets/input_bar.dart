@@ -139,6 +139,7 @@ class _InputBarState extends State<InputBar> {
       _controller.text = text;
       _controller.selection = TextSelection.collapsed(offset: text.length);
       _navigatingHistory = false;
+      setState(() {});
     }
   }
 
@@ -151,6 +152,7 @@ class _InputBarState extends State<InputBar> {
       _controller.text = text;
       _controller.selection = TextSelection.collapsed(offset: text.length);
       _navigatingHistory = false;
+      setState(() {});
     } else if (_historyIndex == 0) {
       _historyIndex = -1;
       _navigatingHistory = true;
@@ -158,9 +160,93 @@ class _InputBarState extends State<InputBar> {
       _controller.selection =
           TextSelection.collapsed(offset: _savedDraft.length);
       _navigatingHistory = false;
+      setState(() {});
     }
   }
 
+  Widget? _buildHistorySuffix(BuildContext context) {
+    if (widget.disabled) return null;
+    final hasImage = widget.attachment?.hasImage ?? false;
+    if (hasImage) return null;
+    final history = _combinedHistory;
+    if (history.isEmpty) return null;
+
+    final colors = context.colors;
+
+    if (_historyIndex >= 0) {
+      final canGoOlder = _historyIndex + 1 < history.length;
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        mainAxisAlignment: MainAxisAlignment.end,
+        children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
+            decoration: BoxDecoration(
+              color: colors.surface,
+              borderRadius: BorderRadius.circular(4),
+              border: Border.all(color: colors.border.withValues(alpha: 0.6)),
+            ),
+            child: Text(
+              '${_historyIndex + 1}/${history.length}',
+              style: context.typo.mono.copyWith(
+                fontSize: 10,
+                color: colors.muted,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          const SizedBox(width: 2),
+          IconButton(
+            key: const Key('input-bar-history-up'),
+            icon: Icon(
+              LucideIcons.arrowUp,
+              size: 15,
+              color: canGoOlder ? colors.text : colors.muted.withValues(alpha: 0.3),
+            ),
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 26, minHeight: 26),
+            splashRadius: 13,
+            onPressed: canGoOlder ? _recallPreviousMessage : null,
+            tooltip: 'Older command (↑)',
+          ),
+          IconButton(
+            key: const Key('input-bar-history-down'),
+            icon: Icon(
+              LucideIcons.arrowDown,
+              size: 15,
+              color: colors.text,
+            ),
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 26, minHeight: 26),
+            splashRadius: 13,
+            onPressed: _recallNextMessage,
+            tooltip: 'Newer command / draft (↓)',
+          ),
+          const SizedBox(width: 6),
+        ],
+      );
+    }
+
+    if (_empty) {
+      return Tooltip(
+        message: 'Browse history (↑)',
+        child: IconButton(
+          key: const Key('input-bar-history-recall'),
+          icon: Icon(
+            LucideIcons.arrowUp,
+            size: 16,
+            color: colors.muted,
+          ),
+          padding: EdgeInsets.zero,
+          constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+          splashRadius: 16,
+          onPressed: _recallPreviousMessage,
+        ),
+      );
+    }
+
+    return null;
+  }
   @override
   void initState() {
     super.initState();
@@ -490,25 +576,7 @@ class _InputBarState extends State<InputBar> {
                           fontSize: 13,
                           color: colors.muted,
                         ),
-                        suffixIcon:
-                            (_empty &&
-                                !hasImage &&
-                                canInteract &&
-                                _combinedHistory.isNotEmpty)
-                            ? Tooltip(
-                                message: 'Recall last message (↑)',
-                                child: IconButton(
-                                  key: const Key('input-bar-history-recall'),
-                                  icon: Icon(
-                                    LucideIcons.arrowUp,
-                                    size: 16,
-                                    color: colors.muted,
-                                  ),
-                                  onPressed: _recallPreviousMessage,
-                                  splashRadius: 16,
-                                ),
-                              )
-                            : null,
+                        suffixIcon: _buildHistorySuffix(context),
                         contentPadding: const EdgeInsets.symmetric(
                           horizontal: 14,
                           vertical: 10,

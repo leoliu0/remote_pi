@@ -424,7 +424,7 @@ void main() {
     expect(find.text('my draft'), findsOneWidget);
   });
 
-  testWidgets('suffix recall icon tap recalls previous message on empty input', (
+  testWidgets('on-screen Up/Down buttons allow continuous browsing of previous commands', (
     tester,
   ) async {
     await tester.pumpWidget(
@@ -433,17 +433,53 @@ void main() {
           body: InputBar(
             disabled: false,
             streaming: false,
-            messageHistory: const ['prior prompt'],
+            messageHistory: const ['cmd 1', 'cmd 2', 'cmd 3'],
             onSend: (_) {},
           ),
         ),
       ),
     );
 
-    expect(find.byIcon(LucideIcons.arrowUp), findsOneWidget);
-    await tester.tap(find.byIcon(LucideIcons.arrowUp));
+    // Initially shows single Up icon on empty input
+    expect(find.byKey(const Key('input-bar-history-recall')), findsOneWidget);
+
+    // Tap initial Up icon -> recalls 'cmd 3' (1/3)
+    await tester.tap(find.byKey(const Key('input-bar-history-recall')));
     await tester.pump();
 
-    expect(find.text('prior prompt'), findsOneWidget);
+    expect(find.text('cmd 3'), findsOneWidget);
+    expect(find.text('1/3'), findsOneWidget);
+    expect(find.byKey(const Key('input-bar-history-up')), findsOneWidget);
+    expect(find.byKey(const Key('input-bar-history-down')), findsOneWidget);
+
+    // Tap Up again -> recalls 'cmd 2' (2/3)
+    await tester.tap(find.byKey(const Key('input-bar-history-up')));
+    await tester.pump();
+    expect(find.text('cmd 2'), findsOneWidget);
+    expect(find.text('2/3'), findsOneWidget);
+
+    // Tap Up again -> recalls 'cmd 1' (3/3)
+    await tester.tap(find.byKey(const Key('input-bar-history-up')));
+    await tester.pump();
+    expect(find.text('cmd 1'), findsOneWidget);
+    expect(find.text('3/3'), findsOneWidget);
+
+    // Tap Down -> moves forward to 'cmd 2' (2/3)
+    await tester.tap(find.byKey(const Key('input-bar-history-down')));
+    await tester.pump();
+    expect(find.text('cmd 2'), findsOneWidget);
+    expect(find.text('2/3'), findsOneWidget);
+
+    // Tap Down -> moves forward to 'cmd 3' (1/3)
+    await tester.tap(find.byKey(const Key('input-bar-history-down')));
+    await tester.pump();
+    expect(find.text('cmd 3'), findsOneWidget);
+    expect(find.text('1/3'), findsOneWidget);
+
+    // Tap Down -> restores empty draft and returns to initial single recall icon
+    await tester.tap(find.byKey(const Key('input-bar-history-down')));
+    await tester.pump();
+    expect(find.text('cmd 3'), findsNothing);
+    expect(find.byKey(const Key('input-bar-history-recall')), findsOneWidget);
   });
 }
