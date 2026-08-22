@@ -7,8 +7,9 @@ import 'package:flutter/material.dart';
 // The buffer is already batched with 16ms debounce in SessionRepository.
 
 class StreamingBubble extends StatefulWidget {
-  final StreamingMessage streaming;
-  const StreamingBubble(this.streaming, {super.key});
+  final StreamingMessage? streaming;
+  final bool isWorking;
+  const StreamingBubble({super.key, this.streaming, this.isWorking = true});
 
   @override
   State<StreamingBubble> createState() => _StreamingBubbleState();
@@ -35,16 +36,17 @@ class _StreamingBubbleState extends State<StreamingBubble>
 
   @override
   Widget build(BuildContext context) {
-    final hasText = widget.streaming.buffer.isNotEmpty;
+    final buffer = widget.streaming?.buffer ?? '';
+    final hasText = buffer.isNotEmpty;
     return SizedBox(
       width: double.infinity,
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          if (!hasText)
+          if (!hasText && widget.isWorking)
             const _ThinkingIndicator(),
-          if (hasText) AgentMarkdown(widget.streaming.buffer),
+          if (hasText) AgentMarkdown(buffer),
           _BlinkingCursor(controller: _blink),
         ],
       ),

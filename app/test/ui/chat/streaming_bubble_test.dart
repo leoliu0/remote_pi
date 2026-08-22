@@ -10,7 +10,7 @@ import 'package:flutter_test/flutter_test.dart';
 void main() {
   Future<void> pump(WidgetTester tester, StreamingMessage m) {
     return tester.pumpWidget(
-      MaterialApp(home: Scaffold(body: StreamingBubble(m))),
+      MaterialApp(home: Scaffold(body: StreamingBubble(streaming: m))),
     );
   }
 

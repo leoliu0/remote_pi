@@ -393,7 +393,7 @@ class ChatPage extends StatelessWidget {
         // Empty body → the default placeholder (Pi brand icon + "Nothing
         // here"), shown whenever there's nothing to render — including while
         // reconnecting (the reconnect handshake never swaps the body).
-        if (visible.isEmpty && streaming == null) {
+        if (visible.isEmpty && streaming == null && !vm.isWorking) {
           return const _EmptyState(
             icon: LucideIcons.terminal,
             message: 'Nothing here',
@@ -402,6 +402,7 @@ class ChatPage extends StatelessWidget {
         return _MessageList(
           messages: visible,
           streaming: streaming,
+          isWorking: vm.isWorking,
           onDecide: (id, decision) => vm.approveTool(id, decision),
           briefToolCalls: toolDisplay == ToolCallDisplay.brief,
         );
@@ -567,19 +568,22 @@ class ChatPage extends StatelessWidget {
 class _MessageList extends StatelessWidget {
   final List<ChatMessage> messages;
   final StreamingMessage? streaming;
+  final bool isWorking;
   final void Function(String, ApproveDecision) onDecide;
   final bool briefToolCalls;
 
   const _MessageList({
     required this.messages,
     required this.streaming,
+    required this.isWorking,
     required this.onDecide,
     this.briefToolCalls = false,
   });
 
   @override
   Widget build(BuildContext context) {
-    final itemCount = messages.length + (streaming != null ? 1 : 0);
+    final hasActiveTurn = streaming != null || isWorking;
+    final itemCount = messages.length + (hasActiveTurn ? 1 : 0);
 
     // `reverse: true` anchors the viewport to the bottom (offset 0 = newest)
     // and keeps it there as content arrives — no manual scroll-to-bottom is
@@ -597,13 +601,16 @@ class _MessageList extends StatelessWidget {
         // position — briefly painting the wrong message at a slot (the
         // momentary C/B/A → B/C/A reorder). Keying by message id makes it
         // match by identity instead.
-        if (streaming != null && i == 0) {
+        if (hasActiveTurn && i == 0) {
           return KeyedSubtree(
             key: const ValueKey('streaming'),
-            child: StreamingBubble(streaming!),
+            child: StreamingBubble(
+              streaming: streaming,
+              isWorking: isWorking,
+            ),
           );
         }
-        final msgIdx = messages.length - 1 - (i - (streaming != null ? 1 : 0));
+        final msgIdx = messages.length - 1 - (i - (hasActiveTurn ? 1 : 0));
         final msg = messages[msgIdx];
         return KeyedSubtree(
           key: ValueKey(msg.id),
