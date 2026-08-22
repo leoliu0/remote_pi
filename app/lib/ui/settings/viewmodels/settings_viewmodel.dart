@@ -73,9 +73,7 @@ class SettingsViewModel extends ViewModel<SettingsState> {
     final reason = relayUrlValidationMessage(trimmed);
     if (reason != null) return reason;
     await _prefs.setRelayUrl(trimmed);
-
-    await _conn.disconnect();
-    _conn.boot(preferredEpk: _prefs.selectedPeerEpk);
+    await _conn.reconnect(preferredEpk: _prefs.selectedPeerEpk);
     return null;
   }
 

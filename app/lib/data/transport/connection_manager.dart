@@ -400,6 +400,32 @@ class ConnectionManager extends Service {
   // Connect to a specific peer (used after fresh pairing).
   Future<void> connectTo(PeerRecord peer) => _connect(peer);
 
+  /// Force an immediate reconnection with the current/preferred peer.
+  /// Used when the relay endpoint or network settings change, so the
+  /// app reconnects immediately without requiring an app restart.
+  Future<void> reconnect({String? preferredEpk}) async {
+    _cancelRetry();
+    _cancelPing();
+    _connectCancel?.cancel();
+
+    final peers = await _storage.listPeers();
+    if (peers.isEmpty) {
+      await _teardownActive(emitNoPeer: true);
+      return;
+    }
+
+    final target = preferredEpk != null
+        ? peers.firstWhere(
+            (p) => p.remoteEpk == preferredEpk,
+            orElse: () => _activePeer ?? peers.first,
+          )
+        : (_activePeer ?? peers.first);
+
+    subscribeToPeers(peers.map((p) => p.remoteEpk).toList());
+    await _teardownActive(emitNoPeer: false);
+    await _connect(target);
+  }
+
   /// Idempotent switch to another paired peer. If `peer` already matches
   /// [activePeer] AND we are Online, no-op. Otherwise tears down the
   /// current channel WITHOUT emitting a transient `StatusNoPeer` (plano
@@ -413,7 +439,6 @@ class ConnectionManager extends Service {
     await _teardownActive(emitNoPeer: false);
     await _connect(peer);
   }
-
   // Adopt a channel that was established by an external flow (e.g. the
   // pairing handshake). Skips the factory entirely — the channel is already
   // connected and ready for use.
