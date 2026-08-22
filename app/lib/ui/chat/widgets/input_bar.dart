@@ -63,6 +63,8 @@ class InputBar extends StatefulWidget {
   /// button (offline/streaming); vision/has-image gating is internal.
   final VoidCallback? onOpenAttach;
 
+  /// Optional user message history for Up/Down arrow cycling (oldest to newest).
+  final List<String> messageHistory;
   const InputBar({
     super.key,
     required this.onSend,
@@ -76,6 +78,7 @@ class InputBar extends StatefulWidget {
     this.onVoiceHint,
     this.attachment,
     this.onOpenAttach,
+    this.messageHistory = const [],
     this.disabled = false,
     this.streaming = false,
   });
@@ -101,6 +104,62 @@ class _InputBarState extends State<InputBar> {
   // (the permission prompt ended the hold), the recording is discarded.
   bool _holding = false;
   StreamSubscription<String>? _transcriptSub;
+  final List<String> _localHistory = [];
+  int _historyIndex = -1;
+  String _savedDraft = '';
+  bool _navigatingHistory = false;
+
+  List<String> get _combinedHistory {
+    final list = <String>[];
+    for (final m in widget.messageHistory) {
+      final t = m.trim();
+      if (t.isNotEmpty && (list.isEmpty || list.last != t)) {
+        list.add(t);
+      }
+    }
+    for (final m in _localHistory) {
+      final t = m.trim();
+      if (t.isNotEmpty && (list.isEmpty || list.last != t)) {
+        list.add(t);
+      }
+    }
+    return list;
+  }
+
+  void _recallPreviousMessage() {
+    final history = _combinedHistory;
+    if (history.isEmpty) return;
+    if (_historyIndex == -1) {
+      _savedDraft = _controller.text;
+    }
+    if (_historyIndex + 1 < history.length) {
+      _historyIndex++;
+      final text = history[history.length - 1 - _historyIndex];
+      _navigatingHistory = true;
+      _controller.text = text;
+      _controller.selection = TextSelection.collapsed(offset: text.length);
+      _navigatingHistory = false;
+    }
+  }
+
+  void _recallNextMessage() {
+    final history = _combinedHistory;
+    if (_historyIndex > 0) {
+      _historyIndex--;
+      final text = history[history.length - 1 - _historyIndex];
+      _navigatingHistory = true;
+      _controller.text = text;
+      _controller.selection = TextSelection.collapsed(offset: text.length);
+      _navigatingHistory = false;
+    } else if (_historyIndex == 0) {
+      _historyIndex = -1;
+      _navigatingHistory = true;
+      _controller.text = _savedDraft;
+      _controller.selection =
+          TextSelection.collapsed(offset: _savedDraft.length);
+      _navigatingHistory = false;
+    }
+  }
 
   @override
   void initState() {
@@ -108,7 +167,6 @@ class _InputBarState extends State<InputBar> {
     _controller.addListener(_onTextChange);
     _subscribeTranscripts();
   }
-
   @override
   void didUpdateWidget(InputBar old) {
     super.didUpdateWidget(old);
@@ -131,6 +189,9 @@ class _InputBarState extends State<InputBar> {
   }
 
   void _onTextChange() {
+    if (!_navigatingHistory) {
+      _historyIndex = -1;
+    }
     final next = _controller.text.isEmpty;
     if (next == _empty) return;
     setState(() {
@@ -152,16 +213,24 @@ class _InputBarState extends State<InputBar> {
     // Plan/30 — an attached image makes an empty-caption send valid.
     final hasImage = widget.attachment?.hasImage ?? false;
     if (text.isEmpty && !hasImage) return;
+    if (text.isNotEmpty) {
+      _localHistory.add(text);
+    }
+    _historyIndex = -1;
+    _savedDraft = '';
     _controller.clear();
     widget.onSend(text);
   }
+
   void _queue() {
     final text = _controller.text.trim();
     if (text.isEmpty) return;
+    _localHistory.add(text);
+    _historyIndex = -1;
+    _savedDraft = '';
     _controller.clear();
     widget.onSetQueued?.call(text);
   }
-
   void _editQueued(QueuedMsg item) {
     if (!item.editable) return;
     widget.onClearQueued?.call(item.id);
@@ -180,28 +249,38 @@ class _InputBarState extends State<InputBar> {
     final isEnter =
         event.logicalKey == LogicalKeyboardKey.enter ||
         event.logicalKey == LogicalKeyboardKey.numpadEnter;
-    if (!isEnter) return KeyEventResult.ignored;
-    // TEMP diag (input multiline Enter): if this line never prints when you
-    // press Enter on the emulator, Android is routing it through the IME and
-    // NOT as a hardware key event — remove once the behaviour is confirmed.
-    debugPrint(
-      '[input.enter] shift=${HardwareKeyboard.instance.isShiftPressed} '
-      'disabled=${widget.disabled} streaming=${widget.streaming}',
-    );
-    // Don't intercept while disabled, or mid-IME-composition (a CJK
-    // candidate is confirmed with Enter, not sent) — let the field/IME deal.
-    if (widget.disabled || !_controller.value.composing.isCollapsed) {
-      return KeyEventResult.ignored;
-    }
-    if (HardwareKeyboard.instance.isShiftPressed) {
-      // Shift+Enter → newline. Inserted explicitly (and consumed) so the
-      // behaviour is identical on every platform instead of depending on
-      // the framework's default multiline key handling.
-      _insertNewlineAtCursor();
+    if (isEnter) {
+      if (widget.disabled || !_controller.value.composing.isCollapsed) {
+        return KeyEventResult.ignored;
+      }
+      if (HardwareKeyboard.instance.isShiftPressed) {
+        _insertNewlineAtCursor();
+        return KeyEventResult.handled;
+      }
+      _submit();
       return KeyEventResult.handled;
     }
-    _submit();
-    return KeyEventResult.handled;
+
+    if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
+      final val = _controller.value;
+      final isAtStart =
+          !val.selection.isValid ||
+          val.selection.start == 0 ||
+          !val.text.contains('\n');
+      if (isAtStart && _combinedHistory.isNotEmpty && !widget.disabled) {
+        _recallPreviousMessage();
+        return KeyEventResult.handled;
+      }
+    }
+
+    if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
+      if (_historyIndex >= 0 && !widget.disabled) {
+        _recallNextMessage();
+        return KeyEventResult.handled;
+      }
+    }
+
+    return KeyEventResult.ignored;
   }
 
   /// Replaces the current selection (or inserts at the caret) with a newline
@@ -411,11 +490,29 @@ class _InputBarState extends State<InputBar> {
                           fontSize: 13,
                           color: colors.muted,
                         ),
+                        suffixIcon:
+                            (_empty &&
+                                !hasImage &&
+                                canInteract &&
+                                _combinedHistory.isNotEmpty)
+                            ? Tooltip(
+                                message: 'Recall last message (↑)',
+                                child: IconButton(
+                                  key: const Key('input-bar-history-recall'),
+                                  icon: Icon(
+                                    LucideIcons.arrowUp,
+                                    size: 16,
+                                    color: colors.muted,
+                                  ),
+                                  onPressed: _recallPreviousMessage,
+                                  splashRadius: 16,
+                                ),
+                              )
+                            : null,
                         contentPadding: const EdgeInsets.symmetric(
                           horizontal: 14,
                           vertical: 10,
                         ),
-                        filled: true,
                         fillColor: colors.inputFill,
                         border: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(19),

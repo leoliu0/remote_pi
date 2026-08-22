@@ -377,4 +377,73 @@ void main() {
     await tester.pump();
     expect(sent, isEmpty);
   });
+
+  testWidgets('Up/Down arrow recalls message history and restores draft', (
+    tester,
+  ) async {
+    final sent = <String>[];
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: InputBar(
+            disabled: false,
+            streaming: false,
+            messageHistory: const ['first message', 'second message'],
+            onSend: sent.add,
+          ),
+        ),
+      ),
+    );
+
+    // Focus text field
+    await tester.tap(find.byType(TextField));
+    await tester.pump();
+
+    // Type a draft
+    await tester.enterText(find.byType(TextField), 'my draft');
+    await tester.pump();
+
+    // Press Up arrow -> recalls 'second message' (most recent)
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+    await tester.pump();
+    expect(find.text('second message'), findsOneWidget);
+
+    // Press Up arrow again -> recalls 'first message'
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+    await tester.pump();
+    expect(find.text('first message'), findsOneWidget);
+
+    // Press Down arrow -> moves forward to 'second message'
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pump();
+    expect(find.text('second message'), findsOneWidget);
+
+    // Press Down arrow -> restores 'my draft'
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pump();
+    expect(find.text('my draft'), findsOneWidget);
+  });
+
+  testWidgets('suffix recall icon tap recalls previous message on empty input', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: InputBar(
+            disabled: false,
+            streaming: false,
+            messageHistory: const ['prior prompt'],
+            onSend: (_) {},
+          ),
+        ),
+      ),
+    );
+
+    expect(find.byIcon(LucideIcons.arrowUp), findsOneWidget);
+    await tester.tap(find.byIcon(LucideIcons.arrowUp));
+    await tester.pump();
+
+    expect(find.text('prior prompt'), findsOneWidget);
+  });
 }

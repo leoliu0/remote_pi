@@ -431,6 +431,13 @@ class ChatPage extends StatelessWidget {
         !isPeerOffline &&
         !isPresenceOffline;
 
+    final messageHistory = isReady
+        ? [
+            for (final m in state.messages)
+              if (m is UserMsg && m.text.trim().isNotEmpty) m.text.trim(),
+          ]
+        : const <String>[];
+
     return InputBar(
       disabled:
           !isReady ||
@@ -439,6 +446,7 @@ class ChatPage extends StatelessWidget {
           isPeerOffline ||
           isPresenceOffline,
       streaming: isWorking,
+      messageHistory: messageHistory,
       onCancel: cancelId != null ? () => vm.cancel(cancelId) : null,
       onOpenQuickActions: actionsEnabled
           ? () => showQuickActionsSheet(context)
