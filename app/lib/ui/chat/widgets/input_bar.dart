@@ -546,6 +546,67 @@ class _InputBarState extends State<InputBar> {
                 ),
               if (_buildHistoryBar(context) != null)
                 _buildHistoryBar(context)!,
+              TextField(
+                // Intercept hardware Enter on the field's OWN focus
+                // node (the primary/leaf): plain Enter sends,
+                // Shift+Enter newlines — see _onComposerKey. Must be
+                // the leaf, not an ancestor Focus, or the multiline
+                // newline handling consumes Enter first.
+                focusNode: _focusNode,
+                controller: _controller,
+                enabled: canInteract,
+                // Grow with the content: starts at one line, expands up
+                // to 6 then scrolls internally. On a touch soft-keyboard
+                // Enter inserts a newline; sending is via the composer
+                // button (hardware Enter sends — see _onComposerKey).
+                minLines: 1,
+                maxLines: 6,
+                keyboardType: TextInputType.multiline,
+                textInputAction: TextInputAction.newline,
+                style: context.typo.mono.copyWith(
+                  fontSize: 13.5,
+                  color: colors.text,
+                ),
+                cursorColor: colors.accent,
+                decoration: InputDecoration(
+                  hintText: widget.disabled
+                      ? 'Offline…'
+                      : hasImage
+                      ? 'Add a caption…'
+                      : 'Send a message…',
+                  hintStyle: context.typo.mono.copyWith(
+                    fontSize: 13.5,
+                    color: colors.muted,
+                  ),
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 10,
+                  ),
+                  fillColor: colors.inputFill,
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(16),
+                    borderSide: BorderSide(color: colors.border),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(16),
+                    borderSide: BorderSide(color: colors.border),
+                  ),
+                  disabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(16),
+                    borderSide: BorderSide(
+                      color: colors.border.withValues(alpha: 0.5),
+                    ),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(16),
+                    borderSide: BorderSide(
+                      color: colors.accent,
+                      width: 1.2,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 8),
               Row(
                 children: [
                   _QuickActionsButton(
@@ -562,73 +623,11 @@ class _InputBarState extends State<InputBar> {
                       onTap: _recallPreviousMessage,
                     ),
                   ],
-                  const SizedBox(width: 8),
-                  // Text field (doubles as the image caption when one is set).
-                  Expanded(
-                    child: TextField(
-                      // Intercept hardware Enter on the field's OWN focus
-                      // node (the primary/leaf): plain Enter sends,
-                      // Shift+Enter newlines — see _onComposerKey. Must be
-                      // the leaf, not an ancestor Focus, or the multiline
-                      // newline handling consumes Enter first.
-                      focusNode: _focusNode,
-                      controller: _controller,
-                      enabled: canInteract,
-                      // Grow with the content: starts at one line, expands up
-                      // to 6 then scrolls internally. On a touch soft-keyboard
-                      // Enter inserts a newline; sending is via the composer
-                      // button (hardware Enter sends — see _onComposerKey).
-                      minLines: 1,
-                      maxLines: 6,
-                      keyboardType: TextInputType.multiline,
-                      textInputAction: TextInputAction.newline,
-                      style: context.typo.mono.copyWith(
-                        fontSize: 13,
-                        color: colors.text,
-                      ),
-                      cursorColor: colors.accent,
-                      decoration: InputDecoration(
-                        hintText: widget.disabled
-                            ? 'Offline…'
-                            : hasImage
-                            ? 'Add a caption…'
-                            : 'Send a message…',
-                        hintStyle: context.typo.mono.copyWith(
-                          fontSize: 13,
-                          color: colors.muted,
-                        ),
-                        contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 14,
-                          vertical: 10,
-                        ),
-                        fillColor: colors.inputFill,
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(19),
-                          borderSide: BorderSide(color: colors.border),
-                        ),
-                        enabledBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(19),
-                          borderSide: BorderSide(color: colors.border),
-                        ),
-                        disabledBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(19),
-                          borderSide: BorderSide(
-                            color: colors.border.withValues(alpha: 0.5),
-                          ),
-                        ),
-                        focusedBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(19),
-                          borderSide: BorderSide(
-                            color: colors.accent,
-                            width: 1.2,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  if (showQueueButton)
+                  const Spacer(),
+                  if (showQueueButton) ...[
                     _QueueButton(onTap: _queue),
+                    const SizedBox(width: 8),
+                  ],
                   _ComposerActionButton(
                     streaming: widget.streaming,
                     hasContent: hasContent,
@@ -818,13 +817,13 @@ class _AttachButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return SizedBox(
-      width: 32,
-      height: 32,
+      width: 38,
+      height: 38,
       child: IconButton(
         key: const Key('input-bar-attach'),
         padding: EdgeInsets.zero,
-        iconSize: 18,
-        splashRadius: 18,
+        iconSize: 20,
+        splashRadius: 20,
         tooltip: 'Attach image',
         icon: Icon(
           LucideIcons.paperclip,
@@ -846,13 +845,13 @@ class _HistoryRecallButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return SizedBox(
-      width: 32,
-      height: 32,
+      width: 38,
+      height: 38,
       child: IconButton(
         key: const Key('input-bar-history-recall'),
         padding: EdgeInsets.zero,
-        iconSize: 18,
-        splashRadius: 18,
+        iconSize: 20,
+        splashRadius: 20,
         tooltip: 'Browse command history (↑)',
         icon: Icon(
           LucideIcons.history,
