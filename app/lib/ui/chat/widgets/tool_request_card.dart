@@ -134,7 +134,7 @@ class _ToolRequestCardState extends State<ToolRequestCard> {
                   tool.tool.toUpperCase(),
                   style: TextStyle(
                     fontFamily: monoFont,
-                    fontSize: 11,
+                    fontSize: 12.5,
                     fontWeight: FontWeight.w700,
                     color: color,
                     letterSpacing: 0.4,
@@ -149,7 +149,7 @@ class _ToolRequestCardState extends State<ToolRequestCard> {
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
                         fontFamily: monoFont,
-                        fontSize: 11.5,
+                        fontSize: 13.0,
                         color: colors.text,
                       ),
                     ),
@@ -164,7 +164,7 @@ class _ToolRequestCardState extends State<ToolRequestCard> {
                           : '',
                       style: TextStyle(
                         fontFamily: monoFont,
-                        fontSize: 11.5,
+                        fontSize: 13.0,
                         color: colors.muted,
                         fontStyle: FontStyle.italic,
                       ),
@@ -174,7 +174,7 @@ class _ToolRequestCardState extends State<ToolRequestCard> {
                 Text(
                   statusIcon,
                   style: TextStyle(
-                    fontSize: 11,
+                    fontSize: 12,
                     color: color,
                     fontWeight: FontWeight.bold,
                   ),
@@ -213,7 +213,7 @@ class _ToolRequestCardState extends State<ToolRequestCard> {
           tool.tool.toUpperCase(),
           style: TextStyle(
             fontFamily: kMonoFamily,
-            fontSize: 11.5,
+            fontSize: 13.0,
             color: color,
             letterSpacing: 0.6,
           ),
@@ -223,7 +223,7 @@ class _ToolRequestCardState extends State<ToolRequestCard> {
           statusLabel,
           style: TextStyle(
             fontFamily: context.typo.mono.fontFamily ?? kMonoFamily,
-            fontSize: 10,
+            fontSize: 11.5,
             color: color,
             letterSpacing: 0.4,
           ),
@@ -325,7 +325,7 @@ class _ToolRequestCardState extends State<ToolRequestCard> {
               Text(
                 isError ? 'ERROR' : 'OUTPUT',
                 style: typo.mono.copyWith(
-                  fontSize: 10,
+                  fontSize: 11.0,
                   fontWeight: FontWeight.w700,
                   letterSpacing: 0.4,
                   color: isError ? colors.error : colors.muted,
@@ -340,8 +340,8 @@ class _ToolRequestCardState extends State<ToolRequestCard> {
               child: SelectableText(
                 output,
                 style: typo.mono.copyWith(
-                  fontSize: 12.0,
-                  height: 1.35,
+                  fontSize: 13.5,
+                  height: 1.4,
                   color: isError ? colors.error : colors.text,
                 ),
               ),
@@ -391,10 +391,9 @@ class _ToolRequestCardState extends State<ToolRequestCard> {
     };
     return Text(
       text,
-      style: TextStyle(fontFamily: kMonoFamily, fontSize: 12, color: color),
+      style: TextStyle(fontFamily: kMonoFamily, fontSize: 13.0, color: color),
     );
   }
-
   static String _formatBriefSummary(String tool, dynamic args) {
     if (args == null) return '';
     final normalized = tool.toLowerCase();

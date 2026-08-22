@@ -84,7 +84,7 @@ class _ThinkingIndicator extends StatelessWidget {
           Text(
             'Thinking & analyzing…',
             style: typo.mono.copyWith(
-              fontSize: 11.5,
+              fontSize: 13.0,
               color: colors.muted,
               fontStyle: FontStyle.italic,
             ),

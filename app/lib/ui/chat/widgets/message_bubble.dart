@@ -86,7 +86,7 @@ class UserBubble extends StatelessWidget {
                         isSteering ? 'steering…' : 'sending…',
                         style: typo.sansBody.copyWith(
                           color: colors.muted,
-                          fontSize: 11,
+                          fontSize: 12,
                         ),
                       ),
                     ] else ...[
@@ -100,7 +100,7 @@ class UserBubble extends StatelessWidget {
                         'not delivered',
                         style: typo.sansBody.copyWith(
                           color: colors.error,
-                          fontSize: 11,
+                          fontSize: 12,
                         ),
                       ),
                     ],
@@ -166,7 +166,7 @@ class _CompactionBubbleState extends State<CompactionBubble> {
                         child: Text(
                           'Context compacted',
                           style: context.typo.mono.copyWith(
-                            fontSize: 11.5,
+                            fontSize: 13.0,
                             color: colors.text,
                             fontWeight: FontWeight.w600,
                           ),
@@ -176,7 +176,7 @@ class _CompactionBubbleState extends State<CompactionBubble> {
                         Text(
                           '~$tokens tokens',
                           style: context.typo.mono.copyWith(
-                            fontSize: 10.5,
+                            fontSize: 12.0,
                             color: colors.muted,
                           ),
                         ),
@@ -197,9 +197,9 @@ class _CompactionBubbleState extends State<CompactionBubble> {
                       maxLines: _expanded ? null : 1,
                       overflow: _expanded ? TextOverflow.visible : TextOverflow.ellipsis,
                       style: context.typo.mono.copyWith(
-                        fontSize: 11,
+                        fontSize: 12.5,
                         color: colors.muted2,
-                        height: 1.3,
+                        height: 1.35,
                       ),
                     ),
                   ],

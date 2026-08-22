@@ -170,10 +170,10 @@ class ChatPage extends StatelessWidget {
                 Text(
                   _truncate(roomName, 28),
                   style: context.typo.mono.copyWith(
-                    fontSize: 13,
+                    fontSize: 15,
                     color: colors.text,
                     letterSpacing: -0.2,
-                    fontWeight: FontWeight.w500,
+                    fontWeight: FontWeight.w600,
                   ),
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -185,7 +185,7 @@ class ChatPage extends StatelessWidget {
                         _truncate(peerLabel, 24),
                         overflow: TextOverflow.ellipsis,
                         style: context.typo.mono.copyWith(
-                          fontSize: 10,
+                          fontSize: 12,
                           color: colors.muted,
                         ),
                       ),
@@ -225,7 +225,7 @@ class ChatPage extends StatelessWidget {
                             Text(
                               label,
                               style: context.typo.mono.copyWith(
-                                fontSize: 10,
+                                fontSize: 11.5,
                                 color: color,
                               ),
                             ),
