@@ -213,6 +213,7 @@ const {
   _onPeerDisconnect,
   routeClientMessage,
   _mapAgentMessagesToEvents,
+  _inlineLocalMarkdownImages,
   _setMessageBufferForTest,
   _setSessionStartedAtForTest,
   _hasPendingReconnect,
@@ -3640,6 +3641,34 @@ describe("session sync", () => {
       summary: "summarised 10 turns",
       tokens_before: 12345,
     });
+  });
+  test("mapping: assistant message with local image path inlines as data URI", () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "pi-img-test-"));
+    const imgPath = join(tmpDir, "chart.png");
+    const fakePngBytes = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==", "base64");
+    writeFileSync(imgPath, fakePngBytes);
+
+    try {
+      const ts = 1_700_000_000_000;
+      const rawMarkdown = `Here is the plot:\n\n![Generated Chart](${imgPath})\n\nDone!`;
+      const events = _mapAgentMessagesToEvents([
+        { role: "user", content: "plot this", timestamp: ts },
+        { role: "assistant", content: rawMarkdown, timestamp: ts + 100 },
+      ]);
+
+      expect(events).toHaveLength(2);
+      const assistantEvent = events[1] as { type: string; text: string };
+      expect(assistantEvent.type).toBe("agent_message");
+      expect(assistantEvent.text).toContain("![Generated Chart](data:image/png;base64,");
+      expect(assistantEvent.text).toContain("iVBORw0KGgo");
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("_inlineLocalMarkdownImages handles missing files, web URLs, and data URIs cleanly", () => {
+    const untouched = "![Web](https://example.com/pic.png) and ![Data](data:image/png;base64,QUJD) and ![Missing](/tmp/does_not_exist_123456.png)";
+    expect(_inlineLocalMarkdownImages(untouched)).toBe(untouched);
   });
 
   test("pair_ok carries session_started_at = _sessionStartedAt", async () => {

@@ -108,7 +108,7 @@ import {
 } from "./session/local_config.js";
 import { runSetupWizard, type WizardUI } from "./session/setup_wizard.js";
 import { updateFooter, type FooterState } from "./ui/footer.js";
-import { join, dirname, resolve } from "node:path";
+import { join, dirname, resolve, extname, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chmodSync, mkdtempSync, mkdirSync, copyFileSync, existsSync, unlinkSync, readFileSync, writeFileSync, realpathSync, readdirSync, statSync } from "node:fs";
 import { createInterface } from "node:readline";
@@ -2340,7 +2340,31 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     if (m.role === "user" && _anyPeerActive()) {
       _broadcastConsumedSteerForUserContent(m.content);
     }
-    if (m.role === "user" || m.role === "assistant" || m.role === "toolResult") {
+    if (m.role === "assistant") {
+      let inlinedContent = m.content;
+      if (typeof m.content === "string") {
+        inlinedContent = _inlineLocalMarkdownImages(m.content);
+      } else if (Array.isArray(m.content)) {
+        inlinedContent = m.content.map((block) => {
+          if (block && typeof block === "object" && (block as Record<string, unknown>).type === "text" && typeof (block as Record<string, unknown>).text === "string") {
+            return { ...(block as Record<string, unknown>), text: _inlineLocalMarkdownImages((block as Record<string, unknown>).text as string) };
+          }
+          return block;
+        });
+      }
+      const buffered = { ...(m as unknown as BufferMsg), content: inlinedContent };
+      _messageBuffer.push(buffered);
+      if (_anyPeerActive() && _currentTurnId && m.stopReason !== "error") {
+        const fullText = _extractAssistantText(inlinedContent);
+        if (fullText) {
+          _broadcastToActive({
+            type: "agent_message",
+            in_reply_to: _currentTurnId,
+            text: fullText,
+          });
+        }
+      }
+    } else if (m.role === "user" || m.role === "toolResult") {
       _messageBuffer.push(m as unknown as BufferMsg);
     }
     // Forward a failed turn to connected owners. Without this the app just
@@ -5128,6 +5152,75 @@ function _imagesFromContent(content: unknown): WireImage[] {
 }
 
 /**
+ * Inlines local markdown image references as data URIs (e.g. `data:image/png;base64,...`)
+ * when the referenced file exists on disk and is under 8MB.
+ */
+export function _inlineLocalMarkdownImages(text: string, baseDir?: string): string {
+  if (!text || typeof text !== "string") return text;
+  const imgRegex = /!\[([\s\S]*?)\]\((<?)([^\s\)>]+)(>?)(?:\s+["']([\s\S]*?)["'])?\)/g;
+  return text.replace(imgRegex, (match, alt, _openAngle, rawUrl, _closeAngle, title) => {
+    let url = String(rawUrl ?? "").trim();
+    if (!url) return match;
+    if (url.startsWith("data:") || url.startsWith("http://") || url.startsWith("https://")) {
+      return match;
+    }
+    let filePath = url;
+    if (filePath.startsWith("file://")) {
+      try {
+        filePath = fileURLToPath(filePath);
+      } catch {
+        filePath = filePath.substring(7);
+      }
+    }
+    try {
+      filePath = decodeURIComponent(filePath);
+    } catch {
+      // Keep as-is if decoding fails
+    }
+    const cwd = baseDir ?? process.cwd();
+    if (!isAbsolute(filePath)) {
+      filePath = resolve(cwd, filePath);
+    }
+    try {
+      if (existsSync(filePath)) {
+        const stat = statSync(filePath);
+        if (stat.isFile() && stat.size > 0 && stat.size <= 8 * 1024 * 1024) {
+          const ext = extname(filePath).toLowerCase();
+          let mime: string | undefined;
+          if (ext === ".png") mime = "image/png";
+          else if (ext === ".jpg" || ext === ".jpeg") mime = "image/jpeg";
+          else if (ext === ".webp") mime = "image/webp";
+          else if (ext === ".gif") mime = "image/gif";
+          else if (ext === ".svg") mime = "image/svg+xml";
+          else if (ext === ".bmp") mime = "image/bmp";
+          if (mime) {
+            const buf = readFileSync(filePath);
+            const b64 = buf.toString("base64");
+            const dataUri = `data:${mime};base64,${b64}`;
+            const titlePart = title ? ` "${title}"` : "";
+            return `![${alt}](${dataUri}${titlePart})`;
+          }
+        }
+      }
+    } catch {
+      // Ignore filesystem errors and keep original match
+    }
+    return match;
+  });
+}
+
+export function _extractAssistantText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content
+      .filter((b) => b && typeof b === "object" && (b as Record<string, unknown>).type === "text")
+      .map((b) => String((b as Record<string, unknown>).text ?? ""))
+      .join("\n");
+  }
+  return "";
+}
+
+/**
  * Maps SDK AgentMessage[] (UserMessage / AssistantMessage / ToolResultMessage)
  * into the flat SessionHistoryEvent[] shape consumed by the app.
  *
@@ -5178,7 +5271,7 @@ export function _mapAgentMessagesToEvents(
             ts,
             type: "agent_message",
             in_reply_to: lastUserId ?? `sync_${ts}`,
-            text: m.content,
+            text: _inlineLocalMarkdownImages(m.content),
             ...(usage ? { usage } : {}),
           });
         }
@@ -5193,7 +5286,7 @@ export function _mapAgentMessagesToEvents(
               ts,
               type: "agent_message",
               in_reply_to: lastUserId ?? `sync_${ts}`,
-              text,
+              text: _inlineLocalMarkdownImages(text),
               ...(usage ? { usage } : {}),
             });
           } else if (block.type === "toolCall") {

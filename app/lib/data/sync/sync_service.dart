@@ -484,14 +484,15 @@ class SyncService extends Service {
           MsgRole.assistant,
           inReplyTo,
           (seq, existing) =>
-              existing ??
-              MessageRecord(
-                id: inReplyTo,
-                seq: seq,
-                role: MsgRole.assistant,
-                text: text,
-                ts: DateTime.now(),
-              ),
+              existing != null
+                  ? existing.copyWith(text: text)
+                  : MessageRecord(
+                      id: inReplyTo,
+                      seq: seq,
+                      role: MsgRole.assistant,
+                      text: text,
+                      ts: DateTime.now(),
+                    ),
         );
 
       case QueuedMessageState(:final items):
