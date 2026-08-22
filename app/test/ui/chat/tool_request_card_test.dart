@@ -195,5 +195,87 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('✓ Done'), findsNothing);
     });
+    testWidgets('renders command output block when tool result is present', (
+      tester,
+    ) async {
+      const withResult = ToolEvent(
+        id: 'tc1',
+        toolCallId: 'tc1',
+        tool: 'Bash',
+        args: {'command': 'echo "hello world"', 'i': 'Print greeting'},
+        status: ToolEventStatus.completed,
+        result: 'hello world\nline 2',
+      );
+      await tester.pumpWidget(_wrap(const ToolRequestCard(tool: withResult)));
+      expect(find.text('OUTPUT'), findsOneWidget);
+      expect(find.text('hello world\nline 2'), findsOneWidget);
+      expect(find.textContaining('# Print greeting'), findsOneWidget);
+    });
+
+    testWidgets('renders map tool result output cleanly', (tester) async {
+      const withMapResult = ToolEvent(
+        id: 'tc1',
+        toolCallId: 'tc1',
+        tool: 'Bash',
+        args: {'cmd': 'git branch'},
+        status: ToolEventStatus.completed,
+        result: {'output': '* main\n  feature-1'},
+      );
+      await tester.pumpWidget(_wrap(const ToolRequestCard(tool: withMapResult)));
+      expect(find.text('OUTPUT'), findsOneWidget);
+      expect(find.text('* main\n  feature-1'), findsOneWidget);
+      expect(find.text('git branch'), findsOneWidget);
+    });
+    testWidgets('edit with old_string and new_string renders diff lines', (
+      tester,
+    ) async {
+      const editTool = ToolEvent(
+        id: 'tc1',
+        toolCallId: 'tc1',
+        tool: 'edit',
+        args: {
+          'file_path': 'lib/foo.dart',
+          'old_string': 'final a = 1;',
+          'new_string': 'final a = 2;',
+        },
+        status: ToolEventStatus.completed,
+      );
+      await tester.pumpWidget(_wrap(const ToolRequestCard(tool: editTool)));
+      expect(find.textContaining('- final a = 1;', findRichText: true), findsOneWidget);
+      expect(find.textContaining('+ final a = 2;', findRichText: true), findsOneWidget);
+    });
+
+    testWidgets('edit with input patch format renders diff lines', (
+      tester,
+    ) async {
+      const patchTool = ToolEvent(
+        id: 'tc1',
+        toolCallId: 'tc1',
+        tool: 'edit',
+        args: {
+          'input': '[lib/bar.dart#1A2B]\nPUT 5.=6:\n-old line\n+new line',
+        },
+        status: ToolEventStatus.completed,
+      );
+      await tester.pumpWidget(_wrap(const ToolRequestCard(tool: patchTool)));
+      expect(find.textContaining('-old line', findRichText: true), findsOneWidget);
+      expect(find.textContaining('+new line', findRichText: true), findsOneWidget);
+    });
+
+    testWidgets('write tool renders content lines', (tester) async {
+      const writeTool = ToolEvent(
+        id: 'tc1',
+        toolCallId: 'tc1',
+        tool: 'write',
+        args: {
+          'path': 'lib/baz.dart',
+          'content': 'void main() {\n  print("hello");\n}',
+        },
+        status: ToolEventStatus.completed,
+      );
+      await tester.pumpWidget(_wrap(const ToolRequestCard(tool: writeTool)));
+      expect(find.textContaining('write lib/baz.dart', findRichText: true), findsOneWidget);
+      expect(find.textContaining('void main() {', findRichText: true), findsOneWidget);
+    });
   });
 }

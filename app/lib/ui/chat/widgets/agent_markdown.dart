@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:app/ui/core/themes/themes.dart';
 import 'package:flutter/material.dart';
+import 'package:app/ui/chat/widgets/chat_image.dart';
 import 'package:flutter/services.dart';
 import 'package:gpt_markdown/gpt_markdown.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
@@ -25,49 +26,89 @@ class AgentMarkdown extends StatelessWidget {
     final colors = context.colors;
     final typo = context.typo;
     final baseMono = typo.mono.copyWith(
-      fontSize: 13.5,
-      height: 1.45,
+      fontSize: 15.0,
+      height: 1.5,
       color: colors.text,
     );
 
     final markdown = Theme(
       data: Theme.of(context).copyWith(
+        extensions: [
+          GptMarkdownThemeData(
+            brightness: Theme.of(context).brightness,
+            h1: baseMono.copyWith(
+              fontSize: 22.0,
+              fontWeight: FontWeight.w700,
+              color: colors.text,
+              letterSpacing: -0.2,
+            ),
+            h2: baseMono.copyWith(
+              fontSize: 19.5,
+              fontWeight: FontWeight.w700,
+              color: colors.text,
+              letterSpacing: -0.2,
+            ),
+            h3: baseMono.copyWith(
+              fontSize: 17.5,
+              fontWeight: FontWeight.w700,
+              color: colors.text,
+            ),
+            h4: baseMono.copyWith(
+              fontSize: 16.5,
+              fontWeight: FontWeight.w700,
+              color: colors.text,
+            ),
+            h5: baseMono.copyWith(
+              fontSize: 15.5,
+              fontWeight: FontWeight.w700,
+              color: colors.text,
+            ),
+            h6: baseMono.copyWith(
+              fontSize: 15.0,
+              fontWeight: FontWeight.w700,
+              color: colors.text,
+            ),
+            highlightColor: colors.codeBg,
+            linkColor: colors.accent,
+            hrLineColor: colors.border,
+          ),
+        ],
         textTheme: Theme.of(context).textTheme.copyWith(
           headlineLarge: baseMono.copyWith(
-            fontSize: 18.0,
+            fontSize: 22.0,
             fontWeight: FontWeight.w700,
             color: colors.text,
             letterSpacing: -0.2,
           ),
           headlineMedium: baseMono.copyWith(
-            fontSize: 16.5,
+            fontSize: 19.5,
             fontWeight: FontWeight.w700,
             color: colors.text,
             letterSpacing: -0.2,
           ),
           headlineSmall: baseMono.copyWith(
-            fontSize: 15.5,
+            fontSize: 17.5,
             fontWeight: FontWeight.w700,
             color: colors.text,
           ),
           titleLarge: baseMono.copyWith(
-            fontSize: 15.0,
-            fontWeight: FontWeight.w600,
+            fontSize: 16.5,
+            fontWeight: FontWeight.w700,
             color: colors.text,
           ),
           titleMedium: baseMono.copyWith(
-            fontSize: 14.2,
-            fontWeight: FontWeight.w600,
+            fontSize: 15.5,
+            fontWeight: FontWeight.w700,
             color: colors.text,
           ),
           titleSmall: baseMono.copyWith(
-            fontSize: 13.5,
-            fontWeight: FontWeight.w600,
+            fontSize: 15.0,
+            fontWeight: FontWeight.w700,
             color: colors.text,
           ),
           bodyLarge: baseMono,
           bodyMedium: baseMono,
-          bodySmall: baseMono.copyWith(fontSize: 12.0, color: colors.muted),
+          bodySmall: baseMono.copyWith(fontSize: 13.0, color: colors.muted),
         ),
       ),
       child: GptMarkdown(
@@ -78,7 +119,7 @@ class AgentMarkdown extends StatelessWidget {
         highlightBuilder: (context, text, style) => Text(
           text,
           style: baseMono.copyWith(
-            fontSize: 13.0,
+            fontSize: 14.0,
             color: colors.highlight,
             backgroundColor: colors.codeBg,
           ),
@@ -86,6 +127,12 @@ class AgentMarkdown extends StatelessWidget {
         // Fenced ``` blocks — dark card + copy button.
         codeBuilder: (context, name, code, closed) =>
             _CodeBlock(language: name, code: code),
+        // Markdown images — supports data URIs, base64, files, network + zoom.
+        imageBuilder: (context, url, width, height) => ChatImage(
+          url: url,
+          width: width,
+          height: height,
+        ),
       ),
     );
     return selectable ? SelectionArea(child: markdown) : markdown;

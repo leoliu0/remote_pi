@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:app/domain/session_state.dart';
 import 'package:app/ui/core/themes/themes.dart';
+import 'package:app/ui/chat/widgets/chat_image.dart';
 import 'package:flutter/material.dart';
 
 /// Plan/30 — static image thumbnail + optional caption inside the user
@@ -57,7 +58,7 @@ class _ImageBubbleState extends State<ImageBubble> {
   Widget build(BuildContext context) {
     final caption = widget.caption.trim();
     final colors = context.colors;
-    return Container(
+    final bubble = Container(
       decoration: BoxDecoration(
         color: colors.userBubble,
         borderRadius: BorderRadius.circular(12),
@@ -74,10 +75,13 @@ class _ImageBubbleState extends State<ImageBubble> {
             constraints: const BoxConstraints(maxHeight: ImageBubble.maxHeight),
             child: _bytes.isEmpty
                 ? _broken(context)
-                : Image.memory(
-                    _bytes,
-                    fit: BoxFit.cover,
-                    gaplessPlayback: true,
+                : SizedBox(
+                    width: double.infinity,
+                    child: Image.memory(
+                      _bytes,
+                      fit: BoxFit.cover,
+                      gaplessPlayback: true,
+                    ),
                   ),
           ),
           if (caption.isNotEmpty)
@@ -90,6 +94,20 @@ class _ImageBubbleState extends State<ImageBubble> {
             ),
         ],
       ),
+    );
+
+    if (_bytes.isEmpty) return bubble;
+
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () {
+        showImageViewer(
+          context,
+          imageProvider: MemoryImage(_bytes),
+          title: caption.isNotEmpty ? caption : null,
+        );
+      },
+      child: bubble,
     );
   }
 

@@ -50,4 +50,21 @@ void main() {
     await tester.pump();
     expect(find.byKey(const Key('code-copy')), findsNothing);
   });
+
+  testWidgets('renders markdown headings with proper formatting', (tester) async {
+    await pump(tester, '# Major Heading\n\n## Subheading\n\nNormal paragraph.');
+    await tester.pump();
+
+    expect(find.textContaining('Major Heading'), findsOneWidget);
+    expect(find.textContaining('Subheading'), findsOneWidget);
+    expect(find.textContaining('Normal paragraph.'), findsOneWidget);
+  });
+
+  testWidgets('renders inline code and bold text in markdown', (tester) async {
+    await pump(tester, 'This has `inline_code` and **bold summary** in it.');
+    await tester.pump();
+
+    expect(find.textContaining('inline_code'), findsOneWidget);
+    expect(find.textContaining('bold summary'), findsOneWidget);
+  });
 }

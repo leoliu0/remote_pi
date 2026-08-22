@@ -80,19 +80,19 @@ class AppTypography extends ThemeExtension<AppTypography> {
     return AppTypography(
       fontFamily: fontFamily,
       mono: fontFamily.textStyle(
-        fontSize: 12.5,
+        fontSize: 14.5,
         color: monoColor,
         height: 1.5,
         letterSpacing: 0,
       ),
       monoSmall: fontFamily.textStyle(
-        fontSize: 11.0,
+        fontSize: 12.0,
         color: c.muted2,
         height: 1.4,
       ),
       sansBody: TextStyle(
         fontFamily: kSansFamily,
-        fontSize: 14.0,
+        fontSize: 15.0,
         color: c.text,
         height: 1.35,
         letterSpacing: -0.1,

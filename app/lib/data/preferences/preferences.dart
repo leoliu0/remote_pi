@@ -43,8 +43,41 @@ class Preferences extends ChangeNotifier {
   ThemeMode _themeMode = ThemeMode.system;
   AppFontScale _fontScale = AppFontScale.large;
   AppFontFamily _fontFamily = AppFontFamily.jetbrainsMono;
+  final Map<String, String> _drafts = {};
   Preferences([FlutterSecureStorage? store])
       : _store = store ?? const FlutterSecureStorage();
+
+  static String _draftKey(String? peerEpk, String? roomId) {
+    return 'prefs.draft.${peerEpk ?? ""}:${roomId ?? "main"}';
+  }
+
+  /// Get the unsent composer draft for the given session.
+  String getDraft(String? peerEpk, String? roomId) {
+    final key = _draftKey(peerEpk, roomId);
+    return _drafts[key] ?? '';
+  }
+
+  /// Update the unsent composer draft for the given session.
+  void setDraft(String? peerEpk, String? roomId, String text) {
+    final key = _draftKey(peerEpk, roomId);
+    if (text.isEmpty) {
+      if (_drafts.containsKey(key)) {
+        _drafts.remove(key);
+        _store.delete(key: key).ignore();
+      }
+    } else {
+      if (_drafts[key] != text) {
+        _drafts[key] = text;
+        _store.write(key: key, value: text).ignore();
+      }
+    }
+  }
+
+  /// Clear the unsent composer draft for the given session (e.g. after send).
+  void clearDraft(String? peerEpk, String? roomId) {
+    setDraft(peerEpk, roomId, '');
+  }
+
 
   static const _kHideToolCallsKey = 'prefs.hide_tool_calls';
   static const _kSelectedPeerEpkKey = 'prefs.selected_peer_epk';
@@ -168,6 +201,15 @@ class Preferences extends ChangeNotifier {
     }
 
     if (changed) notifyListeners();
+    try {
+      final all = await _store.readAll();
+      for (final entry in all.entries) {
+        if (entry.key.startsWith('prefs.draft.') && entry.value.isNotEmpty) {
+          _drafts[entry.key] = entry.value;
+        }
+      }
+    } catch (_) {}
+
   }
 
   Future<void> setHideToolCalls(bool value) async {

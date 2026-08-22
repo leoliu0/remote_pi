@@ -466,8 +466,14 @@ class ChatPage extends StatelessWidget {
               if (m is UserMsg && m.text.trim().isNotEmpty) m.text.trim(),
           ]
         : const <String>[];
+    final prefs = context.read<Preferences>();
+    final peerEpk = vm.activePeer?.remoteEpk ?? prefs.selectedPeerEpk;
+    final roomId = vm.activeRoom?.roomId ?? prefs.selectedRoomId;
+    final draft = prefs.getDraft(peerEpk, roomId);
 
     return InputBar(
+      initialText: draft,
+      onDraftChanged: (text) => prefs.setDraft(peerEpk, roomId, text),
       disabled:
           !isReady ||
           isOffline ||
@@ -479,7 +485,10 @@ class ChatPage extends StatelessWidget {
       dynamicSkills: vm.dynamicSkills,
       onCancel: cancelId != null ? () => vm.cancel(cancelId) : null,
       queuedMessages: isReady ? state.queuedMessages : const [],
-      onSetQueued: vm.queueMessage,
+      onSetQueued: (text) {
+        prefs.clearDraft(peerEpk, roomId);
+        vm.queueMessage(text);
+      },
       onClearQueued: vm.clearQueuedMessage,
       // Plan/29 — hold-to-talk voice input. The VM is route-scoped (bound in
       // app_router alongside ChatViewModel); InputBar listens to it directly,
@@ -495,6 +504,7 @@ class ChatPage extends StatelessWidget {
           ? () => _openAttach(context, context.read<AttachmentViewModel>())
           : null,
       onSend: (text) {
+        prefs.clearDraft(peerEpk, roomId);
         final image = context.read<AttachmentViewModel>().takeImageForSend();
         vm.sendMessage(text, image: image);
       },

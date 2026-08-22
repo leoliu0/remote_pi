@@ -68,6 +68,11 @@ class InputBar extends StatefulWidget {
   /// Optional user message history for Up/Down arrow cycling (oldest to newest).
   final List<WireSkill> dynamicSkills;
   final List<String> messageHistory;
+  /// Initial draft text to populate in the composer.
+  final String initialText;
+
+  /// Fired whenever the typed composer text changes.
+  final void Function(String text)? onDraftChanged;
   const InputBar({
     super.key,
     required this.onSend,
@@ -85,6 +90,8 @@ class InputBar extends StatefulWidget {
     this.disabled = false,
     this.dynamicSkills = const [],
     this.streaming = false,
+    this.initialText = '',
+    this.onDraftChanged,
   });
 
   @override
@@ -95,13 +102,14 @@ class _InputBarState extends State<InputBar> {
   /// How far left the press must slide to arm slide-to-cancel (logical px).
   static const double _cancelThreshold = 90;
 
-  final _controller = TextEditingController();
+  late final TextEditingController _controller =
+      TextEditingController(text: widget.initialText);
   // Owns the field's focus so we can intercept hardware Enter on its OWN
   // node (the primary/leaf focus). An ancestor Focus runs too late: the
   // FocusManager dispatches leaf→root, so the field's multiline newline
   // handling would consume Enter before an ancestor ever sees it.
   late final FocusNode _focusNode = FocusNode(onKeyEvent: _onComposerKey);
-  bool _empty = true;
+  late bool _empty = widget.initialText.trim().isEmpty;
   bool _cancelArmed = false;
   // True while the hold-to-talk gesture is active. Lets `_beginVoice` tell
   // whether the user is still holding once `startRecording` resolves — if not
@@ -266,12 +274,23 @@ class _InputBarState extends State<InputBar> {
   @override
   void initState() {
     super.initState();
+    if (widget.initialText.isNotEmpty) {
+      _controller.selection =
+          TextSelection.collapsed(offset: widget.initialText.length);
+    }
     _controller.addListener(_onTextChange);
     _subscribeTranscripts();
   }
   @override
   void didUpdateWidget(InputBar old) {
     super.didUpdateWidget(old);
+    if (old.initialText != widget.initialText &&
+        widget.initialText != _controller.text) {
+      _controller.text = widget.initialText;
+      _controller.selection =
+          TextSelection.collapsed(offset: widget.initialText.length);
+      _empty = widget.initialText.trim().isEmpty;
+    }
     if (!identical(old.voice, widget.voice)) {
       _transcriptSub?.cancel();
       _subscribeTranscripts();
@@ -295,9 +314,12 @@ class _InputBarState extends State<InputBar> {
       _historyIndex = -1;
     }
     final next = _controller.text.isEmpty;
-    setState(() {
-      _empty = next;
-    });
+    if (_empty != next) {
+      setState(() {
+        _empty = next;
+      });
+    }
+    widget.onDraftChanged?.call(_controller.text);
   }
   @override
   void dispose() {
@@ -577,7 +599,7 @@ class _InputBarState extends State<InputBar> {
                 keyboardType: TextInputType.multiline,
                 textInputAction: TextInputAction.newline,
                 style: context.typo.mono.copyWith(
-                  fontSize: 13.5,
+                  fontSize: 15.0,
                   color: colors.text,
                 ),
                 cursorColor: colors.accent,
@@ -588,7 +610,7 @@ class _InputBarState extends State<InputBar> {
                       ? 'Add a caption…'
                       : 'Send a message…',
                   hintStyle: context.typo.mono.copyWith(
-                    fontSize: 13.5,
+                    fontSize: 15.0,
                     color: colors.muted,
                   ),
                   contentPadding: const EdgeInsets.symmetric(

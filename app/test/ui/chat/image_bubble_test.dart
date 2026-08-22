@@ -3,6 +3,7 @@
 
 import 'package:app/domain/session_state.dart';
 import 'package:app/ui/chat/widgets/image_bubble.dart';
+import 'package:app/ui/chat/widgets/chat_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -52,5 +53,22 @@ void main() {
     await tester.pump();
     expect(find.byIcon(Icons.broken_image_outlined), findsOneWidget);
     expect(find.byType(Image), findsNothing);
+  });
+  testWidgets('tapping image bubble opens fullscreen viewer', (tester) async {
+    await pump(
+      tester,
+      const MessageImage(data: _png, mime: 'image/jpeg'),
+      'a kitten',
+    );
+    await tester.pump();
+    await tester.tap(find.byType(ImageBubble));
+    await tester.pumpAndSettle();
+    expect(
+      find.descendant(
+        of: find.byType(ImageViewerDialog),
+        matching: find.text('a kitten'),
+      ),
+      findsOneWidget,
+    );
   });
 }

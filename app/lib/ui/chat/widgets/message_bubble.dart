@@ -59,9 +59,9 @@ class UserBubble extends StatelessWidget {
                       child: SelectableText(
                         message.text,
                         style: typo.mono.copyWith(
-                          fontSize: 13.5,
+                          fontSize: 15.0,
                           color: colors.text,
-                          height: 1.4,
+                          height: 1.45,
                         ),
                       ),
                     ),
