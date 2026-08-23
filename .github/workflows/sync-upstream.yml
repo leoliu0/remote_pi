@@ -1,0 +1,34 @@
+name: sync-upstream
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch and Merge Upstream
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          git remote add upstream https://github.com/jacobaraujo7/remote_pi.git || true
+          git fetch upstream main
+          
+          # Attempt clean merge; abort if conflicts exist
+          if git merge upstream/main -m "merge: auto-sync upstream/main"; then
+            git push origin main
+          else
+            echo "::warning::Merge conflicts detected between upstream/main and local main — skipping auto-merge."
+            git merge --abort
+          fi
