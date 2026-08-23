@@ -14,7 +14,6 @@ import 'package:app/ui/chat/widgets/input_bar.dart';
 import 'package:app/ui/chat/widgets/message_bubble.dart';
 import 'package:app/ui/chat/widgets/streaming_bubble.dart';
 import 'package:app/ui/chat/widgets/tool_request_card.dart';
-import 'package:app/config/dependencies.dart';
 import 'package:app/ui/chat/widgets/extension_ui_sheet.dart';
 import 'package:app/ui/settings/settings_sheet.dart';
 import 'package:app_settings/app_settings.dart';
@@ -23,7 +22,7 @@ import 'package:go_router/go_router.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:provider/provider.dart';
 
-class ChatPage extends StatelessWidget {
+class ChatPage extends StatefulWidget {
   /// Plan/24-fix-title: optional title hint passed via `go_router`
   /// `extra` from the Home tile. Used as the peer-label fallback in
   /// the AppBar so the user sees the right name *immediately* on
@@ -59,6 +58,51 @@ class ChatPage extends StatelessWidget {
   });
 
   @override
+  State<ChatPage> createState() => _ChatPageState();
+}
+
+class _ChatPageState extends State<ChatPage> {
+  final ScrollController _scrollController = ScrollController();
+  bool _showScrollToBottom = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _scrollController.addListener(_onScroll);
+  }
+
+  @override
+  void dispose() {
+    _scrollController.removeListener(_onScroll);
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  void _onScroll() {
+    if (!_scrollController.hasClients) return;
+    final show = _scrollController.offset > 100.0;
+    if (show != _showScrollToBottom) {
+      setState(() {
+        _showScrollToBottom = show;
+      });
+    }
+  }
+
+  void _scrollToBottom({bool animate = true}) {
+    if (!_scrollController.hasClients) return;
+    if (_scrollController.offset <= 0.0) return;
+    if (animate) {
+      _scrollController.animateTo(
+        0.0,
+        duration: const Duration(milliseconds: 250),
+        curve: Curves.easeOutCubic,
+      );
+    } else {
+      _scrollController.jumpTo(0.0);
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     final vm = context.watch<ChatViewModel>();
     final state = vm.state;
@@ -76,7 +120,23 @@ class ChatPage extends StatelessWidget {
             // surfaces those, and stacking duplicates noise the surface.
             if (state is ChatReady && state.pairingRevoked)
               _RevokedBanner(onRePair: () => context.go('/pair')),
-            Expanded(child: _buildBody(context, state, vm)),
+            Expanded(
+              child: Stack(
+                children: [
+                  Positioned.fill(
+                    child: _buildBody(context, state, vm),
+                  ),
+                  Positioned(
+                    right: 16,
+                    bottom: 12,
+                    child: _ScrollToBottomButton(
+                      visible: _showScrollToBottom,
+                      onPressed: () => _scrollToBottom(animate: true),
+                    ),
+                  ),
+                ],
+              ),
+            ),
             _buildInput(context, state, vm),
           ],
         ),
@@ -125,7 +185,7 @@ class ChatPage extends StatelessWidget {
     // "reconnecting" on the default runtime. The live signal takes over once
     // resolved.
     final resolved = vm.connectionResolved;
-    final isOnline = resolved ? vm.isRoomLive : initialOnline;
+    final isOnline = resolved ? vm.isRoomLive : widget.initialOnline;
     // Plan-18 follow-up — when the chat is "offline" (WS to relay
     // down or retrying), prefer a "reconectando" amber pill so the
     // user knows it's the relay, not the Pi cwd, that's gone.
@@ -138,11 +198,11 @@ class ChatPage extends StatelessWidget {
     // either line of the AppBar (room or peer) shows it instead of
     // the generic placeholders when the ViewModel hasn't finished
     // bootstrapping yet.
-    final roomName = _roomDisplayName(room, state, initialTitle);
+    final roomName = _roomDisplayName(room, state, widget.initialTitle);
     // Plan/32g — line 2 (device) falls back to `initialDevice` (the Mac name
     // Home passed), NOT `initialTitle` (the room name) — so it shows the right
     // device from frame 1 and doesn't flip when the PeerRecord loads.
-    final peerLabel = _peerDisplayName(peer, initialDevice);
+    final peerLabel = _peerDisplayName(peer, widget.initialDevice);
 
     return Container(
       height: 56,
@@ -153,7 +213,7 @@ class ChatPage extends StatelessWidget {
       ),
       child: Row(
         children: [
-          if (showBack)
+          if (widget.showBack)
             IconButton(
               icon: Icon(LucideIcons.chevronLeft, size: 18, color: colors.text),
               tooltip: 'Back',
@@ -426,6 +486,7 @@ class ChatPage extends StatelessWidget {
           );
         }
         return _MessageList(
+          controller: _scrollController,
           messages: visible,
           streaming: streaming,
           isWorking: vm.isWorking,
@@ -488,6 +549,7 @@ class ChatPage extends StatelessWidget {
       onSetQueued: (text) {
         prefs.clearDraft(peerEpk, roomId);
         vm.queueMessage(text);
+        _scrollToBottom();
       },
       onClearQueued: vm.clearQueuedMessage,
       // Plan/29 — hold-to-talk voice input. The VM is route-scoped (bound in
@@ -507,6 +569,7 @@ class ChatPage extends StatelessWidget {
         prefs.clearDraft(peerEpk, roomId);
         final image = context.read<AttachmentViewModel>().takeImageForSend();
         vm.sendMessage(text, image: image);
+        _scrollToBottom();
       },
     );
   }
@@ -608,6 +671,7 @@ class ChatPage extends StatelessWidget {
 // ---------------------------------------------------------------------------
 
 class _MessageList extends StatelessWidget {
+  final ScrollController? controller;
   final List<ChatMessage> messages;
   final StreamingMessage? streaming;
   final bool isWorking;
@@ -615,6 +679,7 @@ class _MessageList extends StatelessWidget {
   final bool briefToolCalls;
 
   const _MessageList({
+    this.controller,
     required this.messages,
     required this.streaming,
     required this.isWorking,
@@ -628,6 +693,7 @@ class _MessageList extends StatelessWidget {
     final totalCount = messages.length + (hasActiveTurn ? 1 : 0);
 
     return ListView.separated(
+      controller: controller,
       reverse: true,
       padding: const EdgeInsets.fromLTRB(16, 18, 16, 12),
       itemCount: totalCount,
@@ -661,6 +727,68 @@ class _MessageList extends StatelessWidget {
           },
         );
       },
+    );
+  }
+}
+
+class _ScrollToBottomButton extends StatelessWidget {
+  final bool visible;
+  final VoidCallback onPressed;
+
+  const _ScrollToBottomButton({
+    required this.visible,
+    required this.onPressed,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    return AnimatedScale(
+      scale: visible ? 1.0 : 0.0,
+      duration: const Duration(milliseconds: 200),
+      curve: Curves.easeOutCubic,
+      child: AnimatedOpacity(
+        opacity: visible ? 1.0 : 0.0,
+        duration: const Duration(milliseconds: 200),
+        curve: Curves.easeOutCubic,
+        child: IgnorePointer(
+          ignoring: !visible,
+          child: Material(
+            color: Colors.transparent,
+            child: Tooltip(
+              message: 'Scroll to bottom',
+              child: InkWell(
+                key: const Key('chat_scroll_to_bottom'),
+                onTap: visible ? onPressed : null,
+                customBorder: const CircleBorder(),
+                child: Container(
+                  width: 38,
+                  height: 38,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: colors.surface,
+                    border: Border.all(color: colors.border),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.2),
+                        blurRadius: 6,
+                        offset: const Offset(0, 2),
+                      ),
+                    ],
+                  ),
+                  child: Center(
+                    child: Icon(
+                      LucideIcons.chevronDown,
+                      size: 18,
+                      color: colors.text,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
