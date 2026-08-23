@@ -164,6 +164,42 @@ void main() {
     conn.dispose();
   });
 
+  test('running tool keeps the working pill after agent_done', () async {
+    final ch = _FakeChannel();
+    final storage = _FakeStorage();
+    final conn = ConnectionManager(
+      factory: (_, _) async => ch,
+      storage: storage,
+    );
+    final boxes = LocalBoxes();
+    final sync = SyncService(conn, boxes);
+    final read = SessionReadRepository(boxes);
+    final prefs = Preferences(_FakeSecureStorage());
+    await prefs.setSelectedPeerEpk(_peer.remoteEpk);
+    await prefs.setSelectedRoom(epk: _peer.remoteEpk, roomId: 'main');
+
+    conn.adopt(ch, _peer);
+    await Future<void>.delayed(const Duration(milliseconds: 30));
+    final vm = ChatViewModel(read, sync, conn, prefs, storage);
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+
+    ch.push(UserInput(id: 'u1', text: 'run bash'));
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    ch.push(ToolRequest(toolCallId: 't1', tool: 'bash', args: {'command': 'ls'}));
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    ch.push(AgentDone(inReplyTo: 'u1'));
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    expect(vm.isWorking, isTrue, reason: 'BASH RUNNING must keep the pill on');
+
+    ch.push(ToolResult(toolCallId: 't1', result: 'ok'));
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    expect(vm.isWorking, isFalse, reason: 'last tool done + agent_done → idle');
+
+    vm.dispose();
+    sync.dispose();
+    conn.dispose();
+  });
+
   test(
     'cancelled clears the stop state without deleting the user row',
     () async {

@@ -993,8 +993,34 @@ function _clearQueuedItems(targetId?: string): void {
   _broadcastQueuedState();
 }
 
+let _turnActive = false;
+let _agentActive = false;
+
 function _isBusyForQueueDrain(): boolean {
-  return _currentTurnId !== null || _myRoomMeta?.working === true;
+  return _turnActive || _agentActive || _currentTurnId !== null || _myRoomMeta?.working === true;
+}
+
+function _maybeFinalizeTurn(): void {
+  if (_turnActive || _agentActive) return;
+  if (_anyPeerActive() && _currentTurnId) {
+    const turnId = _currentTurnId;
+    _broadcastToActive({ type: "agent_done", in_reply_to: turnId });
+    for (let i = _messageBuffer.length - 1; i >= 0; i--) {
+      const last = _messageBuffer[i];
+      if (last?.role !== "assistant") continue;
+      const fullText = _extractAssistantText(last.content);
+      if (fullText) {
+        _broadcastToActive({
+          type: "agent_message",
+          in_reply_to: turnId,
+          text: fullText,
+        });
+      }
+      break;
+    }
+    _currentTurnId = null;
+  }
+  _maybeDrainQueuedItem();
 }
 
 function _normalizeSteerText(text: string): string {
@@ -1507,6 +1533,8 @@ function _goIdle(byeReason?: import("./protocol/types.js").ByeReason): void {
   _activePeers.clear();
   _peerShort = "";
   _currentTurnId = null;
+  _turnActive = false;
+  _agentActive = false;
   _pendingReceivedImagePreviews.length = 0;
   _pendingSteers = [];
   _lastConsumedSteerText = null;
@@ -2258,6 +2286,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   });
 
   pi.on("agent_start", () => {
+    _agentActive = true;
     _agentRunActive = true;
     _agentRunGeneration += 1;
   });
@@ -2375,35 +2404,14 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   });
 
   pi.on("agent_end", () => {
+    _agentActive = false;
     for (const steer of _pendingSteers) {
       _broadcastToActive({ type: "steer_consumed", id: steer.id });
     }
     _pendingSteers = [];
-    // Finalize the turn, then rewrite the last assistant bubble with any
-    // local markdown images inlined as data URIs. Must come AFTER agent_done:
-    // the app persists streamed `/tmp/...` paths on done, then this replaces
-    // that row so the phone can render the image.
-    if (_anyPeerActive() && _currentTurnId) {
-      const turnId = _currentTurnId;
-      _broadcastToActive({ type: "agent_done", in_reply_to: turnId });
-      for (let i = _messageBuffer.length - 1; i >= 0; i--) {
-        const last = _messageBuffer[i];
-        if (last?.role !== "assistant") continue;
-        const fullText = _extractAssistantText(last.content);
-        if (fullText) {
-          _broadcastToActive({
-            type: "agent_message",
-            in_reply_to: turnId,
-            text: fullText,
-          });
-        }
-        break;
-      }
-      _currentTurnId = null;
-    }
     _flushPendingReceivedImagePreviews();
     _lastConsumedSteerText = null;
-    _maybeDrainQueuedItem();
+    _maybeFinalizeTurn();
 
     // agent_end listeners finish before pi-agent-core clears its active run.
     // Defer mesh delivery to the next event-loop turn so triggerTurn cannot
@@ -2423,6 +2431,8 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   // room_meta over the relay (plan/32) below — that's independent of the
   // broker and drives the app's working indicator.
   pi.on("turn_start", (_event, ctx) => {
+    _turnActive = true;
+    _agentActive = true;
     _lastEventCtx = ctx as unknown as typeof _lastEventCtx;
     if (ctx && (ctx as { sessionManager?: unknown }).sessionManager) {
       _hydrateMessageBufferFromSession((ctx as { sessionManager?: unknown }).sessionManager);
@@ -2445,12 +2455,13 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     }
   });
   pi.on("turn_end", () => {
+    _turnActive = false;
     // Plan/32 Part B: publish working=false as room_meta (raw, no debounce).
     if (_myRoomMeta) _myRoomMeta = { ..._myRoomMeta, working: false };
     if (_relay && _myRoomId) {
       _relay.sendControl({ type: "room_meta_update", room_id: _myRoomId, meta: { working: false } });
     }
-    _maybeDrainQueuedItem();
+    _maybeFinalizeTurn();
   });
 
   // Plan/32: compaction feedback. compact() doesn't run a turn, so bracket it

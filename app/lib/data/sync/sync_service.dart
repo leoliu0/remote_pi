@@ -78,6 +78,8 @@ class SyncService extends Service {
   // pill, no box-key matching needed).
   bool _working = false;
   bool _sawRemoteWorking = false;
+  bool _turnEnded = false;
+  final Set<String> _openToolIds = {};
   // Id of the user message the in-flight reply is answering — the `cancel`
   // target while working. Null when idle.
   String? _workingReplyTo;
@@ -169,6 +171,8 @@ class SyncService extends Service {
     _chunkReplyTo = '';
     _workingReplyTo = null;
     _sawRemoteWorking = false;
+    _turnEnded = false;
+    _openToolIds.clear();
     _setQueuedMessages(const []);
     // Session switch: the previous chat's in-flight sends are no longer ours
     // to confirm — drop their backstops so a stale timer can't fire later.
@@ -477,7 +481,10 @@ class SyncService extends Service {
         // Finalize whatever text accumulated since the last tool boundary.
         final text = _finalizeSegment();
         _clearSteeringLabel(inReplyTo);
-        _setWorking(false, preview: text.isEmpty ? null : text);
+        _turnEnded = true;
+        if (_openToolIds.isEmpty) {
+          _setWorking(false, preview: text.isEmpty ? null : text);
+        }
       case AgentMessage(:final inReplyTo, :final text):
         // Live finalize writes `agent_<uuid>` rows. History / replay uses
         // `inReplyTo`. Prefer the latest assistant bubble so a post-done
@@ -565,6 +572,9 @@ class SyncService extends Service {
         // BEFORE the tool, so "narration → command → narration" renders in
         // order instead of all text landing after the commands.
         _finalizeSegment();
+        _openToolIds.add(toolCallId);
+        _turnEnded = false;
+        _setWorking(true);
         // ignore: discarded_futures
         _upsert(
           MsgRole.tool,
@@ -585,6 +595,7 @@ class SyncService extends Service {
         );
 
       case ToolResult(:final toolCallId, :final result, :final error):
+        _openToolIds.remove(toolCallId);
         // ignore: discarded_futures
         _upsert(MsgRole.tool, toolCallId, (seq, existing) {
           final base =
@@ -607,6 +618,9 @@ class SyncService extends Service {
                 ),
               );
         });
+        if (_openToolIds.isEmpty && _turnEnded) {
+          _setWorking(false);
+        }
 
       case Cancelled(:final targetId):
         _pendingSendTimers.remove(targetId)?.cancel();
@@ -617,6 +631,8 @@ class SyncService extends Service {
         // ignore: discarded_futures
         _removePendingById(targetId);
         _clearSteeringLabels();
+        _openToolIds.clear();
+        _turnEnded = false;
         _setWorking(false);
 
       case Bye(:final rawReason):

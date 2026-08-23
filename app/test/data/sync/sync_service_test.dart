@@ -380,6 +380,28 @@ void main() {
     s.sync.dispose();
   });
 
+  test('agent_done while a tool is running stays working until tool_result', () async {
+    final s = await setup();
+    s.ch.push(UserInput(id: 'u1', text: 'run bash'));
+    await _settle();
+    s.ch.push(ToolRequest(toolCallId: 't1', tool: 'bash', args: {'command': 'ls'}));
+    await _settle();
+    expect(s.sync.isWorking, isTrue);
+    expect(index(s.epk)?.status, SessionActivity.working);
+
+    s.ch.push(AgentDone(inReplyTo: 'u1'));
+    await _settle();
+    expect(s.sync.isWorking, isTrue, reason: 'tool still running after agent_done');
+    expect(index(s.epk)?.status, SessionActivity.working);
+
+    s.ch.push(ToolResult(toolCallId: 't1', result: 'ok'));
+    await _settle();
+    expect(s.sync.isWorking, isFalse);
+    expect(index(s.epk)?.status, SessionActivity.idle);
+    s.conn.dispose();
+    s.sync.dispose();
+  });
+
   test('agent_message after agent_done rewrites the streamed assistant row', () async {
     final s = await setup();
     s.ch.push(AgentChunk(
