@@ -2604,21 +2604,22 @@ class CockpitViewModel extends ChangeNotifier {
   /// troca pro Default antes.
   Future<void> deleteRealm(String id) async {
     if (id == Realm.defaultId || !realmCtrl.exists(id)) return;
+    // Migra na memória primeiro e persiste em LOTE: um realm cheio salvava um
+    // workspace por vez, e cada gravação espera a própria janela de debounce
+    // do store (mesma conta que fazia o reorder do rail custar ~2s).
+    final locais = <Project>[]; // forks são runtime, não persistem
+    final remotos = <Project>[];
     for (var i = 0; i < _projectList.length; i++) {
       final p = _projectList[i];
       if (p.realmId != id) continue;
       final moved = p.copyWith(realmId: Realm.defaultId);
       _projectList[i] = moved;
-      if (p.parentId == null && !p.isSystemTerminal) {
-        if (p.isRemoteTerminal) {
-          await _remoteHosts.updatePin(
-            _pinIdOf(p.id),
-            realmId: Realm.defaultId,
-          );
-        } else {
-          await _projects.save(moved); // forks são runtime, não persistem
-        }
-      }
+      if (p.parentId != null || p.isSystemTerminal) continue;
+      (p.isRemoteTerminal ? remotos : locais).add(moved);
+    }
+    if (locais.isNotEmpty) await _projects.saveAll(locais);
+    for (final p in remotos) {
+      await _remoteHosts.updatePin(_pinIdOf(p.id), realmId: Realm.defaultId);
     }
     if (realmCtrl.activeId == id) await switchRealm(Realm.defaultId);
     await realmCtrl.remove(id);
@@ -2784,19 +2785,32 @@ class CockpitViewModel extends ChangeNotifier {
     var insertAt = roots.indexWhere((p) => p.id == targetId);
     if (!before) insertAt += 1;
     roots.insert(insertAt, moved);
-    // Reatribui order sequencial (0..n) e persiste cada raiz. Remoto grava no
-    // pin (RemoteHostsStore); local no repositório de projetos.
+    // Reatribui order sequencial (0..n) na MEMÓRIA e pinta a tela ANTES de
+    // persistir: reordenar é gesto direto, tem que assentar no frame seguinte.
+    // Antes a UI só era notificada depois de todas as gravações, e cada uma
+    // esperava a própria janela de debounce do store — com uma dúzia de
+    // workspaces, os ~2s que o usuário via.
+    final updated = <Project>[];
     for (var i = 0; i < roots.length; i++) {
-      final updated = roots[i].copyWith(order: i);
-      final idx = _projectList.indexWhere((p) => p.id == updated.id);
-      if (idx >= 0) _projectList[idx] = updated;
-      if (updated.isRemoteTerminal) {
-        await _remoteHosts.updatePin(_pinIdOf(updated.id), order: i);
-      } else {
-        await _projects.save(updated);
-      }
+      final p = roots[i].copyWith(order: i);
+      final idx = _projectList.indexWhere((e) => e.id == p.id);
+      if (idx >= 0) _projectList[idx] = p;
+      updated.add(p);
     }
     notifyListeners();
+
+    // Persistência depois. Locais numa escrita só (saveAll); remotos gravam no
+    // pin (RemoteHostsStore), que é outro store.
+    final locais = [
+      for (final p in updated)
+        if (!p.isRemoteTerminal) p,
+    ];
+    if (locais.isNotEmpty) await _projects.saveAll(locais);
+    for (final p in updated) {
+      if (p.isRemoteTerminal) {
+        await _remoteHosts.updatePin(_pinIdOf(p.id), order: p.order);
+      }
+    }
   }
 
   /// Extrai o id do pin a partir do id do workspace remoto (tira o prefixo).

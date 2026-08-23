@@ -24,6 +24,30 @@ As versões seguem o `version:` do `pubspec.yaml` (SSOT). O campo `notes` do
     linhas não-vazias — o começo da seção deve fazer sentido sozinho.
 -->
 
+## [1.28.9] - 2026-08-21
+
+**Still a beta for the upcoming 2.0.0.** Several fixes around remote hosts,
+databases and the workspace list.
+
+### Fixed
+
+- **Editing or removing a remote host did nothing.** The change was never
+  saved, and no error showed up — adding a host worked, which made it look
+  arbitrary. Picking your SSH key is also friendlier now: choosing the `.pub`
+  file by mistake no longer fails with a confusing message about file
+  permissions, and hosts already saved that way are corrected automatically.
+- **Databases reordered themselves.** Saving a connection sent it to the bottom
+  of the list. Connections are now always listed alphabetically, and the
+  `databases.json` file in your repository is written in that order too, so
+  saving stops producing noisy diffs.
+- **Reordering workspaces took about two seconds** to settle after the drop.
+  It is immediate now. Deleting a realm with many workspaces was slow for the
+  same reason and is fixed as well.
+- **Markdown containing a LaTeX formula could crash the app.**
+- After an update, Cockpit no longer keeps talking to the background server
+  left behind by the previous version — which is how a shipped fix could end
+  up never running.
+
 ## [1.28.8] - 2026-08-20
 
 **Still a beta for the upcoming 2.0.0.** The Windows terminal fix, this time

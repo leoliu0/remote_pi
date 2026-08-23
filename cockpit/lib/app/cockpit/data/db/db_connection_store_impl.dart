@@ -55,7 +55,9 @@ class DbConnectionStoreImpl implements DbConnectionStore {
         origin: DbConnectionOrigin.detected,
       );
     }
-    return byName.values.toList();
+    // Alfabética, sempre: a ordem do arquivo (e a de detecção) não deve
+    // definir a ordem da tela. Ver DbConnection.compareByName.
+    return byName.values.toList()..sort(DbConnection.compareByName);
   }
 
   @override
@@ -63,9 +65,13 @@ class DbConnectionStoreImpl implements DbConnectionStore {
     String workspaceRoot,
     List<DbConnection> connections,
   ) async {
-    final registered = connections
-        .where((c) => c.origin == DbConnectionOrigin.registered)
-        .toList();
+    final registered =
+        connections
+            .where((c) => c.origin == DbConnectionOrigin.registered)
+            .toList()
+          // O arquivo também sai ordenado: ele é versionado, e gravar na ordem
+          // da memória produzia diff de reordenação a cada salvamento.
+          ..sort(DbConnection.compareByName);
     final file = File('$workspaceRoot/$_dirName/$_fileName');
     await file.parent.create(recursive: true);
     const encoder = JsonEncoder.withIndent('  ');

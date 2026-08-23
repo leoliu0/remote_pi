@@ -41,7 +41,9 @@ Future<List<DbConnection>> loadRemoteConnections(
     for (final c in registered) c.name: c,
     for (final c in local) c.name: c, // local sobrepõe registrado.
   };
-  return byName.values.toList();
+  // Mesma ordem do caminho local (ver DbConnection.compareByName): o painel
+  // não pode mudar de comportamento por o workspace ser remoto.
+  return byName.values.toList()..sort(DbConnection.compareByName);
 }
 
 /// Constrói o [RemoteDbExecutor] que roda uma query SQL no host via o

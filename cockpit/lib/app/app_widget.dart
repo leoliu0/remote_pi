@@ -78,14 +78,27 @@ class AppRoot extends StatelessWidget {
         // SafeArea pra não passar por baixo da status bar / home indicator; o
         // fundo do tema é pintado **edge-to-edge** (ColoredBox) atrás da
         // SafeArea, então os insets ficam na cor do app, nunca pretos.
-        Widget content = _AppZoom(
-          scale: uiScale,
-          child: CockpitTheme(
-            colors: tokens.colors,
-            typo: tokens.typo,
-            syntax: tokens.syntax,
-            terminal: tokens.terminal,
-            child: child ?? const SizedBox(),
+        // Cor de seleção do app inteiro. O `ShadcnApp` não é `MaterialApp`, e
+        // sem um `DefaultSelectionStyle` acima o fallback do Flutter tem
+        // `selectionColor` NULO — qualquer widget que o desreferencie com `!`
+        // crasha ao montar. Foi o que derrubou o markdown do agente
+        // (`gpt_markdown`, `_SelectableAdapter.createRenderObject`), e valeria
+        // para qualquer coisa selecionável daqui pra frente.
+        //
+        // Fica no topo, junto do tema: cor de seleção é decisão de tema, não
+        // de widget.
+        Widget content = DefaultSelectionStyle(
+          selectionColor: tokens.terminal.selection,
+          cursorColor: tokens.colors.accent,
+          child: _AppZoom(
+            scale: uiScale,
+            child: CockpitTheme(
+              colors: tokens.colors,
+              typo: tokens.typo,
+              syntax: tokens.syntax,
+              terminal: tokens.terminal,
+              child: child ?? const SizedBox(),
+            ),
           ),
         );
         if (isMobilePlatform) content = SafeArea(child: content);
