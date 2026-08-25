@@ -24,6 +24,35 @@ As versões seguem o `version:` do `pubspec.yaml` (SSOT). O campo `notes` do
     linhas não-vazias — o começo da seção deve fazer sentido sozinho.
 -->
 
+## [1.28.10] - 2026-08-25
+
+**Still a beta for the upcoming 2.0.0.** Commit message automations work again,
+and the workspace list behaves the way you expect. Thanks, @pretodev.
+
+### Fixed
+
+- **Generating a commit message failed on three harnesses.** Pi offered a model
+  its own runtime then refused; OpenCode returned an empty message and hid the
+  real reason; Copilot ran without proper isolation. All three are fixed, and
+  errors now reach the screen instead of vanishing.
+- **Clicking a workspace no longer expands its worktrees by accident.** The
+  card selects, and the chevron next to it toggles the list on its own.
+- **Right-clicking a remote workspace opened no menu and removed the pin
+  right away.** It now opens the menu at the cursor, like every other item.
+- The workspace list is lighter with many workspaces open.
+
+### Changed
+
+- **The model list only offers what your account can actually use.** Each
+  harness reports its own models now, and where one routes automatically
+  (Copilot, Claude Code) Cockpit stops pretending you can choose.
+
+### Added
+
+- **`previewOpen` in `.cockpit/tasks.json`** (`always` / `start` / `never`):
+  with `start`, restarting a task no longer reopens the browser every time.
+- Structured JSON logs are colorized in the task terminal.
+
 ## [1.28.9] - 2026-08-21
 
 **Still a beta for the upcoming 2.0.0.** Several fixes around remote hosts,
