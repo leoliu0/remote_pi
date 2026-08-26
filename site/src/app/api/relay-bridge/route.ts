@@ -323,6 +323,46 @@ export async function POST(req: NextRequest) {
       sendToRelay(state, payload);
       return NextResponse.json({ ok: true });
     }
+    if (body.action === "set_model" && body.model) {
+      const modelStr = String(body.model);
+      const [provider, model_id] = modelStr.includes("/") ? modelStr.split("/") : ["google", modelStr];
+      const payload = {
+        type: "model_set",
+        id: `act_${Date.now()}`,
+        provider,
+        model_id,
+      };
+      sendToRelay(state, payload);
+      return NextResponse.json({ ok: true });
+    }
+
+    if (body.action === "set_thinking" && body.thinking) {
+      const payload = {
+        type: "thinking_set",
+        id: `act_${Date.now()}`,
+        level: body.thinking,
+      };
+      sendToRelay(state, payload);
+      return NextResponse.json({ ok: true });
+    }
+
+    if (body.action === "compact") {
+      const payload = {
+        type: "session_compact",
+        id: `act_${Date.now()}`,
+      };
+      sendToRelay(state, payload);
+      return NextResponse.json({ ok: true });
+    }
+
+    if (body.action === "new_session") {
+      const payload = {
+        type: "session_new",
+        id: `act_${Date.now()}`,
+      };
+      sendToRelay(state, payload);
+      return NextResponse.json({ ok: true });
+    }
 
     return NextResponse.json({ ok: false, error: "Unknown action" }, { status: 400 });
   } catch (err: any) {

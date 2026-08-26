@@ -105,7 +105,6 @@ async function parseJsonlFile(filePath: string, maxMessages = 200): Promise<Pars
           });
         }
       } else if (item.type === "user" && item.toolUseResult) {
-        // Tool result attach
         const toolUseId = item.message?.content?.[0]?.tool_use_id;
         const resContent = typeof item.toolUseResult === "string" ? item.toolUseResult : JSON.stringify(item.toolUseResult);
         if (toolUseId) {
@@ -117,7 +116,7 @@ async function parseJsonlFile(filePath: string, maxMessages = 200): Promise<Pars
         }
       }
 
-      // ── Format 2: Native Pi Agent (.pi/agent/sessions/*.jsonl) ───────────────
+      // ── Format 2: Native Pi Agent & OMP (.omp/agent/sessions/*.jsonl) ────────
       if (item.type === "message" && item.message) {
         const m = item.message;
         const ts = m.timestamp || new Date(item.timestamp || Date.now()).getTime();
@@ -199,8 +198,22 @@ async function parseJsonlFile(filePath: string, maxMessages = 200): Promise<Pars
     } catch {}
   }
 
-  // Return the latest messages (slice to maxMessages to keep UI responsive)
   return rawMessages.slice(-maxMessages);
+}
+
+function findCwdInJsonl(filePath: string): string | null {
+  try {
+    const lines = fs.readFileSync(filePath, "utf8").split("\n").slice(0, 10);
+    for (const l of lines) {
+      if (!l.trim()) continue;
+      try {
+        const item = JSON.parse(l);
+        if (item.cwd) return item.cwd;
+        if (item.message?.cwd) return item.message.cwd;
+      } catch {}
+    }
+  } catch {}
+  return null;
 }
 
 function findJsonlFilesForCwd(cwdParam: string | null, roomId: string | null): string[] {
@@ -221,7 +234,6 @@ function findJsonlFilesForCwd(cwdParam: string | null, roomId: string | null): s
         const full = path.join(baseDir, entry);
         if (!fs.statSync(full).isDirectory()) continue;
 
-        // Check if directory name matches cwd
         let isMatch = false;
         if (cwdParam) {
           const normCwd = cwdParam.replace(/[\/\\]/g, "-").replace(/^-+|-+$/g, "").toLowerCase();
@@ -245,19 +257,16 @@ function findJsonlFilesForCwd(cwdParam: string | null, roomId: string | null): s
             continue;
           }
 
-          // Inspect first line of newest file
+          // Inspect the first few lines of the newest file to extract cwd
           const newest = files.sort().pop()!;
-          const firstLine = fs.readFileSync(path.join(full, newest), "utf8").split("\n")[0];
-          try {
-            const meta = JSON.parse(firstLine);
-            if (meta?.cwd) {
-              if (cwdParam && (meta.cwd === cwdParam || meta.cwd.toLowerCase() === cwdParam.toLowerCase())) {
-                for (const f of files) foundFiles.push(path.join(full, f));
-              } else if (roomId && roomIdForCwd(meta.cwd) === roomId) {
-                for (const f of files) foundFiles.push(path.join(full, f));
-              }
+          const extractedCwd = findCwdInJsonl(path.join(full, newest));
+          if (extractedCwd) {
+            if (cwdParam && (extractedCwd === cwdParam || extractedCwd.toLowerCase() === cwdParam.toLowerCase())) {
+              for (const f of files) foundFiles.push(path.join(full, f));
+            } else if (roomId && roomIdForCwd(extractedCwd) === roomId) {
+              for (const f of files) foundFiles.push(path.join(full, f));
             }
-          } catch {}
+          }
         }
       }
     } catch {}
@@ -278,7 +287,6 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ ok: true, count: 0, messages: [] });
     }
 
-    // Sort by file modified time and parse the latest file
     matchedFiles.sort((a, b) => {
       try {
         return fs.statSync(a).mtimeMs - fs.statSync(b).mtimeMs;

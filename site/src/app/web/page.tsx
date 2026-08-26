@@ -221,15 +221,63 @@ export default function WebPage() {
     setView("home");
   };
 
-  const handleQuickAction = (action: string, payload?: string) => {
-    if (action === "compact") {
-      alert("Session context compaction requested.");
-    } else if (action === "new_session") {
-      alert("Started new clean session.");
-    } else if (action === "set_model") {
-      if (activeSession) {
+  const handleQuickAction = async (action: string, payload?: string) => {
+    if (!activeSession) return;
+    try {
+      if (action === "set_model" && payload) {
         setActiveSession({ ...activeSession, model: payload });
+        await fetch("/api/relay-bridge", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            sessionId: activeSession.id,
+            roomId: activeSession.roomId,
+            remoteEpk: activeSession.remoteEpk,
+            relayUrl: activeSession.relayUrl,
+            action: "set_model",
+            model: payload,
+          }),
+        });
+      } else if (action === "set_thinking" && payload) {
+        await fetch("/api/relay-bridge", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            sessionId: activeSession.id,
+            roomId: activeSession.roomId,
+            remoteEpk: activeSession.remoteEpk,
+            relayUrl: activeSession.relayUrl,
+            action: "set_thinking",
+            thinking: payload,
+          }),
+        });
+      } else if (action === "compact") {
+        await fetch("/api/relay-bridge", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            sessionId: activeSession.id,
+            roomId: activeSession.roomId,
+            remoteEpk: activeSession.remoteEpk,
+            relayUrl: activeSession.relayUrl,
+            action: "compact",
+          }),
+        });
+      } else if (action === "new_session") {
+        await fetch("/api/relay-bridge", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            sessionId: activeSession.id,
+            roomId: activeSession.roomId,
+            remoteEpk: activeSession.remoteEpk,
+            relayUrl: activeSession.relayUrl,
+            action: "new_session",
+          }),
+        });
       }
+    } catch (err) {
+      console.warn("Failed to dispatch quick action", err);
     }
   };
 
@@ -288,6 +336,7 @@ export default function WebPage() {
 
       {showQuickActions && (
         <QuickActionsModal
+          activeModel={activeSession?.model}
           onClose={() => setShowQuickActions(false)}
           onAction={handleQuickAction}
         />
