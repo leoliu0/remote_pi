@@ -79,7 +79,10 @@ void main() {
         expect(
           TerminalHarnessClassifier.classify(
             executable: 'node',
-            argv: ['node', '/usr/lib/node_modules/@anthropic-ai/claude-code/cli.js'],
+            argv: [
+              'node',
+              '/usr/lib/node_modules/@anthropic-ai/claude-code/cli.js',
+            ],
           ),
           equals(HarnessKind.claudeCode),
         );
@@ -250,10 +253,7 @@ void main() {
     group('Pi', () {
       test('direct interactive launch and resume', () {
         expect(
-          TerminalHarnessClassifier.classify(
-            executable: 'pi',
-            argv: ['pi'],
-          ),
+          TerminalHarnessClassifier.classify(executable: 'pi', argv: ['pi']),
           equals(HarnessKind.pi),
         );
         expect(

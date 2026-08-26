@@ -132,11 +132,11 @@ class SidecarTerminalConnector implements TurnStatusSource {
       // lixo e a falha ficava muda.
       unawaited(_child!.stdout.drain<void>());
       final diagnostics = StringBuffer();
-      _child!.stderr
-          .transform(const Utf8Decoder(allowMalformed: true))
-          .listen((chunk) {
-            if (diagnostics.length < 2000) diagnostics.write(chunk);
-          }, onError: (_) {});
+      _child!.stderr.transform(const Utf8Decoder(allowMalformed: true)).listen((
+        chunk,
+      ) {
+        if (diagnostics.length < 2000) diagnostics.write(chunk);
+      }, onError: (_) {});
 
       // Morte do filho é resposta definitiva: para de esperar na hora. Sem
       // isto, um servidor que nem chega a abrir o socket ainda custava os

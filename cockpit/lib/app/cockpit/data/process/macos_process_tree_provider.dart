@@ -4,16 +4,14 @@ import 'dart:io';
 import 'package:cockpit/app/cockpit/domain/contracts/process_tree_provider.dart';
 import 'package:cockpit/app/cockpit/domain/entities/process_snapshot.dart';
 
-typedef ProcessRunner = Future<ProcessResult> Function(
-  String executable,
-  List<String> arguments,
-);
+typedef ProcessRunner =
+    Future<ProcessResult> Function(String executable, List<String> arguments);
 
 class MacosProcessTreeProvider implements ProcessTreeProvider {
   final ProcessRunner _runner;
 
   MacosProcessTreeProvider({ProcessRunner? runner})
-      : _runner = runner ?? Process.run;
+    : _runner = runner ?? Process.run;
 
   @override
   Future<List<ProcessSnapshot>> getProcessSnapshots({

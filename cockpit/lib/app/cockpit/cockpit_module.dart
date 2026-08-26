@@ -42,12 +42,14 @@ import 'package:cockpit/app/cockpit/data/setup/environment_installer_impl.dart';
 import 'package:cockpit/app/cockpit/data/hooks/terminal_status_server_impl.dart';
 import 'package:cockpit/app/cockpit/data/tasks/pty_task_runner.dart';
 import 'package:cockpit/app/cockpit/data/tasks/task_discovery_impl.dart';
+import 'package:cockpit/app/cockpit/data/http/http_request_runner_impl.dart';
 import 'package:cockpit/app/cockpit/data/process/process_tree_provider_factory.dart';
 import 'package:cockpit/app/cockpit/data/terminal/file_terminal_scrollback_store.dart';
 import 'package:cockpit/app/cockpit/data/remote/json_remote_hosts_store.dart';
 import 'package:cockpit/app/cockpit/domain/contracts/remote_hosts_store.dart';
 import 'package:cockpit/app/cockpit/data/terminal/sidecar/sidecar_terminal_connector.dart';
 import 'package:cockpit/app/cockpit/data/terminal/sidecar/sidecar_terminal_gateway_factory.dart';
+import 'package:cockpit/app/cockpit/domain/contracts/http_request_runner.dart';
 import 'package:cockpit/app/cockpit/domain/contracts/process_tree_provider.dart';
 import 'package:cockpit/app/cockpit/domain/services/terminal_harness_monitor.dart';
 import 'package:cockpit/app/cockpit/data/update/auto_updater_self_updater.dart';
@@ -94,6 +96,7 @@ import 'package:cockpit/app/cockpit/ui/viewmodels/file_ops_controller.dart';
 import 'package:cockpit/app/cockpit/ui/viewmodels/realm_controller.dart';
 import 'package:cockpit/app/cockpit/ui/viewmodels/session_notifications_controller.dart';
 import 'package:cockpit/app/cockpit/ui/viewmodels/remote_workspace_controller.dart';
+import 'package:cockpit/app/cockpit/ui/viewmodels/http_viewmodel.dart';
 import 'package:cockpit/app/cockpit/ui/viewmodels/database_viewmodel.dart';
 import 'package:cockpit/app/cockpit/ui/session/task_terminal_store.dart';
 import 'package:cockpit/app/cockpit/ui/viewmodels/setup_viewmodel.dart';
@@ -201,6 +204,7 @@ Future<Module> buildCockpitModule({
         ..addInstance<SshKeyInspector>(const SshKeyPemInspector())
         ..addLazySingleton<SshTunnel>(SshTunnelImpl.new)
         ..addLazySingleton<DbQueryService>(DbQueryService.new)
+        ..addLazySingleton<HttpRequestRunner>(HttpRequestRunnerImpl.new)
         ..addInstance<FileSearcher>(FileSearcherImpl())
         ..addInstance<ContentSearcher>(const ContentSearcherImpl())
         ..addInstance<GitBinary>(GitBinary())
@@ -300,7 +304,8 @@ Future<Module> buildCockpitModule({
             ..addChangeNotifier<SetupViewModel>(SetupViewModel.new)
             ..addChangeNotifier<TasksViewModel>(TasksViewModel.new)
             ..addChangeNotifier<UpdateViewModel>(UpdateViewModel.new)
-            ..addChangeNotifier<DatabaseViewModel>(DatabaseViewModel.new),
+            ..addChangeNotifier<DatabaseViewModel>(DatabaseViewModel.new)
+            ..addChangeNotifier<HttpViewModel>(HttpViewModel.new),
           child: (context, state) => const CockpitPage(),
         );
     },

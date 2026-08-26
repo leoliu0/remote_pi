@@ -50,7 +50,9 @@ abstract class TerminalHarnessNormalizer {
 
   static String _cleanBinaryName(String pathOrName) {
     var name = p.basename(pathOrName).toLowerCase();
-    if (name.endsWith('.exe') || name.endsWith('.cmd') || name.endsWith('.bat')) {
+    if (name.endsWith('.exe') ||
+        name.endsWith('.cmd') ||
+        name.endsWith('.bat')) {
       name = p.basenameWithoutExtension(name);
     }
     return name;
@@ -77,7 +79,9 @@ abstract class TerminalHarnessNormalizer {
     final harnessArgs = args.sublist(scriptIdx + 1);
 
     var scriptBase = p.basename(scriptPath).toLowerCase();
-    if (scriptBase.endsWith('.js') || scriptBase.endsWith('.py') || scriptBase.endsWith('.ts')) {
+    if (scriptBase.endsWith('.js') ||
+        scriptBase.endsWith('.py') ||
+        scriptBase.endsWith('.ts')) {
       scriptBase = p.basenameWithoutExtension(scriptBase);
     }
 

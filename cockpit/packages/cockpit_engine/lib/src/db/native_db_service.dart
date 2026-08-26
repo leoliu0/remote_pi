@@ -40,10 +40,7 @@ class NativeDbService implements DbService {
   }
 
   @override
-  Future<Object?> redis(
-    RemoteDbConnDescriptor conn,
-    List<String> parts,
-  ) async {
+  Future<Object?> redis(RemoteDbConnDescriptor conn, List<String> parts) async {
     if (parts.isEmpty) {
       throw const DbServiceException(DbErrorKind.queryFailed, 'Empty command.');
     }

@@ -27,9 +27,7 @@ void main() {
   test('saveAll persiste todos numa escrita só', () async {
     final store = await JsonStateStore.open(dir.path, 'projects');
     final repo = JsonProjectRepository(store);
-    final projetos = [
-      for (var i = 0; i < 12; i++) project('ws$i', 11 - i),
-    ];
+    final projetos = [for (var i = 0; i < 12; i++) project('ws$i', 11 - i)];
 
     final relogio = Stopwatch()..start();
     await repo.saveAll(projetos);

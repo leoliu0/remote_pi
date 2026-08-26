@@ -465,6 +465,36 @@
       "copied": "Copied",
       "copy": "Copy"
     },
+    "httpView": {
+      "saveRequestAs": "Save request as",
+      "couldNotSave": "Could not save",
+      "run": "Run",
+      "running": "Running…",
+      "noRequests": "No request in this file — write one, e.g. GET https://example.com",
+      "selectRequest": "Select request",
+      "requestCount": {
+        "one": "1 request",
+        "other": "${n} requests"
+      },
+      "runHint": "Run the request (⌘↵) to see the response here.",
+      "emptyBody": "Empty response body.",
+      "body": "JSON",
+      "headers": "Headers",
+      "raw": "Text",
+      "truncatedSuffix": " · truncated (response too large)",
+      "error": {
+        "title": "Request failed",
+        "noRequest": "No request found at the cursor.",
+        "invalidUrl": "Invalid URL: ${url}",
+        "unresolvedVariable": "Variable {{${name}}} has no value. Declare it with @${name} = … in this file.",
+        "bodyFileMissing": "Body file not found: ${path}",
+        "bodyFileUnreadable": "Could not read the body file ${path}: ${detail}",
+        "connectionFailed": "Could not reach the server: ${detail}",
+        "connectionFailedNoDetail": "Could not reach the server.",
+        "timeout": "The request timed out after ${seconds}s.",
+        "responseTooLarge": "The response is larger than the ${bytes} byte limit."
+      }
+    },
     "dbPanel": {
       "sectionDatabase": "DATABASE",
       "edit": "Edit…",

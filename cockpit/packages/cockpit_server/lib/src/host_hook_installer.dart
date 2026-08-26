@@ -110,7 +110,9 @@ class HostHookInstaller {
 
     for (final event in _events) {
       final existing = hooks[event];
-      final list = existing is List ? List<dynamic>.from(existing) : <dynamic>[];
+      final list = existing is List
+          ? List<dynamic>.from(existing)
+          : <dynamic>[];
       list.removeWhere(_isOurs);
       list.add(ourGroup());
       hooks[event] = list;
@@ -130,6 +132,5 @@ class HostHookInstaller {
     return hooks.any((h) => h is Map && h[_marker] == _markerValue);
   }
 
-  String _quote(String path) =>
-      path.contains(' ') ? '"$path"' : path;
+  String _quote(String path) => path.contains(' ') ? '"$path"' : path;
 }

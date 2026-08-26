@@ -119,8 +119,10 @@ class TerminalHarnessMonitor {
 
       // Collect native process snapshots
       if (nativeAnchors.isNotEmpty) {
-        final nativeRootPids =
-            nativeAnchors.map((a) => a.rootPid()).whereType<int>().toList();
+        final nativeRootPids = nativeAnchors
+            .map((a) => a.rootPid())
+            .whereType<int>()
+            .toList();
         final snapshots = await provider.getProcessSnapshots(
           rootPids: nativeRootPids,
         );
@@ -135,8 +137,10 @@ class TerminalHarnessMonitor {
         final distro = entry.key;
         final anchors = entry.value;
         final distroProvider = _resolveWslProvider(distro);
-        final rootPids =
-            anchors.map((a) => a.rootPid()).whereType<int>().toList();
+        final rootPids = anchors
+            .map((a) => a.rootPid())
+            .whereType<int>()
+            .toList();
         final snapshots = await distroProvider.getProcessSnapshots(
           rootPids: rootPids,
         );
@@ -160,17 +164,15 @@ class TerminalHarnessMonitor {
     final cached = _wslProviderCache[distro];
     if (cached != null) return cached;
 
-    final resolved = wslProvidersByDistro?[distro] ??
+    final resolved =
+        wslProvidersByDistro?[distro] ??
         wslProviderForDistro?.call(distro) ??
         provider;
     _wslProviderCache[distro] = resolved;
     return resolved;
   }
 
-  void _evaluateAnchor(
-    SessionAnchor anchor,
-    List<ProcessSnapshot> snapshots,
-  ) {
+  void _evaluateAnchor(SessionAnchor anchor, List<ProcessSnapshot> snapshots) {
     final rootPid = anchor.rootPid();
     if (rootPid == null) {
       _updateHarness(anchor, null);

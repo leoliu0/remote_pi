@@ -169,6 +169,7 @@ class Translations$cockpit$en {
 	late final Translations$cockpit$realmDialogs$en realmDialogs = Translations$cockpit$realmDialogs$en.internal(_root);
 	late final Translations$cockpit$dbRedisTable$en dbRedisTable = Translations$cockpit$dbRedisTable$en.internal(_root);
 	late final Translations$cockpit$dbQueryView$en dbQueryView = Translations$cockpit$dbQueryView$en.internal(_root);
+	late final Translations$cockpit$httpView$en httpView = Translations$cockpit$httpView$en.internal(_root);
 	late final Translations$cockpit$dbPanel$en dbPanel = Translations$cockpit$dbPanel$en.internal(_root);
 	late final Translations$cockpit$dbMongoView$en dbMongoView = Translations$cockpit$dbMongoView$en.internal(_root);
 	late final Translations$cockpit$dbConnectionDialog$en dbConnectionDialog = Translations$cockpit$dbConnectionDialog$en.internal(_root);
@@ -1604,6 +1605,59 @@ class Translations$cockpit$dbQueryView$en {
 	String get copy => 'Copy';
 }
 
+// Path: cockpit.httpView
+class Translations$cockpit$httpView$en {
+	Translations$cockpit$httpView$en.internal(this._root);
+
+	final Translations _root; // ignore: unused_field
+
+	// Translations
+
+	/// en: 'Save request as'
+	String get saveRequestAs => 'Save request as';
+
+	/// en: 'Could not save'
+	String get couldNotSave => 'Could not save';
+
+	/// en: 'Run'
+	String get run => 'Run';
+
+	/// en: 'Running…'
+	String get running => 'Running…';
+
+	/// en: 'No request in this file — write one, e.g. GET https://example.com'
+	String get noRequests => 'No request in this file — write one, e.g. GET https://example.com';
+
+	/// en: 'Select request'
+	String get selectRequest => 'Select request';
+
+	/// en: '(one) {1 request} (other) {${n} requests}'
+	String requestCount({required num n}) => (_root.$meta.cardinalResolver ?? PluralResolvers.cardinal('en'))(n,
+		one: '1 request',
+		other: '${n} requests',
+	);
+
+	/// en: 'Run the request (⌘↵) to see the response here.'
+	String get runHint => 'Run the request (⌘↵) to see the response here.';
+
+	/// en: 'Empty response body.'
+	String get emptyBody => 'Empty response body.';
+
+	/// en: 'JSON'
+	String get body => 'JSON';
+
+	/// en: 'Headers'
+	String get headers => 'Headers';
+
+	/// en: 'Text'
+	String get raw => 'Text';
+
+	/// en: ' · truncated (response too large)'
+	String get truncatedSuffix => ' · truncated (response too large)';
+
+	late final Translations$cockpit$httpView$error$en error = Translations$cockpit$httpView$error$en.internal(_root);
+}
+
 // Path: cockpit.dbPanel
 class Translations$cockpit$dbPanel$en {
 	Translations$cockpit$dbPanel$en.internal(this._root);
@@ -2603,6 +2657,45 @@ class Translations$theme$error$en {
 
 	/// en: 'The theme declares no variant. Add "dark", "light" or both under "variants".'
 	String get noVariants => 'The theme declares no variant. Add "dark", "light" or both under "variants".';
+}
+
+// Path: cockpit.httpView.error
+class Translations$cockpit$httpView$error$en {
+	Translations$cockpit$httpView$error$en.internal(this._root);
+
+	final Translations _root; // ignore: unused_field
+
+	// Translations
+
+	/// en: 'Request failed'
+	String get title => 'Request failed';
+
+	/// en: 'No request found at the cursor.'
+	String get noRequest => 'No request found at the cursor.';
+
+	/// en: 'Invalid URL: ${url}'
+	String invalidUrl({required Object url}) => 'Invalid URL: ${url}';
+
+	/// en: 'Variable {{${name}}} has no value. Declare it with @${name} = … in this file.'
+	String unresolvedVariable({required Object name}) => 'Variable {{${name}}} has no value. Declare it with @${name} = … in this file.';
+
+	/// en: 'Body file not found: ${path}'
+	String bodyFileMissing({required Object path}) => 'Body file not found: ${path}';
+
+	/// en: 'Could not read the body file ${path}: ${detail}'
+	String bodyFileUnreadable({required Object path, required Object detail}) => 'Could not read the body file ${path}: ${detail}';
+
+	/// en: 'Could not reach the server: ${detail}'
+	String connectionFailed({required Object detail}) => 'Could not reach the server: ${detail}';
+
+	/// en: 'Could not reach the server.'
+	String get connectionFailedNoDetail => 'Could not reach the server.';
+
+	/// en: 'The request timed out after ${seconds}s.'
+	String timeout({required Object seconds}) => 'The request timed out after ${seconds}s.';
+
+	/// en: 'The response is larger than the ${bytes} byte limit.'
+	String responseTooLarge({required Object bytes}) => 'The response is larger than the ${bytes} byte limit.';
 }
 
 // Path: settings.page.header
@@ -3945,6 +4038,29 @@ extension on Translations {
 			'cockpit.dbQueryView.saved' => 'saved',
 			'cockpit.dbQueryView.copied' => 'Copied',
 			'cockpit.dbQueryView.copy' => 'Copy',
+			'cockpit.httpView.saveRequestAs' => 'Save request as',
+			'cockpit.httpView.couldNotSave' => 'Could not save',
+			'cockpit.httpView.run' => 'Run',
+			'cockpit.httpView.running' => 'Running…',
+			'cockpit.httpView.noRequests' => 'No request in this file — write one, e.g. GET https://example.com',
+			'cockpit.httpView.selectRequest' => 'Select request',
+			'cockpit.httpView.requestCount' => ({required num n}) => (_root.$meta.cardinalResolver ?? PluralResolvers.cardinal('en'))(n, one: '1 request', other: '${n} requests', ), 
+			'cockpit.httpView.runHint' => 'Run the request (⌘↵) to see the response here.',
+			'cockpit.httpView.emptyBody' => 'Empty response body.',
+			'cockpit.httpView.body' => 'JSON',
+			'cockpit.httpView.headers' => 'Headers',
+			'cockpit.httpView.raw' => 'Text',
+			'cockpit.httpView.truncatedSuffix' => ' · truncated (response too large)',
+			'cockpit.httpView.error.title' => 'Request failed',
+			'cockpit.httpView.error.noRequest' => 'No request found at the cursor.',
+			'cockpit.httpView.error.invalidUrl' => ({required Object url}) => 'Invalid URL: ${url}',
+			'cockpit.httpView.error.unresolvedVariable' => ({required Object name}) => 'Variable {{${name}}} has no value. Declare it with @${name} = … in this file.',
+			'cockpit.httpView.error.bodyFileMissing' => ({required Object path}) => 'Body file not found: ${path}',
+			'cockpit.httpView.error.bodyFileUnreadable' => ({required Object path, required Object detail}) => 'Could not read the body file ${path}: ${detail}',
+			'cockpit.httpView.error.connectionFailed' => ({required Object detail}) => 'Could not reach the server: ${detail}',
+			'cockpit.httpView.error.connectionFailedNoDetail' => 'Could not reach the server.',
+			'cockpit.httpView.error.timeout' => ({required Object seconds}) => 'The request timed out after ${seconds}s.',
+			'cockpit.httpView.error.responseTooLarge' => ({required Object bytes}) => 'The response is larger than the ${bytes} byte limit.',
 			'cockpit.dbPanel.sectionDatabase' => 'DATABASE',
 			'cockpit.dbPanel.edit' => 'Edit…',
 			'cockpit.dbPanel.copyName' => 'Copy name',
@@ -4034,6 +4150,8 @@ extension on Translations {
 			'cockpit.contentSearch.sectionSearch' => 'SEARCH',
 			'cockpit.contentSearch.searchInFiles' => 'Search in files',
 			'cockpit.contentSearch.matchCase' => 'Match case',
+			_ => null,
+		} ?? switch (path) {
 			'cockpit.contentSearch.wholeWord' => 'Whole word',
 			'cockpit.contentSearch.useRegex' => 'Use regular expression',
 			'cockpit.contentSearch.invalidRegex' => 'Invalid regular expression.',
@@ -4057,8 +4175,6 @@ extension on Translations {
 			'cockpit.tasks.hotRestart' => 'Hot restart',
 			'cockpit.tasks.toggleDebugPaint' => 'Toggle debug paint',
 			'cockpit.tasks.togglePlatform' => 'Toggle platform',
-			_ => null,
-		} ?? switch (path) {
 			'cockpit.tasks.quit' => 'Quit',
 			'cockpit.notifications.agentFinished' => 'Agent finished',
 			'cockpit.notifications.open' => 'Open',

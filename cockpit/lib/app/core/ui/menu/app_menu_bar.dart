@@ -181,7 +181,9 @@ List<MenuBarMenu> buildAppMenus(
           ),
           MenuAction(
             tr.focusRight,
-            onSelected: workspace.hasWorkspace ? workspace.focusPaneRight : null,
+            onSelected: workspace.hasWorkspace
+                ? workspace.focusPaneRight
+                : null,
           ),
           MenuAction(
             tr.focusUp,
@@ -462,7 +464,6 @@ List<AppMenuItem<VoidCallback>> _toAppItems(
   if (out.isNotEmpty && out.last.isDivider) out.removeLast();
   return out;
 }
-
 
 /// Equivalente de janela dos papéis do SO. `null` = sem equivalente fora do
 /// macOS (about/services/hide/…) → item omitido. No mobile (iPad/Android) não

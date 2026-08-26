@@ -48,8 +48,7 @@ class SshKnownHosts {
         targetOf(host, port),
       ]).timeout(_timeout);
       final found =
-          result.exitCode == 0 &&
-          (result.stdout as String).trim().isNotEmpty;
+          result.exitCode == 0 && (result.stdout as String).trim().isNotEmpty;
       return found ? SshHostKeyStatus.known : SshHostKeyStatus.unknown;
     } on Object {
       // Sem `ssh-keygen` no PATH (raro; vem junto do ssh) → trate como
@@ -106,7 +105,8 @@ class SshKnownHosts {
   /// Grava [keys] no `known_hosts` do usuário. Só é chamado depois de o humano
   /// confirmar o fingerprint.
   Future<void> trust(List<String> keys) async {
-    final home = Platform.environment['HOME'] ?? Platform.environment['USERPROFILE'];
+    final home =
+        Platform.environment['HOME'] ?? Platform.environment['USERPROFILE'];
     if (home == null || home.isEmpty || keys.isEmpty) return;
     final dir = Directory('$home/.ssh');
     if (!dir.existsSync()) dir.createSync(recursive: true);

@@ -61,6 +61,7 @@ fn main() {
         "read-tab" | "read-pane" => commands::read("read-pane", args),
         "read-task" => commands::read("read-task", args),
         "db" => commands::db(args),
+        "http" => commands::http(args),
         "redis" => commands::redis(args),
         "mongo" => commands::mongo(args),
         "new-tab" => commands::new_tab(args),

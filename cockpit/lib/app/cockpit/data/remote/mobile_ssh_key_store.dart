@@ -61,7 +61,10 @@ GeneratedSshKey generateEd25519KeyPair(String comment) {
   final publicKey = Uint8List.fromList(signing.verifyKey); // 32B
   final privateKey = Uint8List.fromList(signing); // 64B (seed+público)
   final pair = OpenSSHEd25519KeyPair(publicKey, privateKey, comment);
-  return (pem: pair.toPem(), publicLine: _authorizedKeyLine(publicKey, comment));
+  return (
+    pem: pair.toPem(),
+    publicLine: _authorizedKeyLine(publicKey, comment),
+  );
 }
 
 /// Monta a linha `authorized_keys`: `ssh-ed25519 <base64(blob)> <comment>`, onde

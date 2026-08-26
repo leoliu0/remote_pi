@@ -88,8 +88,7 @@ class _RenderTerminalUnzoom extends RenderProxyBox {
     size = box;
   }
 
-  Matrix4 get _matrix =>
-      Matrix4.diagonal3Values(1 / _scale, 1 / _scale, 1.0);
+  Matrix4 get _matrix => Matrix4.diagonal3Values(1 / _scale, 1 / _scale, 1.0);
 
   @override
   bool get alwaysNeedsCompositing => _active;

@@ -111,7 +111,11 @@ void main() {
 
         final view = await reader.read(f.path) as FileViewText;
         // Salva sem alterar o conteúdo, usando o encoding original.
-        final ok = await reader.write(f.path, view.text, encoding: view.encoding);
+        final ok = await reader.write(
+          f.path,
+          view.text,
+          encoding: view.encoding,
+        );
 
         expect(ok, isTrue);
         // Os bytes no disco devem ser idênticos aos originais.
@@ -130,7 +134,11 @@ void main() {
         final f = File('${dir.path}/utf8.txt')..writeAsBytesSync(original);
 
         final view = await reader.read(f.path) as FileViewText;
-        final ok = await reader.write(f.path, view.text, encoding: view.encoding);
+        final ok = await reader.write(
+          f.path,
+          view.text,
+          encoding: view.encoding,
+        );
 
         expect(ok, isTrue);
         expect(f.readAsBytesSync(), original);

@@ -67,14 +67,11 @@ class RemoteTaskRunner implements TaskRunnerGateway {
   // Detecção de dev-server URL (auto-open do navegador) é do runner LOCAL; no
   // remoto o preview embutido não aponta pra localhost do host (plano 58/60).
   @override
-  Stream<TaskPreviewUrl> previewUrls() =>
-      const Stream<TaskPreviewUrl>.empty();
+  Stream<TaskPreviewUrl> previewUrls() => const Stream<TaskPreviewUrl>.empty();
 
   @override
   TaskRun runOf(String taskId) =>
-      _running[taskId]?.state ??
-      _lastState[taskId] ??
-      TaskRun.idleFor(taskId);
+      _running[taskId]?.state ?? _lastState[taskId] ?? TaskRun.idleFor(taskId);
 
   @override
   Stream<String> output(String taskId) =>
@@ -142,23 +139,23 @@ class RemoteTaskRunner implements TaskRunnerGateway {
     _running[def.id] = task;
     _emit(task.state);
 
-    task.sub = terminal.attach(info.id).listen(
-      (event) {
-        switch (event) {
-          case PtyOutputEvent(:final chunk):
-            if (!task.out.isClosed) {
-              task.out.add(
-                utf8.decode(chunk.bytes, allowMalformed: true),
-              );
+    task.sub = terminal
+        .attach(info.id)
+        .listen(
+          (event) {
+            switch (event) {
+              case PtyOutputEvent(:final chunk):
+                if (!task.out.isClosed) {
+                  task.out.add(utf8.decode(chunk.bytes, allowMalformed: true));
+                }
+                unawaited(terminal.ack(info.id, chunk.bytes.length));
+              case PtyExitEvent(:final exitCode):
+                _onExit(def.id, exitCode);
             }
-            unawaited(terminal.ack(info.id, chunk.bytes.length));
-          case PtyExitEvent(:final exitCode):
-            _onExit(def.id, exitCode);
-        }
-      },
-      onError: (_) => _onExit(def.id, -1),
-      onDone: () => _onExit(def.id, task.exitCode ?? 0),
-    );
+          },
+          onError: (_) => _onExit(def.id, -1),
+          onDone: () => _onExit(def.id, task.exitCode ?? 0),
+        );
   }
 
   @override

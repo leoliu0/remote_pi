@@ -1,12 +1,15 @@
 import 'dart:convert';
 import 'dart:io' show Directory, File, FileSystemException;
 
+import 'package:cockpit/app/cockpit/domain/contracts/http_request_runner.dart';
 import 'package:cockpit/app/cockpit/domain/contracts/task_discovery.dart';
 import 'package:cockpit/app/cockpit/domain/contracts/task_runner_gateway.dart';
 import 'package:cockpit/app/cockpit/domain/contracts/terminal_status_server.dart';
 import 'package:cockpit/app/cockpit/domain/entities/db_connection.dart';
 import 'package:cockpit/app/cockpit/domain/entities/db_result.dart';
 import 'package:cockpit/app/cockpit/domain/entities/dbq_document.dart';
+import 'package:cockpit/app/cockpit/domain/entities/http_document.dart';
+import 'package:cockpit/app/cockpit/domain/exceptions/http_request_error.dart';
 import 'package:cockpit/app/cockpit/domain/entities/project.dart';
 import 'package:cockpit/app/cockpit/domain/entities/sql_statements.dart';
 import 'package:cockpit/app/cockpit/domain/services/db_access_gate.dart';
@@ -36,6 +39,7 @@ class CockpitCliHandler {
   CockpitCliHandler(
     this._vm,
     this._db,
+    this._http,
     this._tasks,
     this._taskRuns,
     this._taskTerms,
@@ -43,6 +47,7 @@ class CockpitCliHandler {
 
   final CockpitViewModel _vm;
   final DbQueryService _db;
+  final HttpRequestRunner _http;
   final TaskDiscovery _tasks;
   final TaskRunnerGateway _taskRuns;
   final TaskTerminalStore _taskTerms;
@@ -447,6 +452,73 @@ class CockpitCliHandler {
           return CockpitCommandResult.ok(result.toJson());
         });
 
+      // ── `cockpit http …` — dispara requests de um arquivo `.http` pros
+      // agentes. Mesmo motor da tab (`HttpRequestRunner`), mesma saída JSON de
+      // uma linha do `cockpit db`. Texto em inglês por decisão: a CLI fala com
+      // agentes e scripts, não com a UI.
+      case 'http-list':
+        return _projectCommand(c, (project) async {
+          final (doc, err) = await _httpDoc(c);
+          if (err != null) return CockpitCommandResult.fail(err);
+          return CockpitCommandResult.ok([
+            for (var i = 0; i < doc!.requests.length; i++)
+              {
+                'index': i,
+                'name': doc.requests[i].name,
+                'method': doc.requests[i].method,
+                'url': doc.requests[i].url,
+              },
+          ]);
+        });
+
+      // `cockpit http run <file.http> [--request <nome|índice>]` — sem
+      // `--request`, roda o primeiro request do arquivo.
+      case 'http-run':
+        return _projectCommand(c, (project) async {
+          final (doc, err) = await _httpDoc(c);
+          if (err != null) return CockpitCommandResult.fail(err);
+          if (doc!.requests.isEmpty) {
+            return const CockpitCommandResult.fail(
+              'no_request: the file has no request',
+            );
+          }
+          final wanted = (c.args['request'] ?? '').toString();
+          var index = 0;
+          if (wanted.isNotEmpty) {
+            final asIndex = int.tryParse(wanted);
+            if (asIndex != null) {
+              if (asIndex < 0 || asIndex >= doc.requests.length) {
+                return CockpitCommandResult.fail(
+                  'no_request: no request at index $asIndex '
+                  '(the file has ${doc.requests.length})',
+                );
+              }
+              index = asIndex;
+            } else {
+              index = doc.requests.indexWhere(
+                (r) => r.name.toLowerCase() == wanted.toLowerCase(),
+              );
+              if (index < 0) {
+                return CockpitCommandResult.fail(
+                  'no_request: no request named "$wanted" '
+                  '(see `cockpit http list`)',
+                );
+              }
+            }
+          }
+          final path = (c.args['path'] ?? '').toString();
+          final timeout = int.tryParse('${c.args['timeout'] ?? ''}');
+          final result = await _http.send(
+            doc.resolveRequest(doc.requests[index]),
+            baseDir: Directory(path).parent.path,
+            timeout: Duration(seconds: timeout ?? 30),
+          );
+          return result.fold(
+            (value) => CockpitCommandResult.ok(value.toJson()),
+            (error) => CockpitCommandResult.fail(_httpErrorText(error)),
+          );
+        });
+
       // `cockpit redis` — comando de cache CLI-only (plano 51). `args.parts`
       // é a lista do comando (`['GET','foo']`). Reply cru em JSON.
       case 'redis-cmd':
@@ -690,7 +762,47 @@ class CockpitCliHandler {
   /// Molde dos comandos `db-*`: resolve o workspace (decisão K do plano 51 —
   /// `--workspace <id|path>` > pane emissor > erro, **nunca** cwd nem chute) e
   /// converte [DbQueryException] em `fail("<kind>: <mensagem>")`.
-  Future<CockpitCommandResult> _dbCommand(
+  /// Lê e parseia o `.http` de `args['path']` (absoluto — a CLI resolve
+  /// contra o cwd). Devolve `(doc, null)` ou `(null, erro em inglês)`.
+  Future<(HttpDocument?, String?)> _httpDoc(CockpitCommand c) async {
+    final path = (c.args['path'] ?? '').toString();
+    if (path.isEmpty) return (null, 'missing .http path');
+    try {
+      return (HttpDocument.parse(await File(path).readAsString()), null);
+    } on FileSystemException catch (e) {
+      return (null, 'cannot read "$path": ${e.message}');
+    }
+  }
+
+  /// Erro de request no formato `<kind>: <mensagem>` que a CLI reconstrói em
+  /// `{"error":{kind,message}}`. Em inglês por decisão (saída de CLI não é
+  /// traduzida); a UI usa `httpRequestErrorMessage`, que traduz.
+  static String _httpErrorText(HttpRequestError e) {
+    final detail = e.detail?.trim() ?? '';
+    return switch (e.kind) {
+      HttpRequestErrorKind.noRequest => 'no_request: no request found',
+      HttpRequestErrorKind.invalidUrl =>
+        'invalid_url: "$detail" is not a '
+            'valid absolute URL',
+      HttpRequestErrorKind.unresolvedVariable =>
+        'unresolved_variable: {{${e.variable}}} has no value — declare it '
+            'with @${e.variable} = … in the file',
+      HttpRequestErrorKind.bodyFileUnreadable =>
+        'body_file_unreadable: cannot read "${e.path}"'
+            '${detail.isEmpty ? '' : ': $detail'}',
+      HttpRequestErrorKind.connectionFailed =>
+        'connection_failed: ${detail.isEmpty ? 'could not reach the server' : detail}',
+      HttpRequestErrorKind.timeout =>
+        'timeout: no response after ${e.timeoutSeconds}s',
+      HttpRequestErrorKind.responseTooLarge =>
+        'response_too_large: over the ${e.limitBytes} byte limit',
+    };
+  }
+
+  /// Resolve o workspace do comando (`--workspace <id|path>`, ou o do pane
+  /// emissor) e roda [action] nele. Compartilhado por `db`/`redis`/`mongo` e
+  /// `http` — todos precisam de uma pasta de workspace real.
+  Future<CockpitCommandResult> _projectCommand(
     CockpitCommand c,
     Future<CockpitCommandResult> Function(Project project) action,
   ) async {
@@ -721,12 +833,21 @@ class CockpitCliHandler {
         'this pane has no workspace folder',
       );
     }
+    return action(project);
+  }
+
+  /// [_projectCommand] + tradução do erro de banco para o formato
+  /// `<kind>: <message>` que a CLI reconstrói em `{"error":{…}}`.
+  Future<CockpitCommandResult> _dbCommand(
+    CockpitCommand c,
+    Future<CockpitCommandResult> Function(Project project) action,
+  ) => _projectCommand(c, (project) async {
     try {
       return await action(project);
     } on DbQueryException catch (e) {
       return CockpitCommandResult.fail('${e.kind}: ${e.message}');
     }
-  }
+  });
 
   /// Resolve o alvo de um `read-pane`: primeiro por id exato (`t3`), depois
   /// por `manualLabel` (case-insensitive). Label ambíguo = erro — nunca chuta

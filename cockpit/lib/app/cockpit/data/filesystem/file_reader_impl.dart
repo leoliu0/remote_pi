@@ -86,7 +86,11 @@ class FileReaderImpl implements FileReader {
     }
     // SVG é texto (XML) que também renderiza — fonte editável + preview.
     if (ext == 'svg') return FileViewSvg(path, text, encoding: encoding);
-    return FileViewText(text, language: ext.isEmpty ? null : ext, encoding: encoding);
+    return FileViewText(
+      text,
+      language: ext.isEmpty ? null : ext,
+      encoding: encoding,
+    );
   }
 
   /// Decodifica [bytes] detectando o encoding:
@@ -104,7 +108,11 @@ class FileReaderImpl implements FileReader {
   }
 
   @override
-  Future<bool> write(String path, String content, {Encoding encoding = utf8}) async {
+  Future<bool> write(
+    String path,
+    String content, {
+    Encoding encoding = utf8,
+  }) async {
     try {
       // Tenta gravar com o encoding original do arquivo.
       // Se o conteúdo tiver caracteres fora do alcance do encoding (ex.:

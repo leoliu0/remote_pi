@@ -27,18 +27,13 @@ Future<String?> showRemoteFolderPicker(
   return showDialog<String>(
     context: context,
     barrierColor: context.colors.scrim,
-    builder: (context) => _RemoteFolderPicker(
-      connect: connect,
-      hostName: hostName,
-    ),
+    builder: (context) =>
+        _RemoteFolderPicker(connect: connect, hostName: hostName),
   );
 }
 
 class _RemoteFolderPicker extends StatefulWidget {
-  const _RemoteFolderPicker({
-    required this.connect,
-    required this.hostName,
-  });
+  const _RemoteFolderPicker({required this.connect, required this.hostName});
 
   final RemoteFolderConnect connect;
   final String hostName;

@@ -30,10 +30,7 @@ class RemoteDbService implements DbService {
   }
 
   @override
-  Future<Object?> redis(
-    RemoteDbConnDescriptor conn,
-    List<String> parts,
-  ) async {
+  Future<Object?> redis(RemoteDbConnDescriptor conn, List<String> parts) async {
     try {
       return await _connection.call('db.redis', {
         'conn': conn.toJson(),

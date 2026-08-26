@@ -47,35 +47,38 @@ void main() {
       expect(result, isNull);
     });
 
-    test('descendant tool under interactive harness preserves ancestral harness', () {
-      final snapshots = [
-        const ProcessSnapshot(
-          pid: 100,
-          ppid: 1,
-          executable: '/bin/bash',
-          argv: ['bash'],
-        ),
-        const ProcessSnapshot(
-          pid: 101,
-          ppid: 100,
-          executable: '/usr/local/bin/pi',
-          argv: ['pi'],
-        ),
-        const ProcessSnapshot(
-          pid: 102,
-          ppid: 101,
-          executable: '/usr/bin/flutter',
-          argv: ['flutter', 'test'],
-        ),
-      ];
+    test(
+      'descendant tool under interactive harness preserves ancestral harness',
+      () {
+        final snapshots = [
+          const ProcessSnapshot(
+            pid: 100,
+            ppid: 1,
+            executable: '/bin/bash',
+            argv: ['bash'],
+          ),
+          const ProcessSnapshot(
+            pid: 101,
+            ppid: 100,
+            executable: '/usr/local/bin/pi',
+            argv: ['pi'],
+          ),
+          const ProcessSnapshot(
+            pid: 102,
+            ppid: 101,
+            executable: '/usr/bin/flutter',
+            argv: ['flutter', 'test'],
+          ),
+        ];
 
-      final result = ProcessTreeResolver.resolve(
-        rootPid: 100,
-        snapshots: snapshots,
-      );
+        final result = ProcessTreeResolver.resolve(
+          rootPid: 100,
+          snapshots: snapshots,
+        );
 
-      expect(result, equals(HarnessKind.pi));
-    });
+        expect(result, equals(HarnessKind.pi));
+      },
+    );
 
     test('nested interactive harnesses selects innermost active harness', () {
       final snapshots = [
@@ -183,10 +186,7 @@ void main() {
     });
 
     test('missing root PID or empty snapshots returns null', () {
-      expect(
-        ProcessTreeResolver.resolve(rootPid: 999, snapshots: []),
-        isNull,
-      );
+      expect(ProcessTreeResolver.resolve(rootPid: 999, snapshots: []), isNull);
       expect(
         ProcessTreeResolver.resolve(
           rootPid: 999,

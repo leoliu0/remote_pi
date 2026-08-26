@@ -16,12 +16,15 @@ Future<void> main(List<String> args) async {
   // meio de uma escrita, isolate de driver que estoura) NÃO pode derrubar o
   // processo e levar junto os terminais de todos os workspaces. Um servidor de
   // longa vida registra e segue; quem trata o caso específico é quem o conhece.
-  await runZonedGuarded(() async {
-    await _run(args);
-  }, (error, stack) {
-    stderr.writeln('cockpit-server: erro não tratado: $error');
-    stderr.writeln(stack.toString());
-  });
+  await runZonedGuarded(
+    () async {
+      await _run(args);
+    },
+    (error, stack) {
+      stderr.writeln('cockpit-server: erro não tratado: $error');
+      stderr.writeln(stack.toString());
+    },
+  );
 }
 
 Future<void> _run(List<String> args) async {

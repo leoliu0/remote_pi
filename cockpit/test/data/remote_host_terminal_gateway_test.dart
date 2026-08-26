@@ -20,48 +20,44 @@ void main() {
   final target = Platform.environment['COCKPIT_TEST_SSH_HOST'];
   final binary = File('build/wave0/cockpit-server');
 
-  test(
-    'terminal remoto via SSH: eco, ack, kill',
-    () async {
-      if (target == null || !binary.existsSync()) {
-        markTestSkipped(
-          'defina COCKPIT_TEST_SSH_HOST e rode tool/build-sidecar.sh',
-        );
-        return;
-      }
-
-      final connector = RemoteHostConnector(
-        RemoteHost(id: 't', name: 'test', sshTarget: target),
-        localServerBinaryResolver: ({String? arch}) => binary.absolute.path,
+  test('terminal remoto via SSH: eco, ack, kill', () async {
+    if (target == null || !binary.existsSync()) {
+      markTestSkipped(
+        'defina COCKPIT_TEST_SSH_HOST e rode tool/build-sidecar.sh',
       );
-      addTearDown(connector.dispose);
+      return;
+    }
 
-      final gateway = RemoteHostTerminalGateway(connector);
-      final collected = StringBuffer();
-      final sub = gateway.output.listen((data) {
-        collected.write(utf8.decode(data, allowMalformed: true));
-        gateway.acknowledgeOutput();
-      });
-      addTearDown(sub.cancel);
+    final connector = RemoteHostConnector(
+      RemoteHost(id: 't', name: 'test', sshTarget: target),
+      localServerBinaryResolver: ({String? arch}) => binary.absolute.path,
+    );
+    addTearDown(connector.dispose);
 
-      // Working directory vazio = HOME remota do servidor.
-      gateway.start(
-        workingDirectory: '',
-        profile: const TerminalProfile(
-          id: 'login-shell',
-          label: 'sh',
-          executable: '/bin/sh',
-        ),
-      );
-      gateway.write(utf8.encode('echo remote-\$((21*2))\n'));
+    final gateway = RemoteHostTerminalGateway(connector);
+    final collected = StringBuffer();
+    final sub = gateway.output.listen((data) {
+      collected.write(utf8.decode(data, allowMalformed: true));
+      gateway.acknowledgeOutput();
+    });
+    addTearDown(sub.cancel);
 
-      await _until(() => collected.toString().contains('remote-42'));
-      expect(collected.toString(), contains('remote-42'));
+    // Working directory vazio = HOME remota do servidor.
+    gateway.start(
+      workingDirectory: '',
+      profile: const TerminalProfile(
+        id: 'login-shell',
+        label: 'sh',
+        executable: '/bin/sh',
+      ),
+    );
+    gateway.write(utf8.encode('echo remote-\$((21*2))\n'));
 
-      await gateway.kill();
-    },
-    timeout: const Timeout(Duration(minutes: 2)),
-  );
+    await _until(() => collected.toString().contains('remote-42'));
+    expect(collected.toString(), contains('remote-42'));
+
+    await gateway.kill();
+  }, timeout: const Timeout(Duration(minutes: 2)));
 }
 
 Future<void> _until(bool Function() test) async {

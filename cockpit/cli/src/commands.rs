@@ -659,6 +659,131 @@ pub fn db(args: &[String]) -> ! {
     nosql_request(wire, cmd_args, tab_id)
 }
 
+// ---- http -------------------------------------------------------------------
+
+/// Kinds estáveis que o app devolve prefixados em `fail("<kind>: <msg>")`.
+const HTTP_ERROR_KINDS: [&str; 7] = [
+    "no_request",
+    "invalid_url",
+    "unresolved_variable",
+    "body_file_unreadable",
+    "connection_failed",
+    "timeout",
+    "response_too_large",
+];
+
+const HTTP_HELP: &str = include_str!("../text/http_help.txt");
+
+pub fn http(args: &[String]) -> ! {
+    if args.is_empty() || args[0] == "--help" || args[0] == "-h" {
+        if args.is_empty() {
+            eprint!("{HTTP_HELP}");
+            std::process::exit(2);
+        }
+        print!("{HTTP_HELP}");
+        std::process::exit(0);
+    }
+    let sub = args[0].clone();
+    let rest = &args[1..];
+
+    let mut request: Option<String> = None;
+    let mut timeout: Option<String> = None;
+    let mut workspace: Option<String> = None;
+    let mut tab_id: Option<String> = None;
+    let mut positionals: Vec<String> = Vec::new();
+    let mut pending: Option<String> = None;
+
+    const VALUE_FLAGS: [&str; 4] = ["--request", "--timeout", "--workspace", "--tab-id"];
+
+    for a in rest {
+        if let Some(flag) = pending.take() {
+            match flag.as_str() {
+                "--request" => request = Some(a.clone()),
+                "--timeout" => timeout = Some(a.clone()),
+                "--workspace" => workspace = Some(a.clone()),
+                "--tab-id" => tab_id = Some(a.clone()),
+                _ => {}
+            }
+            continue;
+        }
+        if VALUE_FLAGS.contains(&a.as_str()) {
+            pending = Some(a.clone());
+            continue;
+        }
+        if let Some(eq) = a.find('=') {
+            if a.starts_with("--") && eq > 0 {
+                let (key, value) = a.split_at(eq);
+                let value = value[1..].to_string();
+                match key {
+                    "--request" => request = Some(value),
+                    "--timeout" => timeout = Some(value),
+                    "--workspace" => workspace = Some(value),
+                    "--tab-id" => tab_id = Some(value),
+                    _ => db_fail(
+                        "error",
+                        &format!("unknown flag \"{key}\" (see `cockpit http --help`)"),
+                    ),
+                }
+                continue;
+            }
+        }
+        positionals.push(a.clone());
+    }
+    if let Some(flag) = pending {
+        db_fail("error", &format!("missing value for {flag}"));
+    }
+
+    let mut cmd_args = Map::new();
+    if let Some(ws) = workspace {
+        cmd_args.insert("workspace".into(), json!(ws));
+    }
+    if positionals.is_empty() {
+        db_fail("error", "missing <file.http>");
+    }
+    cmd_args.insert("path".into(), json!(resolve_path(&positionals[0])));
+
+    let wire = match sub.as_str() {
+        "list" => "http-list",
+        "run" => {
+            if let Some(r) = request {
+                cmd_args.insert("request".into(), json!(r));
+            }
+            if let Some(t) = timeout {
+                cmd_args.insert("timeout".into(), json!(t));
+            }
+            "http-run"
+        }
+        other => db_fail(
+            "error",
+            &format!("unknown subcommand \"{other}\" (see `cockpit http --help`)"),
+        ),
+    };
+
+    http_request(wire, cmd_args, tab_id)
+}
+
+/// Igual ao [`nosql_request`], com a lista de kinds do http.
+fn http_request(wire: &str, cmd_args: Map<String, Value>, tab_id: Option<String>) -> ! {
+    let mut req = json!({"cmd": wire, "args": Value::Object(cmd_args)});
+    with_tab_id(&mut req, tab_id.or_else(self_tab_id));
+    let resp = transport::request(req, DB_TIMEOUT);
+    if is_ok(&resp) {
+        let data = resp.get("data").cloned().unwrap_or(Value::Null);
+        println!("{}", json!({"ok": data}));
+        std::process::exit(0);
+    }
+    let raw = transport::error_text(&resp);
+    if let Some(sep) = raw.find(": ") {
+        if sep > 0 {
+            let kind = &raw[..sep];
+            if HTTP_ERROR_KINDS.contains(&kind) {
+                db_fail(kind, &raw[sep + 2..]);
+            }
+        }
+    }
+    db_fail("error", &raw)
+}
+
 // ---- redis / mongo ----------------------------------------------------------
 
 const REDIS_HELP: &str = "cockpit redis --db <conn> <COMMAND> [args...]

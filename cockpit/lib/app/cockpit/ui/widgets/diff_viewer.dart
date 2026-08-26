@@ -235,10 +235,15 @@ class _DiffBodyState extends State<_DiffBody> {
                     if (i == 0) return _revisionHeader(context, diff, side);
                     final item = _items[i - 1];
                     return switch (item) {
-                      _HunkHeaderItem(:final header) =>
-                        _HunkHeader(text: header, width: total),
-                      _RowItem(:final row) =>
-                        _DiffRow(row: row, sideWidth: side, language: language),
+                      _HunkHeaderItem(:final header) => _HunkHeader(
+                        text: header,
+                        width: total,
+                      ),
+                      _RowItem(:final row) => _DiffRow(
+                        row: row,
+                        sideWidth: side,
+                        language: language,
+                      ),
                     };
                   },
                 ),

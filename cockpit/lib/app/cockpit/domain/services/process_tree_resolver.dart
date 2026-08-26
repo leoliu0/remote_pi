@@ -27,7 +27,8 @@ abstract class ProcessTreeResolver {
     do {
       added = false;
       for (final s in snapshots) {
-        if (!descendantPids.contains(s.pid) && descendantPids.contains(s.ppid)) {
+        if (!descendantPids.contains(s.pid) &&
+            descendantPids.contains(s.ppid)) {
           descendantPids.add(s.pid);
           added = true;
         }
@@ -48,7 +49,8 @@ abstract class ProcessTreeResolver {
 
         // Skip non-foreground or suspended processes
         if (!proc.isForeground) continue;
-        if (proc.state != null && proc.state!.toUpperCase().contains('T')) continue;
+        if (proc.state != null && proc.state!.toUpperCase().contains('T'))
+          continue;
 
         final kind = TerminalHarnessClassifier.classify(
           executable: proc.executable,
@@ -76,7 +78,9 @@ abstract class ProcessTreeResolver {
     final childrenMap = <int, List<int>>{};
     for (final pid in descendantPids) {
       final proc = procMap[pid];
-      if (proc != null && proc.ppid != pid && descendantPids.contains(proc.ppid)) {
+      if (proc != null &&
+          proc.ppid != pid &&
+          descendantPids.contains(proc.ppid)) {
         childrenMap.putIfAbsent(proc.ppid, () => []).add(pid);
       }
     }

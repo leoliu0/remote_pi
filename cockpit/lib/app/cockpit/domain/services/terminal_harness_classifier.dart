@@ -17,7 +17,10 @@ abstract class TerminalHarnessClassifier {
     final spec = _findMatchingSpec(normalized.entryPointName);
     if (spec == null) return null;
 
-    final isInteractive = _isInteractiveInvocation(spec.kind, normalized.harnessArgs);
+    final isInteractive = _isInteractiveInvocation(
+      spec.kind,
+      normalized.harnessArgs,
+    );
     return isInteractive ? spec.kind : null;
   }
 
@@ -30,10 +33,7 @@ abstract class TerminalHarnessClassifier {
     return null;
   }
 
-  static bool _isInteractiveInvocation(
-    HarnessKind kind,
-    List<String> args,
-  ) {
+  static bool _isInteractiveInvocation(HarnessKind kind, List<String> args) {
     // Universal admin/help/version flags
     for (final arg in args) {
       if (arg == '-h' || arg == '--help' || arg == '-v' || arg == '--version') {
@@ -60,7 +60,14 @@ abstract class TerminalHarnessClassifier {
   }
 
   static bool _checkAntigravity(List<String> args) {
-    const adminSubcommands = {'help', 'version', 'config', 'auth', 'models', 'update'};
+    const adminSubcommands = {
+      'help',
+      'version',
+      'config',
+      'auth',
+      'models',
+      'update',
+    };
     for (int i = 0; i < args.length; i++) {
       final arg = args[i];
       if (arg == '-p' || arg == '--print') return false;
@@ -89,16 +96,31 @@ abstract class TerminalHarnessClassifier {
   }
 
   static bool _checkCodex(List<String> args) {
-    const adminSubcommandsOrModes = {'exec', 'auth', 'config', 'version', 'help', 'models'};
+    const adminSubcommandsOrModes = {
+      'exec',
+      'auth',
+      'config',
+      'version',
+      'help',
+      'models',
+    };
     for (int i = 0; i < args.length; i++) {
       final arg = args[i];
-      if (i == 0 && adminSubcommandsOrModes.contains(arg.toLowerCase())) return false;
+      if (i == 0 && adminSubcommandsOrModes.contains(arg.toLowerCase()))
+        return false;
     }
     return true;
   }
 
   static bool _checkCursor(List<String> args) {
-    const adminSubcommands = {'auth', 'login', 'logout', 'list', 'version', 'help'};
+    const adminSubcommands = {
+      'auth',
+      'login',
+      'logout',
+      'list',
+      'version',
+      'help',
+    };
     for (int i = 0; i < args.length; i++) {
       final arg = args[i];
       if (arg == '-p' || arg == '--print') return false;
@@ -111,17 +133,26 @@ abstract class TerminalHarnessClassifier {
     const adminSubcommands = {'auth', 'config', 'alias', 'version', 'help'};
     for (int i = 0; i < args.length; i++) {
       final arg = args[i];
-      if (arg == '-p' || arg == '--prompt' || arg == '-i' || arg == '--input') return false;
+      if (arg == '-p' || arg == '--prompt' || arg == '-i' || arg == '--input')
+        return false;
       if (i == 0 && adminSubcommands.contains(arg.toLowerCase())) return false;
     }
     return true;
   }
 
   static bool _checkOpenCode(List<String> args) {
-    const adminSubcommandsOrModes = {'run', 'auth', 'config', 'models', 'version', 'help'};
+    const adminSubcommandsOrModes = {
+      'run',
+      'auth',
+      'config',
+      'models',
+      'version',
+      'help',
+    };
     for (int i = 0; i < args.length; i++) {
       final arg = args[i];
-      if (i == 0 && adminSubcommandsOrModes.contains(arg.toLowerCase())) return false;
+      if (i == 0 && adminSubcommandsOrModes.contains(arg.toLowerCase()))
+        return false;
     }
     return true;
   }
@@ -141,11 +172,13 @@ abstract class TerminalHarnessClassifier {
       if (arg == '-p' || arg == '--print') return false;
       if (arg.startsWith('--mode=')) {
         final modeVal = arg.substring('--mode='.length).toLowerCase();
-        if (modeVal == 'text' || modeVal == 'json' || modeVal == 'rpc') return false;
+        if (modeVal == 'text' || modeVal == 'json' || modeVal == 'rpc')
+          return false;
       }
       if (arg == '--mode' && i + 1 < args.length) {
         final modeVal = args[i + 1].toLowerCase();
-        if (modeVal == 'text' || modeVal == 'json' || modeVal == 'rpc') return false;
+        if (modeVal == 'text' || modeVal == 'json' || modeVal == 'rpc')
+          return false;
       }
       if (i == 0 && adminSubcommands.contains(arg.toLowerCase())) return false;
     }

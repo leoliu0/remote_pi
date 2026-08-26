@@ -33,13 +33,15 @@ void main() {
     expect(client.token, endpoint.token);
   });
 
-  test('close remove o anúncio (senão a próxima descoberta se engana)',
-      () async {
-    final endpoint = await LocalEndpoint.bind(path);
-    await endpoint.close();
+  test(
+    'close remove o anúncio (senão a próxima descoberta se engana)',
+    () async {
+      final endpoint = await LocalEndpoint.bind(path);
+      await endpoint.close();
 
-    expect(LocalEndpoint.announcedAt(path), isFalse);
-  });
+      expect(LocalEndpoint.announcedAt(path), isFalse);
+    },
+  );
 
   test('bind por cima de um anúncio órfão funciona', () async {
     File(path).writeAsStringSync('lixo do ciclo anterior');

@@ -27,50 +27,53 @@ class FakeProcessTreeProvider implements ProcessTreeProvider {
 
 void main() {
   group('TerminalHarnessMonitor', () {
-    test('starts monitor on first registration and executes immediate poll', () async {
-      final fakeProvider = FakeProcessTreeProvider(
-        snapshotsToReturn: [
-          const ProcessSnapshot(
-            pid: 100,
-            ppid: 1,
-            executable: 'bash',
-            argv: ['bash'],
-          ),
-          const ProcessSnapshot(
-            pid: 101,
-            ppid: 100,
-            executable: '/bin/pi',
-            argv: ['pi'],
-          ),
-        ],
-      );
+    test(
+      'starts monitor on first registration and executes immediate poll',
+      () async {
+        final fakeProvider = FakeProcessTreeProvider(
+          snapshotsToReturn: [
+            const ProcessSnapshot(
+              pid: 100,
+              ppid: 1,
+              executable: 'bash',
+              argv: ['bash'],
+            ),
+            const ProcessSnapshot(
+              pid: 101,
+              ppid: 100,
+              executable: '/bin/pi',
+              argv: ['pi'],
+            ),
+          ],
+        );
 
-      final monitor = TerminalHarnessMonitor(
-        provider: fakeProvider,
-        pollInterval: const Duration(milliseconds: 500),
-      );
+        final monitor = TerminalHarnessMonitor(
+          provider: fakeProvider,
+          pollInterval: const Duration(milliseconds: 500),
+        );
 
-      HarnessKind? notifiedHarness;
+        HarnessKind? notifiedHarness;
 
-      monitor.registerSession(
-        sessionId: 'session-1',
-        rootPid: () => 100,
-        onHarnessChanged: (harness) {
-          notifiedHarness = harness;
-        },
-      );
+        monitor.registerSession(
+          sessionId: 'session-1',
+          rootPid: () => 100,
+          onHarnessChanged: (harness) {
+            notifiedHarness = harness;
+          },
+        );
 
-      expect(monitor.isRunning, isTrue);
-      expect(monitor.registeredCount, equals(1));
+        expect(monitor.isRunning, isTrue);
+        expect(monitor.registeredCount, equals(1));
 
-      // Wait microtask for immediate poll completion
-      await pumpEventQueue();
+        // Wait microtask for immediate poll completion
+        await pumpEventQueue();
 
-      expect(fakeProvider.callCount, equals(1));
-      expect(notifiedHarness, equals(HarnessKind.pi));
+        expect(fakeProvider.callCount, equals(1));
+        expect(notifiedHarness, equals(HarnessKind.pi));
 
-      monitor.dispose();
-    });
+        monitor.dispose();
+      },
+    );
 
     test('shares single snapshot query across multiple sessions', () async {
       final fakeProvider = FakeProcessTreeProvider(
@@ -219,12 +222,7 @@ class _GatedProcessTreeProvider implements ProcessTreeProvider {
     callCount++;
     await gate.future;
     return const [
-      ProcessSnapshot(
-        pid: 100,
-        ppid: 1,
-        executable: 'bash',
-        argv: ['bash'],
-      ),
+      ProcessSnapshot(pid: 100, ppid: 1, executable: 'bash', argv: ['bash']),
     ];
   }
 }

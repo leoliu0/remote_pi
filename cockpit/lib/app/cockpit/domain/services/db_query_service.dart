@@ -301,12 +301,7 @@ class DbQueryService {
       _requireEngine(conn, DbEngine.mongo, connName);
       final password = await _passwordFor(conn, workspaceId);
       final target = database ?? mongoDatabase(workspaceId, conn);
-      return remote.mongo(
-        conn,
-        command,
-        password: password,
-        database: target,
-      );
+      return remote.mongo(conn, command, password: password, database: target);
     }
     final conn = await _resolve(workspaceRoot, workspaceId, connName);
     _requireEngine(conn, DbEngine.mongo, connName);

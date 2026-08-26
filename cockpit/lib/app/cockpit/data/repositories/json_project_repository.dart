@@ -43,9 +43,8 @@ class JsonProjectRepository implements ProjectRepository {
   Future<void> save(Project project) => _store.put(project.id, _toMap(project));
 
   @override
-  Future<void> saveAll(List<Project> projects) => _store.putAll({
-    for (final p in projects) p.id: _toMap(p),
-  });
+  Future<void> saveAll(List<Project> projects) =>
+      _store.putAll({for (final p in projects) p.id: _toMap(p)});
 
   @override
   Future<void> remove(String id) => _store.delete(id);

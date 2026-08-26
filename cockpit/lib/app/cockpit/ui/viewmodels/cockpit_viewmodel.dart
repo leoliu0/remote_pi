@@ -22,6 +22,7 @@ import 'package:cockpit/app/cockpit/domain/entities/scm_line_decorations.dart';
 import 'package:cockpit/app/cockpit/domain/exceptions/git_history_error.dart';
 import 'package:cockpit/app/cockpit/domain/services/scm_baseline_cache.dart';
 import 'package:cockpit/app/cockpit/domain/services/scm_line_decoration_calculator.dart';
+import 'package:cockpit/app/cockpit/domain/contracts/http_request_runner.dart';
 import 'package:cockpit/app/cockpit/domain/contracts/layout_loader.dart';
 import 'package:cockpit/app/cockpit/domain/contracts/project_repository.dart';
 import 'package:cockpit/app/cockpit/domain/contracts/rpc_gateway_factory.dart';
@@ -139,6 +140,7 @@ class CockpitViewModel extends ChangeNotifier {
     this._taskDiscovery,
     this._taskRunner,
     this._dbService,
+    this._httpRunner,
     this._layoutLoader,
     this._remoteHosts,
     this._scmBaselineCache,
@@ -237,6 +239,10 @@ class CockpitViewModel extends ChangeNotifier {
   /// Motor de queries da DB tab — compartilhado com a CLI `cockpit db`
   /// (plano 51): mesma resolução de conexão/senha, mesma serialização.
   final DbQueryService _dbService;
+
+  /// Motor de requests da HTTP tab — compartilhado com a CLI `cockpit http`,
+  /// pelo mesmo motivo do [_dbService].
+  final HttpRequestRunner _httpRunner;
   final LayoutLoader _layoutLoader;
   final RemoteHostsController _remoteHosts;
   final TerminalHarnessMonitor _harnessMonitor;
@@ -655,6 +661,7 @@ class CockpitViewModel extends ChangeNotifier {
   late final CockpitCliHandler _cli = CockpitCliHandler(
     this,
     _dbService,
+    _httpRunner,
     _taskDiscovery,
     _taskRunner,
     _taskTerminals,

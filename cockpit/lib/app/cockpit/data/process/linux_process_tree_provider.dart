@@ -8,7 +8,7 @@ class LinuxProcessTreeProvider implements ProcessTreeProvider {
   final Directory procDir;
 
   LinuxProcessTreeProvider({Directory? procDir})
-      : procDir = procDir ?? Directory('/proc');
+    : procDir = procDir ?? Directory('/proc');
 
   @override
   Future<List<ProcessSnapshot>> getProcessSnapshots({
@@ -132,10 +132,14 @@ class LinuxProcessTreeProvider implements ProcessTreeProvider {
       final lastParen = statContent.lastIndexOf(')');
       if (lastParen == -1) return null;
 
-      final comm =
-          statContent.substring(statContent.indexOf('(') + 1, lastParen);
-      final rest =
-          statContent.substring(lastParen + 2).trim().split(RegExp(r'\s+'));
+      final comm = statContent.substring(
+        statContent.indexOf('(') + 1,
+        lastParen,
+      );
+      final rest = statContent
+          .substring(lastParen + 2)
+          .trim()
+          .split(RegExp(r'\s+'));
 
       if (rest.length < 6) return null;
 
@@ -149,10 +153,9 @@ class LinuxProcessTreeProvider implements ProcessTreeProvider {
       if (await cmdlineFile.exists()) {
         final bytes = await cmdlineFile.readAsBytes();
         if (bytes.isNotEmpty) {
-          final parts = String.fromCharCodes(bytes)
-              .split('\x00')
-              .where((s) => s.isNotEmpty)
-              .toList();
+          final parts = String.fromCharCodes(
+            bytes,
+          ).split('\x00').where((s) => s.isNotEmpty).toList();
           if (parts.isNotEmpty) {
             argv = parts;
           }

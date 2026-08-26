@@ -33,9 +33,7 @@ class RemoteWorktreeGateway {
     // Erro (pasta não é repo, conexão) LANÇA — não devolve `[]`: o chamador não
     // pode confundir "sem worktrees" com "falhou" e apagar os forks existentes.
     if (r.code != 0) {
-      throw StateError(
-        'git worktree list failed (${r.code}): ${r.stderr}',
-      );
+      throw StateError('git worktree list failed (${r.code}): ${r.stderr}');
     }
     return parsePorcelain(r.stdout, repo);
   }
@@ -98,11 +96,8 @@ class RemoteWorktreeGateway {
       '--short',
       'refs/remotes/origin/HEAD',
     ]);
-    Set<String> lines(String out) => out
-        .split('\n')
-        .map((l) => l.trim())
-        .where((l) => l.isNotEmpty)
-        .toSet();
+    Set<String> lines(String out) =>
+        out.split('\n').map((l) => l.trim()).where((l) => l.isNotEmpty).toSet();
     final defaultBranch = head.code == 0
         ? head.stdout.trim().split('/').last
         : null;
@@ -118,11 +113,7 @@ class RemoteWorktreeGateway {
   /// [name] (de [baseRef] no fork-of-fork). Garante `.cockpit/worktrees/` no
   /// `.gitignore` antes. Devolve o resultado do `git worktree add`; o caminho
   /// criado é `<repo>/.cockpit/worktrees/<name>`.
-  Future<GitRunResult> add(
-    String repo,
-    String name, {
-    String? baseRef,
-  }) async {
+  Future<GitRunResult> add(String repo, String name, {String? baseRef}) async {
     await _ensureGitignore(repo);
     final path = '$repo/$worktreesDir/$name';
     return _git.run(repo, [
@@ -169,10 +160,7 @@ class RemoteWorktreeGateway {
       '--format=%(refname:short)',
     ]);
     if (r.code != 0) return false;
-    return r.stdout
-        .split('\n')
-        .map((l) => l.trim())
-        .contains(branch);
+    return r.stdout.split('\n').map((l) => l.trim()).contains(branch);
   }
 
   /// Garante `.cockpit/worktrees/` no `.gitignore` do repo (best-effort): sem

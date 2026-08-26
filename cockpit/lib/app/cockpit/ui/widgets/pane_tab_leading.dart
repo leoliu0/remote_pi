@@ -39,10 +39,6 @@ class PaneTabLeading extends StatelessWidget {
       }
     }
 
-    return Icon(
-      defaultIcon,
-      size: size,
-      color: iconColor,
-    );
+    return Icon(defaultIcon, size: size, color: iconColor);
   }
 }

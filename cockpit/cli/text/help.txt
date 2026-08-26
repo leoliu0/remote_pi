@@ -20,6 +20,8 @@ USAGE:
   cockpit redis [browse] --db <conn> ...       Redis command / open key table
   cockpit mongo [browse] --db <conn> [--database <name>] ...
                                                MongoDB runCommand / open browser
+  cockpit http <list|run> <file.http>          run HTTP requests from a .http
+                                               file (see `cockpit http --help`)
   cockpit browse <url> [--json]                open the built-in browser tab at
                                                <url> (system browser on Linux)
   cockpit orchestrate <file.ckp> [--json]      apply a .ckp pane layout (open
@@ -50,6 +52,13 @@ DATABASES (db):
     cockpit db query --db dev-local --sql "SELECT * FROM orders LIMIT 5"
     cockpit db run reports/daily.dbq
   Full reference: `cockpit db --help`.
+
+HTTP (http):
+  Runs requests written in a .http file (REST Client / JetBrains syntax). The
+  app renders the same file as a request tab. Output is one JSON line:
+    cockpit http list api/users.http
+    cockpit http run  api/users.http --request "Create user"
+  Full reference: `cockpit http --help`.
 
 IDS:
   Workspace ids are opaque UUIDs — use `workspacePath` (list-tabs) / `path`

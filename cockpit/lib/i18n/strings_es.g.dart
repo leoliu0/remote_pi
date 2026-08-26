@@ -122,6 +122,7 @@ class _Translations$cockpit$es extends Translations$cockpit$en {
 	@override late final _Translations$cockpit$realmDialogs$es realmDialogs = _Translations$cockpit$realmDialogs$es._(_root);
 	@override late final _Translations$cockpit$dbRedisTable$es dbRedisTable = _Translations$cockpit$dbRedisTable$es._(_root);
 	@override late final _Translations$cockpit$dbQueryView$es dbQueryView = _Translations$cockpit$dbQueryView$es._(_root);
+	@override late final _Translations$cockpit$httpView$es httpView = _Translations$cockpit$httpView$es._(_root);
 	@override late final _Translations$cockpit$dbPanel$es dbPanel = _Translations$cockpit$dbPanel$es._(_root);
 	@override late final _Translations$cockpit$dbMongoView$es dbMongoView = _Translations$cockpit$dbMongoView$es._(_root);
 	@override late final _Translations$cockpit$dbConnectionDialog$es dbConnectionDialog = _Translations$cockpit$dbConnectionDialog$es._(_root);
@@ -803,6 +804,32 @@ class _Translations$cockpit$dbQueryView$es extends Translations$cockpit$dbQueryV
 	@override String get copy => 'Copiar';
 }
 
+// Path: cockpit.httpView
+class _Translations$cockpit$httpView$es extends Translations$cockpit$httpView$en {
+	_Translations$cockpit$httpView$es._(TranslationsEs root) : this._root = root, super.internal(root);
+
+	final TranslationsEs _root; // ignore: unused_field
+
+	// Translations
+	@override String get saveRequestAs => 'Guardar request como';
+	@override String get couldNotSave => 'No se pudo guardar';
+	@override String get run => 'Ejecutar';
+	@override String get running => 'Ejecutando…';
+	@override String get noRequests => 'Ningún request en este archivo — escribe uno, p. ej.: GET https://example.com';
+	@override String get selectRequest => 'Seleccionar request';
+	@override String requestCount({required num n}) => (_root.$meta.cardinalResolver ?? PluralResolvers.cardinal('es'))(n,
+		one: '1 request',
+		other: '${n} requests',
+	);
+	@override String get runHint => 'Ejecuta el request (⌘↵) para ver la respuesta aquí.';
+	@override String get emptyBody => 'Cuerpo de la respuesta vacío.';
+	@override String get body => 'JSON';
+	@override String get headers => 'Headers';
+	@override String get raw => 'Text';
+	@override String get truncatedSuffix => ' · truncado (respuesta demasiado grande)';
+	@override late final _Translations$cockpit$httpView$error$es error = _Translations$cockpit$httpView$error$es._(_root);
+}
+
 // Path: cockpit.dbPanel
 class _Translations$cockpit$dbPanel$es extends Translations$cockpit$dbPanel$en {
 	_Translations$cockpit$dbPanel$es._(TranslationsEs root) : this._root = root, super.internal(root);
@@ -1286,6 +1313,25 @@ class _Translations$theme$error$es extends Translations$theme$error$en {
 	@override String badColor({required Object value, required Object field}) => '"${value}" en "${field}" no es un color. Usa #RGB, #RRGGBB o #RRGGBBAA.';
 	@override String unknownBase({required Object value}) => 'Tema base "${value}" desconocido en "extends".';
 	@override String get noVariants => 'El tema no declara ningún variant. Añade "dark", "light" o ambos en "variants".';
+}
+
+// Path: cockpit.httpView.error
+class _Translations$cockpit$httpView$error$es extends Translations$cockpit$httpView$error$en {
+	_Translations$cockpit$httpView$error$es._(TranslationsEs root) : this._root = root, super.internal(root);
+
+	final TranslationsEs _root; // ignore: unused_field
+
+	// Translations
+	@override String get title => 'Falló el request';
+	@override String get noRequest => 'No se encontró ningún request en la posición del cursor.';
+	@override String invalidUrl({required Object url}) => 'URL inválida: ${url}';
+	@override String unresolvedVariable({required Object name}) => 'La variable {{${name}}} no tiene valor. Declárala con @${name} = … en este archivo.';
+	@override String bodyFileMissing({required Object path}) => 'Archivo de cuerpo no encontrado: ${path}';
+	@override String bodyFileUnreadable({required Object path, required Object detail}) => 'No se pudo leer el archivo de cuerpo ${path}: ${detail}';
+	@override String connectionFailed({required Object detail}) => 'No se pudo alcanzar el servidor: ${detail}';
+	@override String get connectionFailedNoDetail => 'No se pudo alcanzar el servidor.';
+	@override String timeout({required Object seconds}) => 'El request superó el tiempo límite de ${seconds}s.';
+	@override String responseTooLarge({required Object bytes}) => 'La respuesta superó el límite de ${bytes} bytes.';
 }
 
 // Path: settings.page.header
@@ -2097,6 +2143,29 @@ extension on TranslationsEs {
 			'cockpit.dbQueryView.saved' => 'guardado',
 			'cockpit.dbQueryView.copied' => 'Copiado',
 			'cockpit.dbQueryView.copy' => 'Copiar',
+			'cockpit.httpView.saveRequestAs' => 'Guardar request como',
+			'cockpit.httpView.couldNotSave' => 'No se pudo guardar',
+			'cockpit.httpView.run' => 'Ejecutar',
+			'cockpit.httpView.running' => 'Ejecutando…',
+			'cockpit.httpView.noRequests' => 'Ningún request en este archivo — escribe uno, p. ej.: GET https://example.com',
+			'cockpit.httpView.selectRequest' => 'Seleccionar request',
+			'cockpit.httpView.requestCount' => ({required num n}) => (_root.$meta.cardinalResolver ?? PluralResolvers.cardinal('es'))(n, one: '1 request', other: '${n} requests', ), 
+			'cockpit.httpView.runHint' => 'Ejecuta el request (⌘↵) para ver la respuesta aquí.',
+			'cockpit.httpView.emptyBody' => 'Cuerpo de la respuesta vacío.',
+			'cockpit.httpView.body' => 'JSON',
+			'cockpit.httpView.headers' => 'Headers',
+			'cockpit.httpView.raw' => 'Text',
+			'cockpit.httpView.truncatedSuffix' => ' · truncado (respuesta demasiado grande)',
+			'cockpit.httpView.error.title' => 'Falló el request',
+			'cockpit.httpView.error.noRequest' => 'No se encontró ningún request en la posición del cursor.',
+			'cockpit.httpView.error.invalidUrl' => ({required Object url}) => 'URL inválida: ${url}',
+			'cockpit.httpView.error.unresolvedVariable' => ({required Object name}) => 'La variable {{${name}}} no tiene valor. Declárala con @${name} = … en este archivo.',
+			'cockpit.httpView.error.bodyFileMissing' => ({required Object path}) => 'Archivo de cuerpo no encontrado: ${path}',
+			'cockpit.httpView.error.bodyFileUnreadable' => ({required Object path, required Object detail}) => 'No se pudo leer el archivo de cuerpo ${path}: ${detail}',
+			'cockpit.httpView.error.connectionFailed' => ({required Object detail}) => 'No se pudo alcanzar el servidor: ${detail}',
+			'cockpit.httpView.error.connectionFailedNoDetail' => 'No se pudo alcanzar el servidor.',
+			'cockpit.httpView.error.timeout' => ({required Object seconds}) => 'El request superó el tiempo límite de ${seconds}s.',
+			'cockpit.httpView.error.responseTooLarge' => ({required Object bytes}) => 'La respuesta superó el límite de ${bytes} bytes.',
 			'cockpit.dbPanel.sectionDatabase' => 'BASE DE DATOS',
 			'cockpit.dbPanel.edit' => 'Editar…',
 			'cockpit.dbPanel.copyName' => 'Copiar nombre',
@@ -2186,6 +2255,8 @@ extension on TranslationsEs {
 			'cockpit.contentSearch.sectionSearch' => 'BÚSQUEDA',
 			'cockpit.contentSearch.searchInFiles' => 'Buscar en los archivos',
 			'cockpit.contentSearch.matchCase' => 'Coincidir mayúsculas',
+			_ => null,
+		} ?? switch (path) {
 			'cockpit.contentSearch.wholeWord' => 'Palabra completa',
 			'cockpit.contentSearch.useRegex' => 'Usar expresión regular',
 			'cockpit.contentSearch.invalidRegex' => 'Expresión regular inválida.',
@@ -2209,8 +2280,6 @@ extension on TranslationsEs {
 			'cockpit.tasks.hotRestart' => 'Hot restart',
 			'cockpit.tasks.toggleDebugPaint' => 'Alternar debug paint',
 			'cockpit.tasks.togglePlatform' => 'Alternar plataforma',
-			_ => null,
-		} ?? switch (path) {
 			'cockpit.tasks.quit' => 'Salir',
 			'cockpit.notifications.agentFinished' => 'El agente terminó',
 			'cockpit.notifications.open' => 'Abrir',

@@ -409,7 +409,8 @@ class RemoteHostConnector {
     final parts = uname.split(RegExp(r'\s+'));
     final remoteOs = parts.isEmpty ? '' : parts.first.toLowerCase();
     final remoteMachine = parts.length > 1 ? parts[1].toLowerCase() : '';
-    final remoteArch = remoteMachine.contains('arm') || remoteMachine == 'aarch64'
+    final remoteArch =
+        remoteMachine.contains('arm') || remoteMachine == 'aarch64'
         ? 'arm64'
         : 'x64';
     // Cross-OS não tem como funcionar: o bundle local só traz binário desta

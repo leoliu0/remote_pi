@@ -34,9 +34,7 @@ void main() {
     final victim = await LocalEndpoint.connect(path);
     await _handshake(victim.socket);
     victim.socket.add(_line(const PtyOpen(executable: '/bin/sh')));
-    victim.socket.add(
-      _line(const PtyAttach(sessionId: 's1')),
-    );
+    victim.socket.add(_line(const PtyAttach(sessionId: 's1')));
     await victim.socket.flush();
     await Future<void>.delayed(const Duration(milliseconds: 50));
     terminals.spew(2000); // servidor escreve muito no socket...
@@ -69,7 +67,9 @@ class _ChattyTerminals implements TerminalService {
   void spew(int chunks) {
     final payload = Uint8List.fromList(List<int>.filled(1024, 0x41));
     for (var i = 0; i < chunks; i++) {
-      _live.add(PtyOutputEvent(PtyOutputChunk(offset: _offset, bytes: payload)));
+      _live.add(
+        PtyOutputEvent(PtyOutputChunk(offset: _offset, bytes: payload)),
+      );
       _offset += payload.length;
     }
   }

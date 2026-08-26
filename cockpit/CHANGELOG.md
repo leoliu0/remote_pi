@@ -24,6 +24,32 @@ As versões seguem o `version:` do `pubspec.yaml` (SSOT). O campo `notes` do
     linhas não-vazias — o começo da seção deve fazer sentido sozinho.
 -->
 
+## [1.28.11] - 2026-08-25
+
+**Still a beta for the upcoming 2.0.0.** `.http` files now open as a request
+tab: write a request, hit it, read the response, without leaving Cockpit.
+
+### Added
+
+- **A tab for `.http` files.** Open one and you get an editor on top and the
+  response below, the same shape as the `.dbq` database tab. Run the request
+  under the cursor with ⌘↵, or pick another one from the selector in the top
+  bar. The footer shows status, time and size, with the response as **JSON**
+  (parsed and indented), **Headers**, or **Text** (exactly what came back).
+- **The syntax you already write.** `.http` files follow the REST Client /
+  JetBrains HTTP Client format: `###` separates and names requests,
+  `@name = value` declares a variable, `{{name}}` uses it, and `< ./body.json`
+  sends a file as the body. Syntax highlighting for all of it, plus JSON
+  highlighting in the response.
+- **`cockpit http list` and `cockpit http run` in the CLI.** Agents can fire a
+  request from a `.http` file and read the response as JSON — same engine as
+  the tab. Write the file and a human can open, tweak and re-run it.
+
+Requests that fail before touching the network — an undeclared `{{variable}}`,
+a URL missing its scheme, a missing body file — say exactly what is wrong
+instead of putting a placeholder on the wire. A 4xx or 5xx is a normal
+response, not an error.
+
 ## [1.28.10] - 2026-08-25
 
 **Still a beta for the upcoming 2.0.0.** Commit message automations work again,

@@ -23,8 +23,8 @@ ProcessTreeProvider createWslProcessTreeProvider(String distro) {
 /// App-facing monitor with host provider + lazy WSL adapters.
 class CockpitTerminalHarnessMonitor extends TerminalHarnessMonitor {
   CockpitTerminalHarnessMonitor(ProcessTreeProvider provider)
-      : super(
-          provider: provider,
-          wslProviderForDistro: createWslProcessTreeProvider,
-        );
+    : super(
+        provider: provider,
+        wslProviderForDistro: createWslProcessTreeProvider,
+      );
 }

@@ -42,27 +42,32 @@ class FakeTerminalGateway implements TerminalGateway {
 
 void main() {
   group('PaneTabLeading Widget', () {
-    testWidgets('renders fallback Icon when session is null or activeHarness is null', (tester) async {
-      await tester.pumpWidget(
-        const MaterialApp(
-          home: Scaffold(
-            body: PaneTabLeading(
-              item: null,
-              defaultIcon: Icons.terminal_outlined,
-              iconColor: Colors.blue,
+    testWidgets(
+      'renders fallback Icon when session is null or activeHarness is null',
+      (tester) async {
+        await tester.pumpWidget(
+          const MaterialApp(
+            home: Scaffold(
+              body: PaneTabLeading(
+                item: null,
+                defaultIcon: Icons.terminal_outlined,
+                iconColor: Colors.blue,
+              ),
             ),
           ),
-        ),
-      );
+        );
 
-      expect(find.byType(Icon), findsOneWidget);
-      expect(find.byType(SvgPicture), findsNothing);
-      final iconWidget = tester.widget<Icon>(find.byType(Icon));
-      expect(iconWidget.icon, equals(Icons.terminal_outlined));
-      expect(iconWidget.color, equals(Colors.blue));
-    });
+        expect(find.byType(Icon), findsOneWidget);
+        expect(find.byType(SvgPicture), findsNothing);
+        final iconWidget = tester.widget<Icon>(find.byType(Icon));
+        expect(iconWidget.icon, equals(Icons.terminal_outlined));
+        expect(iconWidget.color, equals(Colors.blue));
+      },
+    );
 
-    testWidgets('renders SvgPicture for monochrome harness with ColorFilter', (tester) async {
+    testWidgets('renders SvgPicture for monochrome harness with ColorFilter', (
+      tester,
+    ) async {
       final session = TerminalSession(
         id: 'term-1',
         projectId: 'proj-1',
@@ -101,7 +106,9 @@ void main() {
       expect(find.byType(PaneTabLeading), findsOneWidget);
     });
 
-    testWidgets('renders SvgPicture for each harness kind correctly', (tester) async {
+    testWidgets('renders SvgPicture for each harness kind correctly', (
+      tester,
+    ) async {
       for (final kind in HarnessKind.values) {
         final spec = HarnessCatalog.getSpec(kind)!;
 
@@ -141,17 +148,17 @@ class DummyHarnessSession extends TerminalSession {
   final HarnessKind harnessKind;
 
   DummyHarnessSession(this.harnessKind)
-      : super(
-          id: 'dummy-1',
-          projectId: 'p-1',
-          workingDirectory: '/tmp',
-          gateway: FakeTerminalGateway(),
-          profile: const TerminalProfile(
-            id: 'posix',
-            label: 'Terminal',
-            executable: 'bash',
-          ),
-        );
+    : super(
+        id: 'dummy-1',
+        projectId: 'p-1',
+        workingDirectory: '/tmp',
+        gateway: FakeTerminalGateway(),
+        profile: const TerminalProfile(
+          id: 'posix',
+          label: 'Terminal',
+          executable: 'bash',
+        ),
+      );
 
   @override
   HarnessKind? get activeHarness => harnessKind;

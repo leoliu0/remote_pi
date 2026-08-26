@@ -276,9 +276,7 @@ class _AddRemoteHostDialogState extends State<_AddRemoteHostDialog> {
                       controller: _port,
                       placeholder: Text(tr.portLabel),
                       keyboardType: TextInputType.number,
-                      inputFormatters: [
-                        FilteringTextInputFormatter.digitsOnly,
-                      ],
+                      inputFormatters: [FilteringTextInputFormatter.digitsOnly],
                       onSubmitted: (_) => _submit(),
                     ),
                   ),
@@ -295,28 +293,29 @@ class _AddRemoteHostDialogState extends State<_AddRemoteHostDialog> {
                 onChanged: (_) => setState(() {}),
                 onSubmitted: (_) => _submit(),
               ),
-            const SizedBox(height: 12),
-            // Modo de autenticação.
-            Text(
-              tr.authLabel,
-              style: context.typo.label.copyWith(color: colors.text2),
-            ),
-            const SizedBox(height: 6),
-            Row(
-              children: [
-                _AuthChip(
-                  label: tr.authKey,
-                  selected: _auth == RemoteHostAuth.key,
-                  onTap: () => setState(() => _auth = RemoteHostAuth.key),
-                ),
-                const SizedBox(width: 8),
-                _AuthChip(
-                  label: tr.authPassword,
-                  selected: _auth == RemoteHostAuth.password,
-                  onTap: () => setState(() => _auth = RemoteHostAuth.password),
-                ),
-              ],
-            ),
+              const SizedBox(height: 12),
+              // Modo de autenticação.
+              Text(
+                tr.authLabel,
+                style: context.typo.label.copyWith(color: colors.text2),
+              ),
+              const SizedBox(height: 6),
+              Row(
+                children: [
+                  _AuthChip(
+                    label: tr.authKey,
+                    selected: _auth == RemoteHostAuth.key,
+                    onTap: () => setState(() => _auth = RemoteHostAuth.key),
+                  ),
+                  const SizedBox(width: 8),
+                  _AuthChip(
+                    label: tr.authPassword,
+                    selected: _auth == RemoteHostAuth.password,
+                    onTap: () =>
+                        setState(() => _auth = RemoteHostAuth.password),
+                  ),
+                ],
+              ),
               // Chave privada: obrigatória na auth por chave (desktop). O
               // picker abre direto em ~/.ssh — pasta oculta nas três
               // plataformas, então navegar até ela na mão é ruim.

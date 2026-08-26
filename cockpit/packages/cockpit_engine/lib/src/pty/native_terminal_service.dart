@@ -112,8 +112,7 @@ class NativeTerminalService implements TerminalService {
         // ERROR_INVALID_NAME (123) e o shell não nasce — o PTY abre, o
         // conhost sobe e a aba fica eternamente vazia. O POSIX tolerava
         // porque o lado nativo já testava `strlen > 0` antes do chdir.
-        ..workingDirectory =
-            (spec.workingDirectory?.isNotEmpty ?? false)
+        ..workingDirectory = (spec.workingDirectory?.isNotEmpty ?? false)
             ? spec.workingDirectory!.toNativeUtf8(allocator: arena).cast()
             : nullptr
         ..stdoutPort = stdoutPort.sendPort.nativePort

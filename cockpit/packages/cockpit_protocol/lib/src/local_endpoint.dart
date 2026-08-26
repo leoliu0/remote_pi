@@ -43,12 +43,7 @@ class LocalEndpoint {
         InternetAddress(path, type: InternetAddressType.unix),
         0,
       );
-      return LocalListener._(
-        listener,
-        path,
-        null,
-        boundAt: _modifiedAt(path),
-      );
+      return LocalListener._(listener, path, null, boundAt: _modifiedAt(path));
     }
 
     final listener = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
@@ -59,12 +54,7 @@ class LocalEndpoint {
       jsonEncode({'v': 1, 'port': listener.port, 'token': token}),
       flush: true,
     );
-    return LocalListener._(
-      listener,
-      path,
-      token,
-      boundAt: _modifiedAt(path),
-    );
+    return LocalListener._(listener, path, token, boundAt: _modifiedAt(path));
   }
 
   static DateTime? _modifiedAt(String path) {

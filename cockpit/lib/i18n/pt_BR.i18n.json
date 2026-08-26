@@ -465,6 +465,36 @@
       "copied": "Copiado",
       "copy": "Copiar"
     },
+    "httpView": {
+      "saveRequestAs": "Salvar request como",
+      "couldNotSave": "Não foi possível salvar",
+      "run": "Executar",
+      "running": "Executando…",
+      "noRequests": "Nenhum request neste arquivo — escreva um, ex.: GET https://example.com",
+      "selectRequest": "Selecionar request",
+      "requestCount": {
+        "one": "1 request",
+        "other": "${n} requests"
+      },
+      "runHint": "Execute o request (⌘↵) para ver a resposta aqui.",
+      "emptyBody": "Corpo da resposta vazio.",
+      "body": "JSON",
+      "headers": "Headers",
+      "raw": "Text",
+      "truncatedSuffix": " · truncado (resposta grande demais)",
+      "error": {
+        "title": "Falha no request",
+        "noRequest": "Nenhum request encontrado na posição do cursor.",
+        "invalidUrl": "URL inválida: ${url}",
+        "unresolvedVariable": "A variável {{${name}}} não tem valor. Declare com @${name} = … neste arquivo.",
+        "bodyFileMissing": "Arquivo de corpo não encontrado: ${path}",
+        "bodyFileUnreadable": "Não foi possível ler o arquivo de corpo ${path}: ${detail}",
+        "connectionFailed": "Não foi possível alcançar o servidor: ${detail}",
+        "connectionFailedNoDetail": "Não foi possível alcançar o servidor.",
+        "timeout": "O request estourou o tempo limite de ${seconds}s.",
+        "responseTooLarge": "A resposta passou do limite de ${bytes} bytes."
+      }
+    },
     "dbPanel": {
       "sectionDatabase": "BANCO DE DADOS",
       "edit": "Editar…",

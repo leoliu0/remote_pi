@@ -71,6 +71,20 @@ Cockpit tabs (it is not on the global PATH).
     should see the result too: the app shows it as a query tab and re-runs it
     every time you save the file.
   - Outside a Cockpit tab, add `--workspace <id|path>`.
+- `cockpit http <list|run> <file.http>` — runs HTTP requests written in a
+  `.http` file (REST Client / JetBrains HTTP Client syntax: `###` separates
+  requests, `@name = value` declares a variable, `{{name}}` interpolates it).
+  - `cockpit http list api/users.http` — the requests in the file, with their
+    index, name, method and URL.
+  - `cockpit http run api/users.http [--request <name|index>]` — runs one
+    (default: the first). Output is one JSON line: `{"ok":{"status":200,
+    "headers":{…},"elapsedMs":12,"json":{…}}}`; the body comes back as `json`
+    when it parses as JSON, otherwise as `body`. A 4xx/5xx is a normal
+    response — check `status`, not the exit code.
+  - Prefer writing a `.http` when the human should see the request too: the app
+    renders the same file as a request tab (editor + response), so they can
+    re-run and tweak it themselves.
+  - Outside a Cockpit tab, add `--workspace <id|path>`.
 - `cockpit redis --db <conn> <CMD> [args...]` — Redis/cache command. One
   JSON line reply. e.g. `cockpit redis --db cache HGETALL user:42`. Covers
   Redis/Valkey/KeyDB.

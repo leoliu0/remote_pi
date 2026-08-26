@@ -778,60 +778,60 @@ class _FileViewerState extends State<FileViewer> {
     final Widget body = widget.session.loading
         ? const Center(child: CircularProgressIndicator())
         : switch (widget.session.view) {
-      FileViewMarkdown(:final text) =>
-        editingNow
-            ? _editor()
-            // Com webview (macOS/Win): pipeline VS Code — HTML embutido,
-            // tabelas complexas etc. renderizam de verdade (plano 58). Sem
-            // webview (Linux): gpt_markdown, como antes. SelectionArea vive
-            // DENTRO do scroll (SelectableScroll) — em volta dela a seleção
-            // escorrega ao rolar com Interface size != 14.
-            : _webPreview
-            ? WebMarkdownPreview(
-                text: text,
-                docDir: File(widget.session.path).parent.path,
-                workspaceRoot: _workspaceRoot,
-              )
-            : SelectableScroll(
-                padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
-                child: AgentMarkdown(text),
+            FileViewMarkdown(:final text) =>
+              editingNow
+                  ? _editor()
+                  // Com webview (macOS/Win): pipeline VS Code — HTML embutido,
+                  // tabelas complexas etc. renderizam de verdade (plano 58). Sem
+                  // webview (Linux): gpt_markdown, como antes. SelectionArea vive
+                  // DENTRO do scroll (SelectableScroll) — em volta dela a seleção
+                  // escorrega ao rolar com Interface size != 14.
+                  : _webPreview
+                  ? WebMarkdownPreview(
+                      text: text,
+                      docDir: File(widget.session.path).parent.path,
+                      workspaceRoot: _workspaceRoot,
+                    )
+                  : SelectableScroll(
+                      padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+                      child: AgentMarkdown(text),
+                    ),
+            FileViewSvg(:final text) =>
+              editingNow ? _editor() : _SvgPreview(source: text),
+            FileViewText(:final text, :final language) =>
+              editingNow
+                  ? _editor()
+                  : _isHtml && _webPreview
+                  ? WebHtmlPreview(
+                      path: widget.session.path,
+                      workspaceRoot: _workspaceRoot,
+                    )
+                  : _TextView(
+                      text: text,
+                      language: language,
+                      diagnostics: _diagnostics,
+                      semanticTokens: _semanticTokens,
+                    ),
+            FileViewImage(:final path) => _ImageView(path: path),
+            FileViewAudio(:final path) => MediaView(
+              key: ValueKey('media:$path'),
+              path: path,
+              kind: MediaKind.audio,
+              active: widget.active,
+            ),
+            FileViewVideo(:final path) => MediaView(
+              key: ValueKey('media:$path'),
+              path: path,
+              kind: MediaKind.video,
+              active: widget.active,
+            ),
+            FileViewUnsupported() => Center(
+              child: Text(
+                context.t.cockpit.fileViewer.cantOpen,
+                style: context.typo.body.copyWith(color: colors.text3),
               ),
-      FileViewSvg(:final text) =>
-        editingNow ? _editor() : _SvgPreview(source: text),
-      FileViewText(:final text, :final language) =>
-        editingNow
-            ? _editor()
-            : _isHtml && _webPreview
-            ? WebHtmlPreview(
-                path: widget.session.path,
-                workspaceRoot: _workspaceRoot,
-              )
-            : _TextView(
-                text: text,
-                language: language,
-                diagnostics: _diagnostics,
-                semanticTokens: _semanticTokens,
-              ),
-      FileViewImage(:final path) => _ImageView(path: path),
-      FileViewAudio(:final path) => MediaView(
-        key: ValueKey('media:$path'),
-        path: path,
-        kind: MediaKind.audio,
-        active: widget.active,
-      ),
-      FileViewVideo(:final path) => MediaView(
-        key: ValueKey('media:$path'),
-        path: path,
-        kind: MediaKind.video,
-        active: widget.active,
-      ),
-      FileViewUnsupported() => Center(
-        child: Text(
-          context.t.cockpit.fileViewer.cantOpen,
-          style: context.typo.body.copyWith(color: colors.text3),
-        ),
-      ),
-    };
+            ),
+          };
 
     final Widget content = ColoredBox(
       color: colors.panel,

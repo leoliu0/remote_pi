@@ -4,19 +4,15 @@ import 'dart:io';
 import 'package:cockpit/app/cockpit/domain/contracts/process_tree_provider.dart';
 import 'package:cockpit/app/cockpit/domain/entities/process_snapshot.dart';
 
-typedef ProcessRunner = Future<ProcessResult> Function(
-  String executable,
-  List<String> arguments,
-);
+typedef ProcessRunner =
+    Future<ProcessResult> Function(String executable, List<String> arguments);
 
 class WslProcessTreeProvider implements ProcessTreeProvider {
   final String distro;
   final ProcessRunner _runner;
 
-  WslProcessTreeProvider({
-    required this.distro,
-    ProcessRunner? runner,
-  }) : _runner = runner ?? Process.run;
+  WslProcessTreeProvider({required this.distro, ProcessRunner? runner})
+    : _runner = runner ?? Process.run;
 
   @override
   Future<List<ProcessSnapshot>> getProcessSnapshots({

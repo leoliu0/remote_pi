@@ -39,6 +39,7 @@ class RemoteServer {
   /// escreve). `null` até o [bind]. Cada linha vira um [TurnStatus] broadcast
   /// pras conexões (plano 60, Wave G).
   TurnStatusReceiver? _statusReceiver;
+
   /// Endpoint local aberto no [bind] (guarda o token, no Windows).
   LocalListener? _endpoint;
 
@@ -207,7 +208,9 @@ class _Connection {
     // Erro no socket chega TAMBÉM por aqui (assíncrono, fora de qualquer
     // try/catch de escrita); sem o catch, vira exceção não tratada e mata o
     // processo.
-    unawaited(_socket.done.then((_) => close()).catchError((Object _) => close()));
+    unawaited(
+      _socket.done.then((_) => close()).catchError((Object _) => close()),
+    );
     RemoteServer._codec
         .decodeStream(_socket)
         .listen(

@@ -21,21 +21,27 @@ class GitDiffReaderImpl implements GitDiffReader {
 
       // Untracked? `git diff HEAD` não mostra arquivo não rastreado — detecta via
       // status e lê o arquivo inteiro como adicionado.
-      final status = await Process.run(
-        git,
-        ['-C', repoPath, 'status', '--porcelain', '--', rel],
-        stdoutEncoding: utf8,
-      );
+      final status = await Process.run(git, [
+        '-C',
+        repoPath,
+        'status',
+        '--porcelain',
+        '--',
+        rel,
+      ], stdoutEncoding: utf8);
       final statusOut = status.exitCode == 0 ? (status.stdout as String) : '';
       if (statusOut.startsWith('??')) {
         return _untrackedDiff(absPath);
       }
 
-      final diff = await Process.run(
-        git,
-        ['-C', repoPath, 'diff', 'HEAD', '--', rel],
-        stdoutEncoding: utf8,
-      );
+      final diff = await Process.run(git, [
+        '-C',
+        repoPath,
+        'diff',
+        'HEAD',
+        '--',
+        rel,
+      ], stdoutEncoding: utf8);
       if (diff.exitCode != 0) return FileDiff.unchanged(absPath);
       final out = diff.stdout as String;
       if (out.trim().isEmpty) return FileDiff.unchanged(absPath);
@@ -60,11 +66,14 @@ class GitDiffReaderImpl implements GitDiffReader {
         '${repoPath.endsWith('/') ? repoPath.substring(0, repoPath.length - 1) : repoPath}/$relativePath';
     try {
       final git = await _gitBinary.resolve();
-      final parentResult = await Process.run(
-        git,
-        ['-C', repoPath, 'show', '--format=%P', '--no-patch', commitHash],
-        stdoutEncoding: utf8,
-      );
+      final parentResult = await Process.run(git, [
+        '-C',
+        repoPath,
+        'show',
+        '--format=%P',
+        '--no-patch',
+        commitHash,
+      ], stdoutEncoding: utf8);
       if (parentResult.exitCode != 0) return FileDiff.unchanged(absPath);
       final parentLine = (parentResult.stdout as String).trim();
       final beforeRevision = parentLine.isEmpty
@@ -76,32 +85,24 @@ class GitDiffReaderImpl implements GitDiffReader {
           // `git show <commit> -- old new` separa rename com mudancas em
           // delete + add. Comparar os blobs diretamente preserva o conteudo
           // original e modificado como um unico diff.
-          ? await Process.run(
-              git,
-              [
-                '-C',
-                repoPath,
-                'diff',
-                '$beforeRevision:$previousRelativePath',
-                '$commitHash:$relativePath',
-              ],
-              stdoutEncoding: utf8,
-            )
-          : await Process.run(
-              git,
-              [
-                '-C',
-                repoPath,
-                'show',
-                '--format=',
-                '--first-parent',
-                '--find-renames',
-                commitHash,
-                '--',
-                relativePath,
-              ],
-              stdoutEncoding: utf8,
-            );
+          ? await Process.run(git, [
+              '-C',
+              repoPath,
+              'diff',
+              '$beforeRevision:$previousRelativePath',
+              '$commitHash:$relativePath',
+            ], stdoutEncoding: utf8)
+          : await Process.run(git, [
+              '-C',
+              repoPath,
+              'show',
+              '--format=',
+              '--first-parent',
+              '--find-renames',
+              commitHash,
+              '--',
+              relativePath,
+            ], stdoutEncoding: utf8);
       if (result.exitCode != 0) return FileDiff.unchanged(absPath);
       final out = result.stdout as String;
       if (unifiedDiffLooksBinary(out)) {

@@ -15,6 +15,7 @@ import 'package:cockpit/app/cockpit/ui/states/pane_node.dart';
 import 'package:cockpit/app/cockpit/ui/viewmodels/cockpit_viewmodel.dart';
 import 'package:cockpit/app/core/utils/platform_kind.dart';
 import 'package:cockpit/app/cockpit/ui/viewmodels/setup_viewmodel.dart';
+import 'package:cockpit/app/cockpit/ui/widgets/http_request_view.dart';
 import 'package:cockpit/app/cockpit/ui/widgets/agent_composer.dart';
 import 'package:cockpit/app/cockpit/ui/widgets/agent_setup_checklist.dart';
 import 'package:cockpit/app/cockpit/ui/widgets/agent_transcript.dart';
@@ -1503,6 +1504,20 @@ class _PaneBodyState extends State<_PaneBody> {
     // Navegador embutido (plano 58): toolbar compacta + webview inline.
     if (item is BrowserSession) {
       return BrowserPane(session: item, active: widget.active);
+    }
+
+    // Tab de request `.http`: editor + resposta. Reusa a FileViewerSession
+    // pelo mesmo motivo da `.dbq` (preview/dirty/watch de graça).
+    if (item is FileViewerSession &&
+        (item.path.toLowerCase().endsWith('.http') ||
+            item.path.toLowerCase().endsWith('.rest'))) {
+      final vm = context.read<CockpitViewModel>();
+      return HttpRequestView(
+        session: item,
+        active: widget.active,
+        focused: widget.focused,
+        onSave: (content) => vm.saveFile(item.id, content),
+      );
     }
 
     // Tab de query `.dbq` (plano 51): editor SQL + grid de resultado. Reusa a
