@@ -118,25 +118,6 @@ export default function WebPage() {
     }
   };
 
-  const handleStartDemo = () => {
-    const demoSession: PairedSession = {
-      id: "demo_session_1",
-      name: "Remote Pi (Demo Sandbox)",
-      device: "MacBook Pro (Simulated Agent)",
-      remoteEpk: "epk_demo_9824_preview_key",
-      relayUrl: "ws://178.157.59.181:3000",
-      roomId: "workspace/remote-pi",
-      status: "online",
-      isLive: true,
-      pairedAt: new Date().toISOString(),
-      lastConnectedAt: new Date().toISOString(),
-    };
-    saveSession(demoSession);
-    setActiveSession(demoSession);
-    setActiveSessionId(demoSession.id);
-    setSavedSessions(getSavedSessions());
-    setView("chat");
-  };
 
   const handleDisconnect = () => {
     setActiveSession(null);
@@ -175,7 +156,6 @@ export default function WebPage() {
             onOpenSession={handleOpenSession}
             onOpenPairModal={() => setView("pair")}
             onDeleteSession={handleDeleteSession}
-            onStartDemo={handleStartDemo}
           />
         )}
 
@@ -185,7 +165,6 @@ export default function WebPage() {
             savedSessions={savedSessions}
             onSelectSaved={handleOpenSession}
             onDeleteSaved={handleDeleteSession}
-            onStartDemo={handleStartDemo}
           />
         )}
 

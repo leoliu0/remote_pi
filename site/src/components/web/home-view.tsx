@@ -8,7 +8,6 @@ interface HomeViewProps {
   onOpenSession: (session: PairedSession) => void;
   onOpenPairModal: () => void;
   onDeleteSession: (id: string) => void;
-  onStartDemo: () => void;
 }
 
 export function HomeView({
@@ -16,7 +15,6 @@ export function HomeView({
   onOpenSession,
   onOpenPairModal,
   onDeleteSession,
-  onStartDemo,
 }: HomeViewProps) {
   const [filter, setFilter] = useState<"all" | "active" | "idle">("all");
 
@@ -45,17 +43,7 @@ export function HomeView({
             Sessions
           </h1>
         </div>
-
         <div className="flex items-center gap-2.5">
-          <button
-            type="button"
-            onClick={onStartDemo}
-            className="px-3.5 py-2 rounded-xl bg-white/[0.04] hover:bg-white/10 border border-white/10 text-xs font-mono text-[#a3a3a3] hover:text-white transition-all cursor-pointer flex items-center gap-1.5"
-          >
-            <span>✨</span>
-            <span>Demo Sandbox</span>
-          </button>
-
           <button
             type="button"
             onClick={onOpenPairModal}

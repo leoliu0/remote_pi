@@ -20,7 +20,6 @@ interface PairScreenProps {
   savedSessions: PairedSession[];
   onSelectSaved: (session: PairedSession) => void;
   onDeleteSaved: (id: string) => void;
-  onStartDemo: () => void;
 }
 
 export function PairScreen({
@@ -28,7 +27,6 @@ export function PairScreen({
   savedSessions,
   onSelectSaved,
   onDeleteSaved,
-  onStartDemo,
 }: PairScreenProps) {
   const [tab, setTab] = useState<"local" | "paste" | "manual" | "saved">("local");
   const [pairText, setPairText] = useState("");
@@ -517,18 +515,6 @@ export function PairScreen({
               </div>
             )}
 
-            {/* Quick Demo Footer */}
-            <div className="mt-6 pt-5 border-t border-white/10 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-[#888]">
-              <span>Need an instant sandbox?</span>
-              <button
-                type="button"
-                onClick={onStartDemo}
-                className="text-[#4fc3f7] hover:text-white px-3 py-1.5 rounded-lg bg-[#4fc3f7]/10 hover:bg-[#4fc3f7]/20 border border-[#4fc3f7]/30 transition-all font-mono cursor-pointer flex items-center gap-1.5"
-              >
-                <span className="w-1.5 h-1.5 rounded-full bg-[#5fd38a]" />
-                Explore Demo Sandbox
-              </button>
-            </div>
           </div>
         </div>
 
