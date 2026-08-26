@@ -14,7 +14,7 @@ import { PairScreen } from "@/components/web/pair-screen";
 import { WebChat } from "@/components/web/web-chat";
 import { SessionInfoModal } from "@/components/web/session-info-modal";
 import { QuickActionsModal } from "@/components/web/quick-actions-modal";
-
+import { SettingsModal } from "@/components/web/settings-modal";
 export default function WebPage() {
   const [view, setView] = useState<"home" | "chat" | "pair">("home");
   const [activeSession, setActiveSession] = useState<PairedSession | null>(null);
@@ -23,6 +23,7 @@ export default function WebPage() {
   const [deviceName, setDeviceName] = useState("Remote Pi");
   const [showSessionInfo, setShowSessionInfo] = useState(false);
   const [showQuickActions, setShowQuickActions] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const [mounted, setMounted] = useState(false);
 
   // Helper to refresh session list
@@ -307,6 +308,7 @@ export default function WebPage() {
             deviceName={deviceName}
             onOpenSession={handleOpenSession}
             onOpenPairModal={() => setView("pair")}
+            onOpenSettings={() => setShowSettings(true)}
             onDeleteSession={handleDeleteSession}
           />
         )}
@@ -327,6 +329,7 @@ export default function WebPage() {
             onDisconnect={handleDisconnect}
             onOpenSessionInfo={() => setShowSessionInfo(true)}
             onOpenQuickActions={() => setShowQuickActions(true)}
+            onOpenSettings={() => setShowSettings(true)}
           />
         )}
       </div>
@@ -344,6 +347,15 @@ export default function WebPage() {
           activeModel={activeSession?.model}
           onClose={() => setShowQuickActions(false)}
           onAction={handleQuickAction}
+        />
+      )}
+      {showSettings && (
+        <SettingsModal
+          onClose={() => setShowSettings(false)}
+          onOpenPair={() => {
+            setShowSettings(false);
+            setView("pair");
+          }}
         />
       )}
     </div>
