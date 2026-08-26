@@ -17,6 +17,7 @@ interface RelayState {
   presence: "online" | "working" | "offline";
   messages: Array<Record<string, unknown>>;
   listeners: Array<(event: Record<string, unknown>) => void>;
+  pendingOutbound: Array<{ targetEpk: string; roomId: string; payload: Record<string, unknown> }>;
   privKey: Uint8Array | null;
   pubKeyB64: string | null;
   relayUrl: string;
@@ -108,6 +109,7 @@ function getOrCreateRelay(sessionId: string, targetEpk: string, relayUrl: string
     presence: "offline",
     messages: [],
     listeners: [],
+    pendingOutbound: [],
     privKey,
     pubKeyB64,
     relayUrl,
@@ -137,11 +139,9 @@ function getOrCreateRelay(sessionId: string, targetEpk: string, relayUrl: string
           const sigB64 = Buffer.from(sig).toString("base64");
           ws.send(JSON.stringify({ type: "auth", sig: sigB64 }));
           state!.authenticated = true;
-
-          // Subscribe presence & rooms & sync history
           setTimeout(() => {
             const subscribeEpks = Array.from(new Set([
-              targetEpk,
+              state!.targetEpk,
               "vTZygijDajc/5j3QC55NXvDI+Hcigl5tG3QZjQV0wAc=",
               "B5qrLfEnAjdF1X3lcAzpJ/RqaknlWcEuqV5e/SZYg0Y=",
             ]));
@@ -152,11 +152,12 @@ function getOrCreateRelay(sessionId: string, targetEpk: string, relayUrl: string
             // Send session_sync inner
             const syncPayload = { type: "session_sync", id: `sync_${Date.now()}`, limit: 1000 };
             const outer = {
-              peer: targetEpk,
-              room: roomId,
+              peer: state!.targetEpk,
+              room: state!.roomId,
               ct: Buffer.from(JSON.stringify(syncPayload)).toString("base64"),
             };
             ws.send(JSON.stringify(outer));
+            flushPending(state!);
           }, 50);
           return;
         }
@@ -334,7 +335,7 @@ export async function POST(req: NextRequest) {
         id: `cli_${Date.now()}`,
         text: body.text,
       };
-      sendToRelay(state, payload);
+      sendToRelay(state, payload, targetEpk, roomId);
       return NextResponse.json({ ok: true, id: payload.id });
     }
 
@@ -344,7 +345,7 @@ export async function POST(req: NextRequest) {
         id: `q_${Date.now()}`,
         text: body.text,
       };
-      sendToRelay(state, payload);
+      sendToRelay(state, payload, targetEpk, roomId);
       return NextResponse.json({ ok: true, id: payload.id });
     }
 
@@ -354,7 +355,7 @@ export async function POST(req: NextRequest) {
         id: `cq_${Date.now()}`,
         target_id: body.targetId,
       };
-      sendToRelay(state, payload);
+      sendToRelay(state, payload, targetEpk, roomId);
       return NextResponse.json({ ok: true });
     }
 
@@ -365,7 +366,7 @@ export async function POST(req: NextRequest) {
         tool_call_id: body.toolCallId,
         decision: body.decision || "allow",
       };
-      sendToRelay(state, payload);
+      sendToRelay(state, payload, targetEpk, roomId);
       return NextResponse.json({ ok: true });
     }
 
@@ -375,7 +376,7 @@ export async function POST(req: NextRequest) {
         id: `can_${Date.now()}`,
         target_id: body.targetId,
       };
-      sendToRelay(state, payload);
+      sendToRelay(state, payload, targetEpk, roomId);
       return NextResponse.json({ ok: true });
     }
 
@@ -385,7 +386,7 @@ export async function POST(req: NextRequest) {
         id: `sync_${Date.now()}`,
         limit: 1000,
       };
-      sendToRelay(state, payload);
+      sendToRelay(state, payload, targetEpk, roomId);
       return NextResponse.json({ ok: true });
     }
     if (body.action === "set_model" && body.model) {
@@ -397,7 +398,7 @@ export async function POST(req: NextRequest) {
         provider,
         model_id,
       };
-      sendToRelay(state, payload);
+      sendToRelay(state, payload, targetEpk, roomId);
       return NextResponse.json({ ok: true });
     }
 
@@ -407,7 +408,7 @@ export async function POST(req: NextRequest) {
         id: `act_${Date.now()}`,
         level: body.thinking,
       };
-      sendToRelay(state, payload);
+      sendToRelay(state, payload, targetEpk, roomId);
       return NextResponse.json({ ok: true });
     }
 
@@ -416,7 +417,7 @@ export async function POST(req: NextRequest) {
         type: "session_compact",
         id: `act_${Date.now()}`,
       };
-      sendToRelay(state, payload);
+      sendToRelay(state, payload, targetEpk, roomId);
       return NextResponse.json({ ok: true });
     }
 
@@ -425,7 +426,7 @@ export async function POST(req: NextRequest) {
         type: "session_new",
         id: `act_${Date.now()}`,
       };
-      sendToRelay(state, payload);
+      sendToRelay(state, payload, targetEpk, roomId);
       return NextResponse.json({ ok: true });
     }
 
@@ -435,12 +436,29 @@ export async function POST(req: NextRequest) {
   }
 }
 
-function sendToRelay(state: RelayState, payload: Record<string, unknown>) {
-  if (!state.ws || state.ws.readyState !== WebSocket.OPEN) return;
+function sendToRelay(state: RelayState, payload: Record<string, unknown>, targetEpk = state.targetEpk, roomId = state.roomId) {
+  if (!state.authenticated || !state.ws || state.ws.readyState !== WebSocket.OPEN) {
+    state.pendingOutbound.push({ targetEpk, roomId, payload });
+    return;
+  }
   const outer = {
-    peer: state.targetEpk,
-    room: state.roomId,
+    peer: targetEpk,
+    room: roomId,
     ct: Buffer.from(JSON.stringify(payload)).toString("base64"),
   };
   state.ws.send(JSON.stringify(outer));
+}
+
+function flushPending(state: RelayState) {
+  if (!state.authenticated || !state.ws || state.ws.readyState !== WebSocket.OPEN) return;
+  while (state.pendingOutbound.length > 0) {
+    const item = state.pendingOutbound.shift();
+    if (!item) break;
+    const outer = {
+      peer: item.targetEpk,
+      room: item.roomId,
+      ct: Buffer.from(JSON.stringify(item.payload)).toString("base64"),
+    };
+    state.ws.send(JSON.stringify(outer));
+  }
 }
