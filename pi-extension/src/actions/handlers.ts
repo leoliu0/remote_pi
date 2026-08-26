@@ -231,9 +231,11 @@ export function handleThinkingSet(
   pi: ActionPi,
   sender: ActionReplySender,
   msg: ThinkingSetMsg,
+  onThinkingChanged?: (level: ThinkingLevel) => void,
 ): void {
   runSync(sender, msg, "thinking_set", () => {
     pi.setThinkingLevel(msg.level);
+    onThinkingChanged?.(msg.level);
   });
 }
 

@@ -51,8 +51,20 @@ export function QuickActionsModal({
     return m;
   };
 
+  const normalizeThinking = (t?: string) => {
+    if (!t) return "medium";
+    const lower = t.toLowerCase();
+    if (lower === "min" || lower === "minimal") return "minimal";
+    if (lower === "low") return "low";
+    if (lower === "med" || lower === "medium") return "medium";
+    if (lower === "high") return "high";
+    if (lower === "x" || lower === "xhigh" || lower === "extra-high") return "xhigh";
+    if (lower === "off" || lower === "none" || lower === "0") return "off";
+    return "medium";
+  };
+
   const [selectedModel, setSelectedModel] = useState(normalizeModel(activeModel));
-  const [selectedThinking, setSelectedThinking] = useState(activeThinking);
+  const [selectedThinking, setSelectedThinking] = useState(normalizeThinking(activeThinking));
   const [selectedToolDisplay, setSelectedToolDisplay] = useState<ToolDisplayMode>(toolDisplay);
   const [showModelPicker, setShowModelPicker] = useState(false);
 
@@ -68,12 +80,13 @@ export function QuickActionsModal({
   ];
 
   const thinkingLevels = [
-    { id: "off", label: "Off" },
-    { id: "low", label: "Low (1k)" },
-    { id: "medium", label: "Medium (4k)" },
-    { id: "high", label: "High (16k)" },
+    { id: "off", label: "off" },
+    { id: "minimal", label: "min" },
+    { id: "low", label: "low" },
+    { id: "medium", label: "med" },
+    { id: "high", label: "high" },
+    { id: "xhigh", label: "x" },
   ];
-
   const toolDisplayOptions: Array<{ id: ToolDisplayMode; label: string; desc: string }> = [
     { id: "brief", label: "Brief", desc: "Compact pill" },
     { id: "full", label: "Full", desc: "Expanded card" },
@@ -229,11 +242,11 @@ export function QuickActionsModal({
           <div>
             <div className="text-[#888] mb-1.5 uppercase tracking-wider text-[10px] flex items-center justify-between">
               <span>Thinking</span>
-              <span className="text-[10px] text-[#4fc3f7]">
-                {selectedThinking.toUpperCase()}
+              <span className="text-[10px] text-[#4fc3f7] font-semibold">
+                {selectedThinking}
               </span>
             </div>
-            <div className="grid grid-cols-4 gap-1.5">
+            <div className="grid grid-cols-6 gap-1">
               {thinkingLevels.map((t) => (
                 <button
                   key={t.id}
@@ -242,9 +255,9 @@ export function QuickActionsModal({
                     setSelectedThinking(t.id);
                     onAction("set_thinking", t.id);
                   }}
-                  className={`py-1.5 px-1 text-center rounded-lg border text-[11px] transition-all cursor-pointer ${
+                  className={`py-1.5 px-0.5 text-center rounded-lg border text-[11px] font-mono transition-all cursor-pointer ${
                     selectedThinking === t.id
-                      ? "bg-[#4fc3f7]/20 border-[#4fc3f7]/50 text-[#4fc3f7] font-semibold"
+                      ? "bg-[#4fc3f7]/20 border-[#4fc3f7]/50 text-[#4fc3f7] font-bold"
                       : "bg-white/[0.02] border-white/10 text-[#888] hover:text-white hover:bg-white/5"
                   }`}
                 >
@@ -253,7 +266,6 @@ export function QuickActionsModal({
               ))}
             </div>
           </div>
-
           <div className="border-t border-white/10" />
 
           {/* 5. TOOL CALLS DISPLAY (Item 5) */}

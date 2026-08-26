@@ -240,6 +240,7 @@ export default function WebPage() {
           }),
         });
       } else if (action === "set_thinking" && payload) {
+        setActiveSession({ ...activeSession, thinking: payload });
         await fetch("/api/relay-bridge", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -345,6 +346,7 @@ export default function WebPage() {
       {showQuickActions && (
         <QuickActionsModal
           activeModel={activeSession?.model}
+          activeThinking={activeSession?.thinking}
           onClose={() => setShowQuickActions(false)}
           onAction={handleQuickAction}
         />

@@ -14,6 +14,7 @@ export interface PairedSession {
   roomId: string;
   cwd?: string;
   model?: string;
+  thinking?: string;
   pairedAt: string;
   lastConnectedAt?: string;
   status?: "working" | "online" | "offline";
@@ -242,6 +243,7 @@ export class RemotePiRelayClient {
   public onToolResult?: (toolCallId: string, result: unknown, error?: string) => void;
   public onSessionHistory?: (messages: WebChatMessage[]) => void;
   public onCompaction?: (summary: string, tokensBefore: number) => void;
+  public onRoomMeta?: (meta: { model?: string; thinking?: string; working?: boolean }) => void;
 
   constructor(session: PairedSession) {
     this.session = session;
@@ -260,11 +262,6 @@ export class RemotePiRelayClient {
       });
       const url = `/api/relay-bridge?${params.toString()}`;
       this.eventSource = new EventSource(url);
-
-      this.eventSource.onopen = () => {
-        this.onStateChange?.("connected");
-        this.requestSync();
-      };
       this.eventSource.onmessage = (event) => {
         try {
           const payload = JSON.parse(event.data);
@@ -409,9 +406,23 @@ export class RemotePiRelayClient {
       case "compaction":
         this.onCompaction?.((msg.summary as string) || "Context compacted", (msg.tokens_before as number) || 0);
         break;
+
+      case "room_meta_updated":
+      case "room_meta":
+        if (msg.meta && typeof msg.meta === "object") {
+          const meta = msg.meta as Record<string, unknown>;
+          const update = {
+            model: typeof meta.model === "string" ? meta.model : undefined,
+            thinking: typeof meta.thinking === "string" ? meta.thinking : undefined,
+            working: typeof meta.working === "boolean" ? meta.working : undefined,
+          };
+          if (update.model) this.session.model = update.model;
+          if (update.thinking) this.session.thinking = update.thinking;
+          this.onRoomMeta?.(update);
+        }
+        break;
     }
   }
-
   public async postAction(action: string, payload: Record<string, unknown> = {}): Promise<void> {
     try {
       await fetch("/api/relay-bridge", {

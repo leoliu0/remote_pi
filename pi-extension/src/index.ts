@@ -4844,7 +4844,17 @@ export function _routeClientMessageFrom(
       );
       break;
     case "thinking_set":
-      handleThinkingSet(_pi, sender, msg);
+      handleThinkingSet(_pi, sender, msg, (lvl) => {
+        _currentThinking = lvl;
+        if (_myRoomMeta) _myRoomMeta = { ..._myRoomMeta, thinking: lvl };
+        if (_relay && _myRoomId) {
+          _relay.sendControl({
+            type: "room_meta_update",
+            room_id: _myRoomId,
+            meta: { thinking: lvl },
+          });
+        }
+      });
       break;
     case "list_models":
       handleListModels(
