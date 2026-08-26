@@ -16,6 +16,8 @@ export interface PairedSession {
   model?: string;
   pairedAt: string;
   lastConnectedAt?: string;
+  status?: "working" | "online" | "offline";
+  isLive?: boolean;
 }
 
 export type MessageRole = "user" | "assistant" | "tool" | "compaction" | "system";

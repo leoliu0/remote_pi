@@ -7,7 +7,6 @@ import {
   getSavedSessions,
   deleteSession,
   saveSession,
-  getActiveSessionId,
   setActiveSessionId,
 } from "@/components/web/web-client";
 import { HomeView } from "@/components/web/home-view";
@@ -26,62 +25,48 @@ export default function WebPage() {
 
   useEffect(() => {
     setMounted(true);
-    let sessions = getSavedSessions();
+    let stored = getSavedSessions();
 
-    // 1. Auto-discover local Pi host sessions
+    // 1. Auto-discover local Pi host sessions & query live status from relay
     fetch("/api/local-session")
       .then((res) => res.json())
       .then((data) => {
-        if (data && data.localPiDetected) {
-          const localSessions: PairedSession[] = [];
-
-          // Add default session
-          localSessions.push({
-            id: `local_main`,
-            name: "Remote Pi (main)",
+        if (data && data.localPiDetected && Array.isArray(data.sessions)) {
+          const remoteSessions: PairedSession[] = data.sessions.map((s: any) => ({
+            id: `session_${s.roomId}`,
+            name: s.name,
             device: data.deviceName,
             remoteEpk: data.remoteEpk,
             token: data.token,
             relayUrl: data.relayUrl,
-            roomId: "main",
+            roomId: s.roomId,
+            cwd: s.path,
+            model: s.model,
+            status: s.status,
+            isLive: s.isLive,
             pairedAt: new Date().toISOString(),
             lastConnectedAt: new Date().toISOString(),
-          });
+          }));
 
-          // Add recent workspace project sessions
-          if (Array.isArray(data.recentSessions)) {
-            for (const s of data.recentSessions) {
-              localSessions.push({
-                id: `local_${s.roomId}`,
-                name: s.name,
-                device: data.deviceName,
-                remoteEpk: data.remoteEpk,
-                token: data.token,
-                relayUrl: data.relayUrl,
-                roomId: s.roomId,
-                cwd: s.path,
-                pairedAt: new Date().toISOString(),
-                lastConnectedAt: new Date().toISOString(),
-              });
+          // Merge: Live active sessions at top, then saved custom sessions
+          const map = new Map<string, PairedSession>();
+          for (const s of remoteSessions) {
+            map.set(s.id, s);
+          }
+          for (const s of stored) {
+            if (!map.has(s.id)) {
+              map.set(s.id, s);
             }
           }
 
-          // Merge local sessions with saved sessions
-          const merged = [...sessions];
-          for (const ls of localSessions) {
-            const exists = merged.some((s) => s.id === ls.id || (s.remoteEpk === ls.remoteEpk && s.roomId === ls.roomId));
-            if (!exists) {
-              merged.push(ls);
-              saveSession(ls);
-            }
-          }
-          setSavedSessions(merged);
+          const combined = Array.from(map.values());
+          setSavedSessions(combined);
         } else {
-          setSavedSessions(sessions);
+          setSavedSessions(stored);
         }
       })
       .catch(() => {
-        setSavedSessions(sessions);
+        setSavedSessions(stored);
       });
 
     // 2. Check if pairing parameters are provided in URL query
@@ -136,11 +121,13 @@ export default function WebPage() {
   const handleStartDemo = () => {
     const demoSession: PairedSession = {
       id: "demo_session_1",
-      name: "Remote Pi (Demo)",
-      device: "MacBook Pro (Demo Agent)",
+      name: "Remote Pi (Demo Sandbox)",
+      device: "MacBook Pro (Simulated Agent)",
       remoteEpk: "epk_demo_9824_preview_key",
       relayUrl: "ws://178.157.59.181:3000",
       roomId: "workspace/remote-pi",
+      status: "online",
+      isLive: true,
       pairedAt: new Date().toISOString(),
       lastConnectedAt: new Date().toISOString(),
     };
