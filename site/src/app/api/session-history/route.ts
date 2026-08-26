@@ -206,6 +206,7 @@ async function parseJsonlFile(filePath: string, maxMessages = 200): Promise<Pars
 function findJsonlFilesForCwd(cwdParam: string | null, roomId: string | null): string[] {
   const home = os.homedir();
   const searchDirs = [
+    path.join(home, ".omp", "agent", "sessions"),
     path.join(home, ".claude", "projects"),
     path.join(home, ".pi", "agent", "sessions"),
   ];
@@ -224,11 +225,19 @@ function findJsonlFilesForCwd(cwdParam: string | null, roomId: string | null): s
         let isMatch = false;
         if (cwdParam) {
           const normCwd = cwdParam.replace(/[\/\\]/g, "-").replace(/^-+|-+$/g, "").toLowerCase();
-          const normEntry = entry.replace(/^-+|-+$/g, "").toLowerCase();
-          if (normEntry === normCwd || normEntry.replace(/_/g, "-") === normCwd.replace(/_/g, "-")) {
+          const relCwd = cwdParam.replace(home, "").replace(/[\/\\]/g, "-").replace(/^-+|-+$/g, "").toLowerCase();
+          const normEntry = entry.replace(/[\/\\]/g, "-").replace(/^-+|-+$/g, "").toLowerCase();
+
+          if (
+            normEntry === normCwd ||
+            normEntry === relCwd ||
+            normEntry.replace(/_/g, "-") === normCwd.replace(/_/g, "-") ||
+            normEntry.replace(/_/g, "-") === relCwd.replace(/_/g, "-")
+          ) {
             isMatch = true;
           }
         }
+
         const files = fs.readdirSync(full).filter((x) => x.endsWith(".jsonl"));
         if (files.length > 0) {
           if (isMatch) {
