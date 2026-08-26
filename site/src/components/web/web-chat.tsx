@@ -627,73 +627,71 @@ export function WebChat({
         </div>
       )}
 
-      {/* 5. BOTTOM COMPOSER */}
-      <div className="p-3 sm:p-4 border-t border-white/10 bg-[#0a0c10]/95 backdrop-blur-md shrink-0">
-        <div className="relative flex flex-col rounded-2xl bg-black/60 border border-white/15 focus-within:border-[#4fc3f7]/60 focus-within:ring-1 focus-within:ring-[#4fc3f7]/60 transition-all">
+      {/* 5. COMPACT BOTTOM COMPOSER */}
+      <div className="p-2 sm:px-4 sm:py-2 border-t border-white/10 bg-[#0a0c10]/95 backdrop-blur-md shrink-0">
+        <div className="relative flex items-center gap-2 rounded-xl bg-black/60 border border-white/15 focus-within:border-[#4fc3f7]/60 focus-within:ring-1 focus-within:ring-[#4fc3f7]/60 px-2.5 py-1.5 transition-all">
+          {/* Left Action Buttons */}
+          <div className="flex items-center gap-0.5 shrink-0">
+            <button
+              type="button"
+              onClick={() => setSlashMenuOpen((s) => !s)}
+              className="p-1.5 text-[#888] hover:text-[#4fc3f7] hover:bg-white/5 rounded-lg text-xs font-mono font-bold transition-colors cursor-pointer"
+              title="Slash commands"
+            >
+              /
+            </button>
+            <button
+              type="button"
+              onClick={() => alert("Image attachment: paste directly from clipboard or drag into chat.")}
+              className="p-1.5 text-[#888] hover:text-white hover:bg-white/5 rounded-lg transition-colors cursor-pointer"
+              title="Attach file"
+            >
+              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+              </svg>
+            </button>
+          </div>
+
+          {/* Compact Input */}
           <textarea
             ref={inputRef}
-            rows={2}
+            rows={1}
             value={inputText}
             onChange={(e) => setInputText(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder={
               isWorking
-                ? "Agent is working… type to steer or queue next message"
-                : "Type a prompt, or / for slash commands…"
+                ? "Agent is working… type to steer or queue"
+                : "Type a prompt, or / for commands…"
             }
-            className="w-full bg-transparent p-3 text-sm text-white placeholder:text-[#555] font-[family-name:var(--ff-body)] resize-none outline-none max-h-40"
+            className="flex-1 bg-transparent py-1 px-1 text-sm text-white placeholder:text-[#555] font-[family-name:var(--ff-body)] resize-none outline-none max-h-32 min-h-[26px] leading-relaxed"
           />
 
-          <div className="flex items-center justify-between px-3 pb-2.5 pt-1">
-            <div className="flex items-center gap-1">
+          {/* Right Buttons */}
+          <div className="flex items-center gap-1.5 shrink-0">
+            {isWorking && (
               <button
                 type="button"
-                onClick={() => setSlashMenuOpen((s) => !s)}
-                className="p-1.5 text-[#888] hover:text-[#4fc3f7] hover:bg-white/5 rounded-lg text-xs font-mono transition-colors cursor-pointer"
-                title="Slash commands"
+                onClick={handleCancelTurn}
+                className="px-2.5 py-1 bg-red-500/20 hover:bg-red-500/30 text-red-300 border border-red-500/40 rounded-lg text-xs font-mono font-semibold transition-all cursor-pointer"
               >
-                /
+                Stop
               </button>
-              <button
-                type="button"
-                onClick={() => alert("Image attachment: paste directly from clipboard or drag into chat.")}
-                className="p-1.5 text-[#888] hover:text-white hover:bg-white/5 rounded-lg transition-colors cursor-pointer"
-                title="Attach file"
-              >
-                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
-                </svg>
-              </button>
-            </div>
+            )}
 
-            <div className="flex items-center gap-2">
-              <span className="text-[11px] text-[#555] font-mono hidden sm:inline">
-                Enter to send &bull; Shift+Enter newline
-              </span>
-
-              {isWorking && (
-                <button
-                  type="button"
-                  onClick={handleCancelTurn}
-                  className="px-3 py-1.5 bg-red-500/20 hover:bg-red-500/30 text-red-300 border border-red-500/40 rounded-xl text-xs font-mono font-semibold transition-all cursor-pointer"
-                >
-                  Stop
-                </button>
-              )}
-
-              <button
-                type="button"
-                onClick={() => handleSendMessage()}
-                disabled={!inputText.trim()}
-                className="px-4 py-2 bg-[#4fc3f7] hover:bg-[#38bdf8] active:scale-95 text-[#04222e] font-semibold text-xs rounded-xl transition-all cursor-pointer flex items-center gap-1.5 shadow-md shadow-[#4fc3f7]/20 disabled:opacity-40 disabled:cursor-not-allowed"
-              >
-                <span>{isWorking ? "Steer" : "Send"}</span>
-                <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                  <line x1="22" y1="2" x2="11" y2="13" />
-                  <polygon points="22 2 15 22 11 13 2 9 22 2" />
-                </svg>
-              </button>
-            </div>
+            <button
+              type="button"
+              onClick={() => handleSendMessage()}
+              disabled={!inputText.trim()}
+              className="p-2 sm:px-3 sm:py-1.5 bg-[#4fc3f7] hover:bg-[#38bdf8] active:scale-95 text-[#04222e] font-semibold text-xs rounded-lg transition-all cursor-pointer flex items-center gap-1 shadow-sm disabled:opacity-40 disabled:cursor-not-allowed"
+              title={isWorking ? "Steer agent" : "Send message"}
+            >
+              <span className="hidden sm:inline">{isWorking ? "Steer" : "Send"}</span>
+              <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                <line x1="22" y1="2" x2="11" y2="13" />
+                <polygon points="22 2 15 22 11 13 2 9 22 2" />
+              </svg>
+            </button>
           </div>
         </div>
       </div>
