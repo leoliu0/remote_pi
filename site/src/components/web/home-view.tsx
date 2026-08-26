@@ -176,19 +176,19 @@ export function HomeView({
               </div>
 
               {/* Session Tiles in this Peer group */}
-              <div className="bg-[#0e1217] border border-white/10 rounded-2xl divide-y divide-white/5 overflow-hidden">
-                {groupedByDevice[devName].map((s) => {
+              <div className="bg-[#0e1217] border border-white/10 rounded-2xl overflow-hidden">
+                {groupedByDevice[devName].map((s, idx, arr) => {
                   const isLive = s.isLive || s.status === "online" || s.status === "working";
                   const isWorking = s.status === "working";
                   const initial = (s.name || "?").trim().charAt(0).toUpperCase();
+                  const isLast = idx === arr.length - 1;
 
                   return (
-                    <div
-                      key={s.id}
-                      onClick={() => onOpenSession(s)}
-                      className="group flex items-center justify-between p-4 hover:bg-white/[0.02] transition-colors cursor-pointer"
-                    >
-                      <div className="flex items-center gap-3.5 min-w-0">
+                    <div key={s.id}>
+                      <div
+                        onClick={() => onOpenSession(s)}
+                        className="group flex items-center justify-between p-4 hover:bg-white/[0.03] transition-[background-color] duration-150 cursor-pointer"
+                      >
                         {/* Avatar circle with initial letter */}
                         <div className="w-10 h-10 rounded-full bg-[#161b22] border border-white/10 flex items-center justify-center text-[#4fc3f7] font-mono font-semibold text-base shrink-0 group-hover:border-[#4fc3f7]/40 transition-colors">
                           {initial}
@@ -241,6 +241,7 @@ export function HomeView({
                           <polyline points="9 18 15 12 9 6" />
                         </svg>
                       </div>
+                      {!isLast && <div className="h-[1px] bg-white/[0.06] w-full" />}
                     </div>
                   );
                 })}

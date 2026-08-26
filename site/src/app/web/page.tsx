@@ -65,7 +65,25 @@ export default function WebPage() {
             }
           }
 
-          setSavedSessions(Array.from(map.values()));
+          const next = Array.from(map.values());
+          setSavedSessions((prev) => {
+            if (prev.length === next.length) {
+              let same = true;
+              for (let i = 0; i < prev.length; i++) {
+                if (
+                  prev[i].id !== next[i].id ||
+                  prev[i].status !== next[i].status ||
+                  prev[i].model !== next[i].model ||
+                  prev[i].isLive !== next[i].isLive
+                ) {
+                  same = false;
+                  break;
+                }
+              }
+              if (same) return prev;
+            }
+            return next;
+          });
         } else {
           setSavedSessions(stored);
         }
@@ -90,20 +108,27 @@ export default function WebPage() {
 
           // Real-time turn start / turn end (working: true/false)
           if (event.type === "room_meta_updated" && event.roomId) {
-            setSavedSessions((prev) =>
-              prev.map((s) => {
+            setSavedSessions((prev) => {
+              let changed = false;
+              const next = prev.map((s) => {
                 if (s.roomId === event.roomId) {
                   const isWorking = !!event.meta?.working;
-                  return {
-                    ...s,
-                    status: isWorking ? "working" : "online",
-                    model: event.meta?.model || s.model,
-                    isLive: true,
-                  };
+                  const newStatus: "working" | "online" = isWorking ? "working" : "online";
+                  const newModel = event.meta?.model || s.model;
+                  if (s.status !== newStatus || s.model !== newModel) {
+                    changed = true;
+                    return {
+                      ...s,
+                      status: newStatus,
+                      model: newModel,
+                      isLive: true,
+                    };
+                  }
                 }
                 return s;
-              })
-            );
+              });
+              return changed ? next : prev;
+            });
           } else if (event.type === "room_announced" || event.type === "rooms") {
             refreshSessions();
           } else if (event.type === "room_ended" && event.roomId) {
