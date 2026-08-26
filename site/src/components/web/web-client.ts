@@ -262,10 +262,8 @@ export class RemotePiRelayClient {
 
       this.eventSource.onopen = () => {
         this.onStateChange?.("connected");
-        this.onPresenceChange?.("online");
         this.requestSync();
       };
-
       this.eventSource.onmessage = (event) => {
         try {
           const payload = JSON.parse(event.data);
@@ -290,12 +288,14 @@ export class RemotePiRelayClient {
   private handleBridgeEvent(event: Record<string, unknown>): void {
     if (event.type === "init") {
       this.onStateChange?.("connected");
-      this.onPresenceChange?.(event.presence as PeerPresence || "online");
+      if (event.presence) {
+        this.onPresenceChange?.(event.presence as PeerPresence);
+      }
       return;
     }
 
     if (event.type === "presence") {
-      this.onPresenceChange?.(event.presence as PeerPresence || "online");
+      this.onPresenceChange?.(event.presence as PeerPresence || "offline");
       return;
     }
 

@@ -25,8 +25,10 @@ export function WebChat({
 }: WebChatProps) {
   const [messages, setMessages] = useState<WebChatMessage[]>([]);
   const [inputText, setInputText] = useState("");
-  const [isWorking, setIsWorking] = useState(false);
-  const [presence, setPresence] = useState<PeerPresence>("connecting" as PeerPresence);
+  const [isWorking, setIsWorking] = useState(session.status === "working");
+  const [presence, setPresence] = useState<PeerPresence>(
+    session.status || (session.isLive ? "online" : "offline")
+  );
   const [connState, setConnState] = useState<ConnectionState>("connecting");
   const [connError, setConnError] = useState<string | null>(null);
   const [showScrollBottom, setShowScrollBottom] = useState(false);
@@ -62,7 +64,6 @@ export function WebChat({
       if (err) setConnError(err);
       if (state === "connected") {
         setConnError(null);
-        setPresence("online");
       } else if (state === "disconnected" || state === "error") {
         setPresence("offline");
       }
@@ -310,7 +311,7 @@ export function WebChat({
   };
 
   return (
-    <div className="flex flex-col h-[calc(100vh-80px)] max-w-5xl mx-auto w-full bg-[#08090d] border-x border-white/10 relative">
+    <div className="flex flex-col h-screen max-w-5xl mx-auto w-full bg-[#08090d] border-x border-white/10 relative">
       {/* 1. TOP APP BAR */}
       <div className="h-14 px-4 border-b border-white/10 bg-[#0a0c10]/95 backdrop-blur-md flex items-center justify-between shrink-0 z-20">
         <div className="flex items-center gap-3 min-w-0">

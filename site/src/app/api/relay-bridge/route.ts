@@ -60,7 +60,7 @@ function getOrCreateRelay(sessionId: string, targetEpk: string, relayUrl: string
     ws: null,
     connected: false,
     authenticated: false,
-    presence: "online",
+    presence: "offline",
     messages: [],
     listeners: [],
     privKey,
@@ -112,8 +112,12 @@ function getOrCreateRelay(sessionId: string, targetEpk: string, relayUrl: string
           return;
         }
 
-        // 2. Room & Presence Broadcasts
+        // 2. Room & Presence Broadcasts (Per-Room Liveness - Mobile Parity)
         if (frame.type === "room_meta_updated") {
+          if (frame.room_id === state!.roomId) {
+            state!.presence = frame.meta?.working ? "working" : "online";
+            broadcast(state!, { type: "presence", presence: state!.presence });
+          }
           broadcast(state!, {
             type: "room_meta_updated",
             peer: frame.peer,
@@ -124,6 +128,10 @@ function getOrCreateRelay(sessionId: string, targetEpk: string, relayUrl: string
         }
 
         if (frame.type === "room_announced") {
+          if (frame.room_id === state!.roomId) {
+            state!.presence = "online";
+            broadcast(state!, { type: "presence", presence: "online" });
+          }
           broadcast(state!, {
             type: "room_announced",
             peer: frame.peer,
@@ -133,6 +141,10 @@ function getOrCreateRelay(sessionId: string, targetEpk: string, relayUrl: string
         }
 
         if (frame.type === "room_ended") {
+          if (frame.room_id === state!.roomId) {
+            state!.presence = "offline";
+            broadcast(state!, { type: "presence", presence: "offline" });
+          }
           broadcast(state!, {
             type: "room_ended",
             peer: frame.peer,
@@ -142,6 +154,15 @@ function getOrCreateRelay(sessionId: string, targetEpk: string, relayUrl: string
         }
 
         if (frame.type === "rooms") {
+          if (Array.isArray(frame.rooms)) {
+            const liveRoom = frame.rooms.find((r: any) => r.room_id === state!.roomId);
+            if (liveRoom) {
+              state!.presence = liveRoom.working ? "working" : "online";
+            } else {
+              state!.presence = "offline";
+            }
+            broadcast(state!, { type: "presence", presence: state!.presence });
+          }
           broadcast(state!, {
             type: "rooms",
             peer: frame.peer,
@@ -150,21 +171,16 @@ function getOrCreateRelay(sessionId: string, targetEpk: string, relayUrl: string
           return;
         }
 
-        if (frame.type === "peer_online") {
-          state!.presence = "online";
-          broadcast(state!, { type: "presence", presence: "online" });
-          return;
-        }
         if (frame.type === "peer_offline") {
           state!.presence = "offline";
           broadcast(state!, { type: "presence", presence: "offline" });
           return;
         }
+
         if (frame.type === "presence") {
           broadcast(state!, { type: "presence_states", states: frame.states });
           return;
         }
-
         // 3. Inner frames
         if (frame.peer && frame.ct) {
           const innerStr = Buffer.from(frame.ct, "base64").toString("utf8");

@@ -161,7 +161,6 @@ export async function GET() {
     // 2. Derive known offline project sessions (e.g. AI_examiner, etc.)
     const knownCandidates = [
       path.join(os.homedir(), "da", "Dropbox", "Shared", "AI_examiner"),
-      path.join(os.homedir(), "da", "Dropbox", "Apps", "Overleaf", "AI_examiner"),
       path.join(os.homedir(), "da", "Dropbox", "RF"),
       path.join(os.homedir(), "da", "Dropbox", "scripts", "projects", "remote-pi"),
       path.join(os.homedir(), "da", "Dropbox", "Apps", "Overleaf", "AI_Policy_Slides"),
@@ -170,7 +169,6 @@ export async function GET() {
       path.join(os.homedir(), "da", "Dropbox", "2.process_innovation"),
       path.join(os.homedir(), "da", "Dropbox", "3.clean_innovation"),
     ];
-
     function roomIdForCwd(cwd: string): string {
       let target: string;
       try { target = fs.realpathSync(cwd); } catch { target = cwd; }
@@ -185,10 +183,13 @@ export async function GET() {
           if (!seenRooms.has(rId)) {
             seenRooms.add(rId);
             const baseName = path.basename(dir);
+            const dev = (baseName === "AI_examiner" || dir.includes("Shared/AI_examiner") || dir.includes("uts"))
+              ? "uts"
+              : hostName;
             sessions.push({
               id: `${keyInfo.publicKey}_${rId}`,
               name: baseName,
-              device: hostName,
+              device: dev,
               remoteEpk: keyInfo.publicKey,
               relayUrl,
               roomId: rId,
