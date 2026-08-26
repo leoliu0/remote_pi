@@ -137,8 +137,9 @@ export async function GET() {
       privateKey: keyInfo.privateKey,
     });
 
-    // Mobile Parity: build sessions from legitimate discovered rooms
-    const sessions = rooms.map((r) => {
+    // 1. Live sessions from relay
+    const liveRoomIds = new Set(rooms.map((r) => r.room_id));
+    const sessions: any[] = rooms.map((r) => {
       const isWorking = !!r.working;
       const status: "working" | "online" | "offline" = isWorking ? "working" : "online";
       return {
@@ -156,6 +157,51 @@ export async function GET() {
         lastConnectedAt: new Date().toISOString(),
       };
     });
+
+    // 2. Derive known offline project sessions (e.g. AI_examiner, etc.)
+    const knownCandidates = [
+      path.join(os.homedir(), "da", "Dropbox", "Shared", "AI_examiner"),
+      path.join(os.homedir(), "da", "Dropbox", "Apps", "Overleaf", "AI_examiner"),
+      path.join(os.homedir(), "da", "Dropbox", "RF"),
+      path.join(os.homedir(), "da", "Dropbox", "scripts", "projects", "remote-pi"),
+      path.join(os.homedir(), "da", "Dropbox", "Apps", "Overleaf", "AI_Policy_Slides"),
+      path.join(os.homedir(), "da", "Dropbox", "Apps", "Overleaf", "product_and_instown"),
+      path.join(os.homedir(), "da", "Dropbox", "Chris-Leo-Corla"),
+      path.join(os.homedir(), "da", "Dropbox", "2.process_innovation"),
+      path.join(os.homedir(), "da", "Dropbox", "3.clean_innovation"),
+    ];
+
+    function roomIdForCwd(cwd: string): string {
+      let target: string;
+      try { target = fs.realpathSync(cwd); } catch { target = cwd; }
+      return createHash("sha256").update(target).digest("base64url").slice(0, 12);
+    }
+
+    const seenRooms = new Set(liveRoomIds);
+    for (const dir of knownCandidates) {
+      try {
+        if (fs.existsSync(dir)) {
+          const rId = roomIdForCwd(dir);
+          if (!seenRooms.has(rId)) {
+            seenRooms.add(rId);
+            const baseName = path.basename(dir);
+            sessions.push({
+              id: `${keyInfo.publicKey}_${rId}`,
+              name: baseName,
+              device: hostName,
+              remoteEpk: keyInfo.publicKey,
+              relayUrl,
+              roomId: rId,
+              cwd: dir,
+              status: "offline",
+              isLive: false,
+              pairedAt: new Date().toISOString(),
+              lastConnectedAt: new Date().toISOString(),
+            });
+          }
+        }
+      } catch {}
+    }
 
     return NextResponse.json({
       localPiDetected: true,
