@@ -24,11 +24,10 @@ export default function WebPage() {
   const [showSessionInfo, setShowSessionInfo] = useState(false);
   const [showQuickActions, setShowQuickActions] = useState(false);
   const [mounted, setMounted] = useState(false);
-  useEffect(() => {
-    setMounted(true);
-    let stored = getSavedSessions();
 
-    // 1. Auto-discover local Pi host sessions & query live status from relay
+  // Helper to refresh session list
+  const refreshSessions = () => {
+    const stored = getSavedSessions();
     fetch("/api/local-session")
       .then((res) => res.json())
       .then((data) => {
@@ -54,6 +53,7 @@ export default function WebPage() {
             pairedAt: s.pairedAt || new Date().toISOString(),
             lastConnectedAt: new Date().toISOString(),
           }));
+
           // Merge: Live active sessions at top, then saved custom sessions
           const map = new Map<string, PairedSession>();
           for (const s of remoteSessions) {
@@ -65,8 +65,7 @@ export default function WebPage() {
             }
           }
 
-          const combined = Array.from(map.values());
-          setSavedSessions(combined);
+          setSavedSessions(Array.from(map.values()));
         } else {
           setSavedSessions(stored);
         }
@@ -74,8 +73,59 @@ export default function WebPage() {
       .catch(() => {
         setSavedSessions(stored);
       });
+  };
 
-    // 2. Check if pairing parameters are provided in URL query
+  useEffect(() => {
+    setMounted(true);
+    refreshSessions();
+
+    // 1. Live SSE Presence & Room Broadcast Stream (Zero Latency)
+    let sse: EventSource | null = null;
+    try {
+      sse = new EventSource("/api/relay-bridge?sessionId=home_realtime_presence");
+
+      sse.onmessage = (e) => {
+        try {
+          const event = JSON.parse(e.data);
+
+          // Real-time turn start / turn end (working: true/false)
+          if (event.type === "room_meta_updated" && event.roomId) {
+            setSavedSessions((prev) =>
+              prev.map((s) => {
+                if (s.roomId === event.roomId) {
+                  const isWorking = !!event.meta?.working;
+                  return {
+                    ...s,
+                    status: isWorking ? "working" : "online",
+                    model: event.meta?.model || s.model,
+                    isLive: true,
+                  };
+                }
+                return s;
+              })
+            );
+          } else if (event.type === "room_announced" || event.type === "rooms") {
+            refreshSessions();
+          } else if (event.type === "room_ended" && event.roomId) {
+            setSavedSessions((prev) =>
+              prev.map((s) => {
+                if (s.roomId === event.roomId) {
+                  return { ...s, status: "offline", isLive: false };
+                }
+                return s;
+              })
+            );
+          } else if (event.type === "presence") {
+            setIsRelayConnected(event.presence === "online");
+          }
+        } catch {}
+      };
+    } catch {}
+
+    // 2. Periodic sync backstop (every 2.5s)
+    const interval = setInterval(refreshSessions, 2500);
+
+    // 3. Check if pairing parameters are provided in URL query
     if (typeof window !== "undefined" && window.location.search) {
       const search = window.location.search;
       const params = new URLSearchParams(search);
@@ -100,6 +150,11 @@ export default function WebPage() {
         window.history.replaceState({}, document.title, window.location.pathname);
       }
     }
+
+    return () => {
+      clearInterval(interval);
+      if (sse) sse.close();
+    };
   }, []);
 
   const handleOpenSession = (session: PairedSession) => {

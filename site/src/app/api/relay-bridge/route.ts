@@ -93,9 +93,13 @@ function getOrCreateRelay(sessionId: string, targetEpk: string, relayUrl: string
           ws.send(JSON.stringify({ type: "auth", sig: sigB64 }));
           state!.authenticated = true;
 
-          // Subscribe presence & sync history
+          // Subscribe presence & rooms & sync history
           setTimeout(() => {
             ws.send(JSON.stringify({ type: "subscribe_presence", peers: [targetEpk] }));
+            ws.send(JSON.stringify({ type: "subscribe_rooms", peers: [targetEpk] }));
+            ws.send(JSON.stringify({ type: "presence_check", peers: [targetEpk] }));
+            ws.send(JSON.stringify({ type: "rooms_check", peers: [targetEpk] }));
+
             // Send session_sync inner
             const syncPayload = { type: "session_sync", id: `sync_${Date.now()}`, limit: 1000 };
             const outer = {
@@ -104,11 +108,48 @@ function getOrCreateRelay(sessionId: string, targetEpk: string, relayUrl: string
               ct: Buffer.from(JSON.stringify(syncPayload)).toString("base64"),
             };
             ws.send(JSON.stringify(outer));
-          }, 100);
+          }, 50);
           return;
         }
 
-        // 2. Presence
+        // 2. Room & Presence Broadcasts
+        if (frame.type === "room_meta_updated") {
+          broadcast(state!, {
+            type: "room_meta_updated",
+            peer: frame.peer,
+            roomId: frame.room_id,
+            meta: frame.meta,
+          });
+          return;
+        }
+
+        if (frame.type === "room_announced") {
+          broadcast(state!, {
+            type: "room_announced",
+            peer: frame.peer,
+            room: frame,
+          });
+          return;
+        }
+
+        if (frame.type === "room_ended") {
+          broadcast(state!, {
+            type: "room_ended",
+            peer: frame.peer,
+            roomId: frame.room_id,
+          });
+          return;
+        }
+
+        if (frame.type === "rooms") {
+          broadcast(state!, {
+            type: "rooms",
+            peer: frame.peer,
+            rooms: frame.rooms,
+          });
+          return;
+        }
+
         if (frame.type === "peer_online") {
           state!.presence = "online";
           broadcast(state!, { type: "presence", presence: "online" });
@@ -117,6 +158,10 @@ function getOrCreateRelay(sessionId: string, targetEpk: string, relayUrl: string
         if (frame.type === "peer_offline") {
           state!.presence = "offline";
           broadcast(state!, { type: "presence", presence: "offline" });
+          return;
+        }
+        if (frame.type === "presence") {
+          broadcast(state!, { type: "presence_states", states: frame.states });
           return;
         }
 
