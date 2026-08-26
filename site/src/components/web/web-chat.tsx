@@ -18,6 +18,24 @@ interface WebChatProps {
   onOpenSettings?: () => void;
 }
 
+const READ_ONLY_TOOLS = new Set([
+  "read",
+  "grep",
+  "glob",
+  "find",
+  "ls",
+  "view",
+  "cat",
+  "head",
+  "tail",
+  "web_search",
+  "google_web_search",
+  "mcp__read",
+  "mcp__grep",
+  "mcp__glob",
+  "mcp__gemini_search_google_web_search",
+]);
+
 export function WebChat({
   session,
   onDisconnect,
@@ -454,23 +472,35 @@ export function WebChat({
         onScroll={handleScroll}
         className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4 relative scroll-smooth"
       >
-        {messages.length === 0 && (
-          <div className="flex flex-col items-center justify-center h-full text-center p-6 text-[#777]">
-            <div className="w-12 h-12 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-center text-[#4fc3f7] mb-3">
-              <svg className="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <polyline points="4 17 10 11 4 5" />
-                <line x1="12" y1="19" x2="20" y2="19" />
-              </svg>
-            </div>
-            <div className="text-sm font-medium text-white">No messages yet</div>
-            <div className="text-xs text-[#666] font-mono mt-1">
-              Send a prompt below to interact with your Pi agent.
-            </div>
-          </div>
-        )}
+        {(() => {
+          const visibleMessages = messages.filter((m) => {
+            if (m.role !== "tool") return true;
+            if (toolDisplay === "hidden") return false;
+            if (toolDisplay === "brief" && m.tool) {
+              const toolName = m.tool.tool.toLowerCase();
+              return !READ_ONLY_TOOLS.has(toolName);
+            }
+            return true;
+          });
 
-        {messages.map((m) => {
-          // Determine status color for tool card (Mobile Parity: ToolRequestCard)
+          if (visibleMessages.length === 0) {
+            return (
+              <div className="flex flex-col items-center justify-center h-full text-center p-6 text-[#777]">
+                <div className="w-12 h-12 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-center text-[#4fc3f7] mb-3">
+                  <svg className="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <polyline points="4 17 10 11 4 5" />
+                    <line x1="12" y1="19" x2="20" y2="19" />
+                  </svg>
+                </div>
+                <div className="text-sm font-medium text-white">No messages yet</div>
+                <div className="text-xs text-[#666] font-mono mt-1">
+                  Send a prompt below to interact with your Pi agent.
+                </div>
+              </div>
+            );
+          }
+
+          return visibleMessages.map((m) => {
           const toolStatus = m.tool?.status || "done";
           const toolColor =
             toolStatus === "pending"
@@ -707,7 +737,8 @@ export function WebChat({
               )}
             </div>
           );
-        })}
+        });
+      })()}
 
         {isWorking && (
           <div className="flex items-center justify-between text-xs font-mono text-[#4fc3f7] py-2 px-3 rounded-xl bg-[#4fc3f7]/10 border border-[#4fc3f7]/20 w-fit animate-pulse">
