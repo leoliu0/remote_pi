@@ -570,7 +570,7 @@ export function WebChat({
             );
           }
 
-          return visibleMessages.map((m) => {
+          return visibleMessages.map((m, idx) => {
           const toolStatus = m.tool?.status || "done";
           const toolColor =
             toolStatus === "pending"
@@ -591,7 +591,7 @@ export function WebChat({
               : "FAILED";
 
           return (
-            <div key={m.id} className="w-full">
+            <div key={`${m.id || m.timestamp}_${idx}`} className="w-full">
               {/* USER BUBBLE (Mobile Parity: Capped width, #1A1A1A pill) */}
               {m.role === "user" && (
                 <div className="flex justify-end mb-3">

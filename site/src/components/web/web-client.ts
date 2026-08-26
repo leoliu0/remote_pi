@@ -314,30 +314,34 @@ export class RemotePiRelayClient {
       case "session_history":
         if (Array.isArray(msg.events)) {
           const historyMessages: WebChatMessage[] = [];
-          for (const ev of msg.events) {
+          for (let i = 0; i < msg.events.length; i++) {
+            const ev = msg.events[i];
+            const eventId = (ev.id as string) || (ev.tool_call_id as string);
+            const ts = (ev.ts as number) || Date.now();
             if (ev.type === "user_input") {
               historyMessages.push({
-                id: (ev.id as string) || `hist-${ev.ts}`,
+                id: eventId || `hist-user-${ts}-${i}`,
                 role: "user",
                 text: (ev.text as string) || "",
-                timestamp: (ev.ts as number) || Date.now(),
+                timestamp: ts,
                 status: "sent",
               });
             } else if (ev.type === "agent_message") {
               historyMessages.push({
-                id: `hist-asst-${ev.ts}`,
+                id: eventId || `hist-asst-${ts}-${i}`,
                 role: "assistant",
                 text: (ev.text as string) || "",
-                timestamp: (ev.ts as number) || Date.now(),
+                timestamp: ts,
               });
             } else if (ev.type === "tool_request") {
+              const toolCallId = (ev.tool_call_id as string) || eventId || `tc_${ts}_${i}`;
               historyMessages.push({
-                id: `hist-tool-${ev.ts}`,
+                id: `hist-tool-${toolCallId}-${i}`,
                 role: "tool",
                 text: `${ev.tool}: ${JSON.stringify(ev.args || {})}`,
-                timestamp: (ev.ts as number) || Date.now(),
+                timestamp: ts,
                 tool: {
-                  id: ev.tool_call_id as string,
+                  id: toolCallId,
                   tool: ev.tool as string,
                   args: ev.args as Record<string, unknown>,
                   command: typeof ev.args?.command === "string" ? ev.args.command : undefined,
@@ -346,10 +350,10 @@ export class RemotePiRelayClient {
               });
             } else if (ev.type === "compaction") {
               historyMessages.push({
-                id: `hist-comp-${ev.ts}`,
+                id: eventId || `hist-comp-${ts}-${i}`,
                 role: "compaction",
                 text: (ev.summary as string) || "Context compacted",
-                timestamp: (ev.ts as number) || Date.now(),
+                timestamp: ts,
                 tokensBefore: ev.tokens_before as number,
               });
             }

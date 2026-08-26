@@ -127,7 +127,7 @@ async function parseJsonlFile(filePath: string, maxMessages = 200): Promise<Pars
             : typeof m.content === "string" ? m.content : "";
           if (text) {
             rawMessages.push({
-              id: item.id || `user_${ts}`,
+              id: item.id || `user_${ts}_${count++}`,
               role: "user",
               text,
               timestamp: ts,
@@ -152,7 +152,7 @@ async function parseJsonlFile(filePath: string, maxMessages = 200): Promise<Pars
 
           if (toolCall) {
             rawMessages.push({
-              id: item.id || `tool_${ts}`,
+              id: toolCall.id || item.id || `tool_${ts}_${count++}`,
               role: "tool",
               text: `${toolCall.name}: ${JSON.stringify(toolCall.arguments || {})}`,
               timestamp: ts,
@@ -168,7 +168,7 @@ async function parseJsonlFile(filePath: string, maxMessages = 200): Promise<Pars
 
           if (text) {
             rawMessages.push({
-              id: item.id || `asst_${ts}`,
+              id: item.id || `asst_${ts}_${count++}`,
               role: "assistant",
               text,
               timestamp: ts,
@@ -187,7 +187,7 @@ async function parseJsonlFile(filePath: string, maxMessages = 200): Promise<Pars
           }
         } else if (m.role === "compaction") {
           rawMessages.push({
-            id: item.id || `comp_${ts}`,
+            id: item.id || `comp_${ts}_${count++}`,
             role: "compaction",
             text: m.content || "Context compacted",
             timestamp: ts,
