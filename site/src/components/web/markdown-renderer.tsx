@@ -15,6 +15,13 @@ export function MarkdownRenderer({ content, isStreaming }: MarkdownRendererProps
     setCopiedIndex(idx);
     setTimeout(() => setCopiedIndex(null), 2000);
   };
+  // Sanitize content: strip internal agent thinking blocks and collapse redundant whitespace
+  const sanitized = (content || "")
+    .replace(/```thinking[\s\S]*?```/gi, "")
+    .replace(/<think>[\s\S]*?<\/think>/gi, "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 
   // Parse code blocks vs markdown text
   const parts: Array<{ type: "code" | "text"; content: string; language?: string }> = [];
@@ -22,32 +29,44 @@ export function MarkdownRenderer({ content, isStreaming }: MarkdownRendererProps
   let lastIndex = 0;
   let match: RegExpExecArray | null;
 
-  while ((match = codeBlockRegex.exec(content)) !== null) {
+  while ((match = codeBlockRegex.exec(sanitized)) !== null) {
     if (match.index > lastIndex) {
+      const textPart = sanitized.slice(lastIndex, match.index).trim();
+      if (textPart) {
+        parts.push({
+          type: "text",
+          content: textPart,
+        });
+      }
+    }
+    const lang = (match[1] || "text").toLowerCase();
+    if (lang !== "thinking") {
       parts.push({
-        type: "text",
-        content: content.slice(lastIndex, match.index),
+        type: "code",
+        language: match[1] || "text",
+        content: match[2].trimEnd(),
       });
     }
-    parts.push({
-      type: "code",
-      language: match[1] || "text",
-      content: match[2],
-    });
     lastIndex = match.index + match[0].length;
   }
 
-  if (lastIndex < content.length) {
-    parts.push({
-      type: "text",
-      content: content.slice(lastIndex),
-    });
+  if (lastIndex < sanitized.length) {
+    const trailing = sanitized.slice(lastIndex).trim();
+    if (trailing) {
+      parts.push({
+        type: "text",
+        content: trailing,
+      });
+    }
   }
 
-  if (parts.length === 0 && content) {
-    parts.push({ type: "text", content });
+  if (parts.length === 0 && sanitized) {
+    parts.push({ type: "text", content: sanitized });
   }
 
+  if (parts.length === 0 && !isStreaming) {
+    return null;
+  }
   return (
     <div className="space-y-3 text-sm leading-relaxed text-[#F0F0F0] font-[family-name:var(--ff-body)]">
       {parts.map((part, idx) => {
