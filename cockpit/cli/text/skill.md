@@ -10,6 +10,9 @@ terminals). The `cockpit` command talks to the app and lets you **inject
 text/keys** into any tab and **list** tabs/workspaces. It only exists inside
 Cockpit tabs (it is not on the global PATH).
 
+`ck` is the same binary under a shorter name — use whichever you prefer
+(`ck list-tabs` == `cockpit list-tabs`). Every example below works with both.
+
 > **Tab vs pane.** A **tab** is a single terminal/agent session — that's the
 > unit this CLI addresses (`--tab-id`). A **pane** is the split leaf that can
 > hold several tabs; the CLI does not address it. `list-panes`/`read-pane` and

@@ -119,6 +119,27 @@ void main() {
     });
   });
 
+  group('forks (worktrees remotos)', () {
+    test('falha de listagem NÃO apaga os forks já conhecidos', () async {
+      // Regressão da 1.28.12: ao varrer as roots do multirepo, um erro de
+      // listagem virava `continue` e a lista saía vazia — o VM então removia
+      // todos os forks e jogava a seleção de volta no workspace pai. Com host
+      // offline (o caso deste teste, sem conexão nenhuma), o refresh tem de
+      // sair sem aplicar nada.
+      var applied = 0;
+      ctrl.applyForks = (_, _, _) => applied++;
+      await ctrl.refreshWorktrees('ws');
+      expect(applied, 0, reason: 'nada foi aplicado a partir de uma falha');
+    });
+
+    test('workspace sem pasta não dispara refresh', () async {
+      var applied = 0;
+      ctrl.applyForks = (_, _, _) => applied++;
+      await ctrl.refreshWorktrees('desconhecido');
+      expect(applied, 0);
+    });
+  });
+
   test('single-root remoto continua com "o" git do workspace', () {
     ctrl.seedGit(
       'ws',

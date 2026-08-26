@@ -168,12 +168,40 @@ class RemoteServer {
   ) async {
     // Sem cliente não há a quem perguntar — e o agente recebe um erro em vez
     // de esperar o timeout inteiro.
-    final connection = _connections.isEmpty ? null : _connections.last;
-    if (connection == null) {
+    if (_connections.isEmpty) {
       return <String, Object?>{
         'ok': false,
         'error': 'no Cockpit client attached to this host',
       };
+    }
+    // O comando vai para o cliente DONO da aba. Dois clientes no mesmo host
+    // (desktop e iPad) compartilham este servidor, e responder pelo último que
+    // conectou fazia o comando de um agente cair no outro dispositivo.
+    final tabId = (request['tabId'] ?? '').toString();
+    _Connection? connection;
+    if (tabId.isNotEmpty) {
+      for (final c in _connections) {
+        if (c.ownsTab(tabId)) {
+          connection = c;
+          break;
+        }
+      }
+    }
+    // Ninguém reivindica a aba (ela nasceu antes deste servidor, ou o comando
+    // veio de fora de uma aba). Com um cliente só, ele é a resposta óbvia;
+    // com vários, chutar erraria de dispositivo — melhor dizer o que houve.
+    if (connection == null) {
+      if (_connections.length > 1) {
+        return <String, Object?>{
+          'ok': false,
+          'error': tabId.isEmpty
+              ? 'more than one Cockpit is attached to this host: run the '
+                    'command from a terminal tab, so it knows which one to ask'
+              : 'no attached Cockpit owns tab "$tabId" (it may predate the '
+                    'current server — open a new terminal tab)',
+        };
+      }
+      connection = _connections.last;
     }
     final rid = _nextCliRid++;
     final completer = Completer<Map<String, Object?>>();
@@ -308,6 +336,14 @@ class _Connection {
   /// os comandos de CLI que o host encaminhou.
   void Function(RpcResponse response)? _onRpcResponse;
 
+  /// `COCKPIT_TAB_ID` de cada PTY que ESTE cliente abriu. É o que diz de quem
+  /// é a aba quando um comando de CLI chega do host: com dois clientes no
+  /// mesmo servidor (o desktop e o iPad, por exemplo), mandar para o último
+  /// que conectou responderia com as abas do dispositivo errado.
+  final Set<String> _tabIds = <String>{};
+
+  bool ownsTab(String tabId) => _tabIds.contains(tabId);
+
   final Socket _socket;
   final TerminalService _terminals;
   final FileService _files;
@@ -426,6 +462,8 @@ class _Connection {
                   // mandar o dele: destruiria o PATH desta máquina).
                   ..._cliPathEnv(fromClient['PATH']),
                 };
+          final tabId = env['COCKPIT_TAB_ID'];
+          if (tabId != null && tabId.isNotEmpty) _tabIds.add(tabId);
           final info = await _terminals.open(
             PtySpawnSpec(
               executable: message.executable,

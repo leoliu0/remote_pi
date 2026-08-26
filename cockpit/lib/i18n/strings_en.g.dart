@@ -2269,6 +2269,9 @@ class Translations$cockpit$remoteHost$en {
 	/// en: '${host} is presenting a different SSH key than the one stored. If you did not reinstall that machine, stop and check it — otherwise remove the old entry from ~/.ssh/known_hosts.'
 	String errHostKeyChanged({required Object host}) => '${host} is presenting a different SSH key than the one stored. If you did not reinstall that machine, stop and check it — otherwise remove the old entry from ~/.ssh/known_hosts.';
 
+	/// en: '${host} runs Windows. Cockpit can connect FROM Windows, but a Windows machine cannot be the host yet — the remote server needs a UNIX-like system (macOS or Linux).'
+	String errWindowsHost({required Object host}) => '${host} runs Windows. Cockpit can connect FROM Windows, but a Windows machine cannot be the host yet — the remote server needs a UNIX-like system (macOS or Linux).';
+
 	/// en: 'Only the public key is here. That works only if the private key is in your SSH agent; otherwise pick the private file (same name, without .pub).'
 	String get errIdentityPublic => 'Only the public key is here. That works only if the private key is in your SSH agent; otherwise pick the private file (same name, without .pub).';
 
@@ -4223,6 +4226,7 @@ extension on Translations {
 			'cockpit.remoteHost.errIdentity' => 'Pick the private key to authenticate with.',
 			'cockpit.remoteHost.errHostKeyUnknown' => ({required Object host}) => 'Cockpit does not trust ${host} yet. Connect again and confirm the fingerprint.',
 			'cockpit.remoteHost.errHostKeyChanged' => ({required Object host}) => '${host} is presenting a different SSH key than the one stored. If you did not reinstall that machine, stop and check it — otherwise remove the old entry from ~/.ssh/known_hosts.',
+			'cockpit.remoteHost.errWindowsHost' => ({required Object host}) => '${host} runs Windows. Cockpit can connect FROM Windows, but a Windows machine cannot be the host yet — the remote server needs a UNIX-like system (macOS or Linux).',
 			'cockpit.remoteHost.errIdentityPublic' => 'Only the public key is here. That works only if the private key is in your SSH agent; otherwise pick the private file (same name, without .pub).',
 			'cockpit.remoteHost.errIdentityNotKey' => 'That file does not look like a private key.',
 			'cockpit.remoteHost.errIdentityMissingFile' => 'That file no longer exists.',

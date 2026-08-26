@@ -1,5 +1,8 @@
 cockpit — Cockpit's internal CLI (visible only inside the app's terminals)
 
+`ck` is a shorter name for the same command: `ck list-tabs` == `cockpit
+list-tabs`. (If you already have your own `ck` alias, yours wins.)
+
 A **tab** is a terminal/agent session (what this CLI addresses). A **pane** is
 the split leaf that groups tabs — not addressed here. `list-panes`/`read-pane`
 are legacy aliases of `list-tabs`/`read-tab`.

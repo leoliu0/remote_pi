@@ -158,7 +158,10 @@ class DartSshHostConnection {
           _connectTimeout,
           onTimeout: () => throw const DartSshException('ssh_exec_timeout'),
         );
-    return utf8.decode(out).trim();
+    // Tolerante pelo mesmo motivo do SshTunnel.capture: host Windows responde
+    // na codepage local, e um byte inválido aqui virava FormatException no
+    // lugar do erro real.
+    return utf8.decode(out, allowMalformed: true).trim();
   }
 
   Future<void> close() async {

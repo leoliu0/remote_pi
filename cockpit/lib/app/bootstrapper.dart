@@ -86,8 +86,13 @@ class _CockpitBootstrapperState extends State<CockpitBootstrapper> {
       onExitRequested: () async {
         // Descarrega qualquer escrita ainda na janela de debounce dos stores
         // (bounds da janela, layout) antes do processo morrer.
+        // Com teto, pelo mesmo motivo do fechamento pela janela: o engine
+        // espera esta resposta para encerrar, e um flush lento vira app que
+        // não morre.
         try {
-          await JsonStateStore.flushAll();
+          await JsonStateStore.flushAll().timeout(const Duration(seconds: 2));
+        } on TimeoutException {
+          DiagnosticsLog.instance.log('exit', 'flush estourou 2s — saindo');
         } on Object catch (e, stack) {
           DiagnosticsLog.instance.logError('exit-flush', e, stack);
         }
@@ -519,6 +524,38 @@ class WindowStateKeeperState extends State<WindowStateKeeper>
   @override
   void onWindowUnmaximize() => _persistMaximized(false);
 
+  /// Teto de cada etapa do fechamento. Curto de propósito: o usuário já clicou
+  /// em fechar, e uma janela que não responde é pior do que perder a última
+  /// gravação de bounds.
+  static const _closeStepTimeout = Duration(seconds: 2);
+
+  /// Roda uma etapa do fechamento com teto de tempo e **registra quanto
+  /// demorou**.
+  ///
+  /// O fechamento roda com a janela já interceptada (`setPreventClose`), então
+  /// tudo o que demora aqui aparece como tela travada. Sem medição não havia
+  /// como saber qual etapa era a lenta numa máquina que não é a nossa — e no
+  /// Windows a escrita atômica pode custar caro (antivírus, pasta
+  /// sincronizada), sem nada disso aparecer no macOS.
+  Future<void> _closeStep(String tag, Future<void> Function() step) async {
+    final started = DateTime.now();
+    try {
+      await step().timeout(_closeStepTimeout);
+    } on TimeoutException {
+      DiagnosticsLog.instance.log(
+        'close',
+        '$tag estourou ${_closeStepTimeout.inSeconds}s — seguindo sem esperar',
+      );
+      return;
+    } on Object catch (e, stack) {
+      DiagnosticsLog.instance.logError('close-$tag', e, stack);
+      return;
+    }
+    final ms = DateTime.now().difference(started).inMilliseconds;
+    // Só o que demora vira linha de log; fechamento normal não polui o arquivo.
+    if (ms >= 250) DiagnosticsLog.instance.log('close', '$tag levou ${ms}ms');
+  }
+
   /// Fechamento da janela: **este** é o encerramento limpo do Cockpit.
   ///
   /// Só chega aqui porque o boot liga `setPreventClose(true)`. Sem isso, tanto
@@ -535,19 +572,11 @@ class WindowStateKeeperState extends State<WindowStateKeeper>
   /// o `destroy()` roda no `finally`.
   @override
   Future<void> onWindowClose() async {
-    try {
-      // Bounds pendentes no debounce: fechar 400 ms depois de mover a janela
-      // perderia a posição.
-      _debounce?.cancel();
-      await _persistBoundsNow();
-    } on Object catch (e, stack) {
-      DiagnosticsLog.instance.logError('close-bounds', e, stack);
-    }
-    try {
-      await JsonStateStore.flushAll();
-    } on Object catch (e, stack) {
-      DiagnosticsLog.instance.logError('close-flush', e, stack);
-    }
+    // Bounds pendentes no debounce: fechar 400 ms depois de mover a janela
+    // perderia a posição.
+    _debounce?.cancel();
+    await _closeStep('bounds', _persistBoundsNow);
+    await _closeStep('flush', JsonStateStore.flushAll);
     try {
       DiagnosticsLog.instance.markCleanExit();
     } on Object catch (_) {

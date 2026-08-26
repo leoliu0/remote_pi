@@ -24,6 +24,58 @@ As versões seguem o `version:` do `pubspec.yaml` (SSOT). O campo `notes` do
     linhas não-vazias — o começo da seção deve fazer sentido sozinho.
 -->
 
+## [1.28.14] - 2026-08-26
+
+**Still a beta for the upcoming 2.0.0.** The `cockpit` CLI now has a short
+name, connecting to a Windows machine says what is actually wrong, and closing
+the window no longer hangs.
+
+### Added
+
+- **`ck` is the same command, shorter.** `ck list-tabs` == `cockpit list-tabs`,
+  in local and remote terminals. If you already have your own `ck` alias, yours
+  still wins.
+
+### Fixed
+
+- **The remote CLI answered from the wrong device.** With two Cockpits attached
+  to the same host (say a desktop and an iPad), a command typed on one could be
+  answered by the other, listing tabs you were not looking at. Commands now go
+  to the Cockpit that owns the tab.
+- **Pointing at a Windows machine failed with `FormatException: Missing
+  extension byte`.** That was never about the server: Windows replies in the
+  local codepage, and reading it as UTF-8 blew up on the first accented
+  character, hiding the real error. Cockpit now says plainly that it connects
+  *from* Windows, but a Windows machine cannot be the host yet.
+- **Closing the window looked frozen on Windows.** Each shutdown step now has a
+  two-second ceiling and is timed, so the app closes instead of waiting — and
+  the diagnostics log records which step was slow.
+- Typing an accent in a terminal on iPad no longer freezes it for good; it
+  still stalls until you switch tabs and back, and the accent may be lost.
+
+## [1.28.13] - 2026-08-26
+
+**Still a beta for the upcoming 2.0.0.** Fixes for worktrees on remote
+workspaces, and the host's server finally updates itself.
+
+### Fixed
+
+- **The server on your host never updated.** Once installed, it stayed on that
+  version forever, so nothing the server learned later ever reached you — the
+  remote `cockpit` CLI answered nowhere and last release's Source Control fixes
+  never showed up. The app now notices an outdated binary, replaces it and
+  restarts it. **This closes the terminals open on that host, once, the first
+  time you connect after updating.**
+- **Clicking a worktree could show the parent workspace instead.** A hiccup on
+  the SSH connection was read as "this workspace has no worktrees", which
+  dropped them from the rail and moved your selection back to the parent.
+  Restarting the app appeared to fix it because the next listing worked.
+- **A worktree opened empty, losing its tabs.** Selecting one gave you a blank
+  pane instead of the layout you left there, and a `claude` running in it never
+  came back. Its saved layout was only read at startup, before worktrees were
+  known — and, worse, the scrollback of its terminals was being deleted on every
+  launch. Both fixed, for local and remote worktrees.
+
 ## [1.28.12] - 2026-08-26
 
 **Still a beta for the upcoming 2.0.0.** Remote workspaces catch up with local

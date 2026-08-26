@@ -1,5 +1,7 @@
 import 'dart:io';
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
+
 import 'package:cockpit/app/cockpit/domain/contracts/hook_installer.dart';
 import 'package:cockpit/app/core/data/setup/remote_pi_resolver.dart';
 import 'package:cockpit/app/core/domain/result.dart';
@@ -99,12 +101,63 @@ abstract class HookInstallerBase implements HookInstaller {
       destName: destName,
     );
     if (path == null) return null;
+    await ensureShortAlias(dir, destName);
     try {
       await Process.run(path, <String>['install-skill']);
     } catch (_) {
       /* best-effort */
     }
     return path;
+  }
+
+  /// Nome curto da CLI — `ck` digita melhor que `cockpit` num terminal onde o
+  /// agente (ou o humano) chama o comando o tempo todo.
+  ///
+  /// É o **mesmo binário**, não um segundo programa: nada muda de acordo com o
+  /// nome pelo qual foi invocado, e a ajuda segue dizendo `cockpit`. Se o
+  /// usuário já tem um `ck` próprio, o alias de shell dele vence o PATH e nada
+  /// se quebra.
+  static const String shortAliasName = 'ck';
+
+  /// Cria o alias ao lado da CLI já materializada.
+  ///
+  /// POSIX usa symlink (custo zero em disco). No Windows o symlink exige
+  /// Developer Mode ou privilégio de administrador, então lá é uma cópia do
+  /// mesmo `.exe` — funciona em PowerShell, cmd e git-bash sem privilégio
+  /// nenhum, e evita as pegadinhas de um shim `.cmd` com código de saída e
+  /// aspas em argumentos.
+  ///
+  /// Silencioso: o alias é conveniência, nunca motivo para falhar o boot.
+  @visibleForTesting
+  Future<void> ensureShortAlias(String dirPath, String cliName) async {
+    final aliasName = Platform.isWindows
+        ? '$shortAliasName.exe'
+        : shortAliasName;
+    final target = File('$dirPath/$cliName');
+    final alias = '$dirPath/$aliasName';
+    try {
+      if (!await target.exists()) return;
+      if (Platform.isWindows) {
+        final dest = File(alias);
+        if (await _sameContent(target, dest)) return;
+        await target.copy(alias);
+        return;
+      }
+      final link = Link(alias);
+      // Já aponta para o lugar certo? Não mexe. Aponta para outra coisa (ou
+      // sobrou um arquivo solto de uma versão anterior): refaz.
+      if (await link.exists()) {
+        if (await link.target() == cliName) return;
+        await link.delete();
+      } else if (await File(alias).exists()) {
+        await File(alias).delete();
+      }
+      // Alvo RELATIVO: a pasta pode ser movida junto com o `$HOME` (backup,
+      // usuário renomeado) sem o link virar ponteiro morto.
+      await link.create(cliName);
+    } on Object {
+      /* best-effort */
+    }
   }
 
   /// Copia um binário empacotado ([bundledName]) para `[destDirPath]/[destName]`.

@@ -10,6 +10,9 @@ import 'dart:io';
 /// O forward é de socket UDS→UDS: o servidor remoto escuta só em localhost
 /// (nunca expõe porta de rede) e este túnel materializa aquele socket num
 /// path local. Pro cliente, o resultado é indistinguível do loopback.
+/// UTF-8 que não estoura em byte inválido — ver o comentário em [capture].
+const _lenientUtf8 = Utf8Decoder(allowMalformed: true);
+
 class SshTunnel {
   SshTunnel._(
     this._process,
@@ -124,7 +127,7 @@ class SshTunnel {
       ], environment: askpass?.env);
 
       final stderrBuffer = StringBuffer();
-      process.stderr.transform(utf8.decoder).listen(stderrBuffer.write);
+      process.stderr.transform(_lenientUtf8).listen(stderrBuffer.write);
       unawaited(process.stdout.drain<void>());
 
       final tunnel = SshTunnel._(
@@ -277,8 +280,12 @@ class SshTunnel {
       await process.stdin.close();
       // Os dois streams em paralelo: ler um de cada vez trava se o outro
       // encher o pipe (o `cat` do push manda MBs pelo canal).
-      final outFuture = process.stdout.transform(utf8.decoder).join();
-      final errFuture = process.stderr.transform(utf8.decoder).join();
+      // Decodificação TOLERANTE: um host Windows responde na codepage local
+      // (CP850/CP1252), não em UTF-8 — a mensagem acentuada do cmd ("'uname'
+      // não é reconhecido…") estourava `FormatException: Missing extension
+      // byte` e escondia o erro de verdade atrás de um erro de decodificação.
+      final outFuture = process.stdout.transform(_lenientUtf8).join();
+      final errFuture = process.stderr.transform(_lenientUtf8).join();
       final stdoutText = await outFuture;
       final stderrText = await errFuture;
       final code = await process.exitCode;

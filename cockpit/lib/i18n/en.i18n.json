@@ -688,6 +688,7 @@
       "errIdentity": "Pick the private key to authenticate with.",
       "errHostKeyUnknown": "Cockpit does not trust ${host} yet. Connect again and confirm the fingerprint.",
       "errHostKeyChanged": "${host} is presenting a different SSH key than the one stored. If you did not reinstall that machine, stop and check it — otherwise remove the old entry from ~/.ssh/known_hosts.",
+      "errWindowsHost": "${host} runs Windows. Cockpit can connect FROM Windows, but a Windows machine cannot be the host yet — the remote server needs a UNIX-like system (macOS or Linux).",
       "errIdentityPublic": "Only the public key is here. That works only if the private key is in your SSH agent; otherwise pick the private file (same name, without .pub).",
       "errIdentityNotKey": "That file does not look like a private key.",
       "errIdentityMissingFile": "That file no longer exists.",

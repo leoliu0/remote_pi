@@ -374,7 +374,12 @@ class RemoteWorkspaceController extends ChangeNotifier {
       try {
         entries = await gw.list(root);
       } catch (_) {
-        continue; // root sem git (ou offline) → sem forks, sem derrubar as irmãs
+        // `gw.list` LANÇA em falha justamente para não confundir "sem
+        // worktrees" com "não consegui listar" — se seguíssemos em frente, um
+        // soluço de SSH viraria lista vazia, e [applyForks] apagaria os forks
+        // existentes (jogando a seleção de volta no workspace pai). Aborta o
+        // refresh inteiro e tenta de novo no próximo.
+        return;
       }
       if (_worktreeToken[wsId] != token) return; // obsoleto → descarta
       for (final e in entries) {

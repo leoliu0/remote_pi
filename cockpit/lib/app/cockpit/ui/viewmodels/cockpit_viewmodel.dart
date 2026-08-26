@@ -2291,7 +2291,15 @@ class CockpitViewModel extends ChangeNotifier {
     // GC do scrollback: apaga arquivos de sessões de terminal que sumiram de
     // TODOS os layouts. Varre todos os layouts salvos (não só o ativo: a
     // reconstrução é lazy), senão apagaria o scrollback de projetos não-ativados.
-    unawaited(_scrollback.pruneExcept(_persistedTerminalIds()));
+    // O GC varre os layouts EM DISCO (e não só os carregados acima): os forks
+    // de worktree entram na lista de projetos depois do boot, e varrer apenas
+    // a memória apagava o scrollback dos terminais deles a cada abertura do
+    // app — era por isso que um `claude` num worktree nunca voltava.
+    unawaited(
+      _layoutStore.loadAll().then(
+        (docs) => _scrollback.pruneExcept(_terminalIdsIn(docs.values)),
+      ),
+    );
     // Injeta o workspace de sistema "Cockpit" (terminal-only), se habilitado.
     // Depois do carregamento de layouts (ele não tem layout salvo) e antes da
     // seleção inicial (que pode cair nele no 1º boot).
@@ -5000,9 +5008,13 @@ class CockpitViewModel extends ChangeNotifier {
   /// `projectId` real, logs de task sob `__tasks__/<taskId>` —, mas o prune casa
   /// por nome de arquivo, então o keep-set é a união das duas chaves.) Lê os
   /// descritores `sessions` dos docs já carregados em [_savedLayouts].
-  Set<String> _persistedTerminalIds() {
+  Set<String> _persistedTerminalIds() => _terminalIdsIn(_savedLayouts.values);
+
+  /// Ids de terminal (e de output de task) citados por [docs] — o conjunto que
+  /// o GC do scrollback preserva.
+  Set<String> _terminalIdsIn(Iterable<Map<String, dynamic>?> docs) {
     final ids = <String>{};
-    for (final doc in _savedLayouts.values) {
+    for (final doc in docs) {
       if (doc == null) continue;
       final sessions = doc['sessions'];
       if (sessions is! Map) continue;
@@ -5069,6 +5081,18 @@ class CockpitViewModel extends ChangeNotifier {
   /// árvore + sessões; senão, abre uma pane vazia. Idempotente: já-ativo é no-op.
   Future<void> _activateProject(String id) async {
     if (_trees.containsKey(id)) return;
+    // Projeto que entrou na lista DEPOIS do boot — todo fork de worktree é
+    // assim, local ou remoto: eles são derivados do `git worktree list`, que
+    // só responde depois das duas passagens de carga do `init`. Sem esta
+    // busca no disco, `_savedLayouts[fork]` vinha ausente e o fork abria numa
+    // pane vazia: as abas salvas não voltavam e o `claude --resume` sumia,
+    // enquanto o workspace pai (carregado no boot) restaurava normalmente.
+    //
+    // A chave AUSENTE é diferente de valor `null`: `null` significa "já
+    // procurei, não há layout" e não repete a leitura.
+    if (!_savedLayouts.containsKey(id)) {
+      _savedLayouts[id] = await _layoutStore.load(id);
+    }
     final doc = _savedLayouts[id];
     if (doc == null) {
       _initTree(id); // síncrono — pane vazia padrão
