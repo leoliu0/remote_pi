@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { SiteHeader } from "@/components/header";
 import {
   PairedSession,
+  parsePairUri,
   getSavedSessions,
   deleteSession,
   saveSession,
@@ -27,6 +28,34 @@ export default function WebPage() {
     setMounted(true);
     const sessions = getSavedSessions();
     setSavedSessions(sessions);
+
+    // Check if pairing parameters are provided in URL query (e.g. ?epk=...&t=... or ?pair=remotepi://pair...)
+    if (typeof window !== "undefined" && window.location.search) {
+      const search = window.location.search;
+      const params = new URLSearchParams(search);
+      const pairParam = params.get("pair") || search;
+      const parsed = parsePairUri(pairParam);
+      if (parsed && parsed.remoteEpk) {
+        const session: PairedSession = {
+          id: `session_${Date.now()}`,
+          name: parsed.name || "Remote Pi",
+          device: parsed.device || "Remote Host",
+          remoteEpk: parsed.remoteEpk,
+          token: parsed.token,
+          relayUrl: parsed.relayUrl || "wss://relay-rp1.jacobmoura.work",
+          roomId: parsed.roomId || "main",
+          pairedAt: new Date().toISOString(),
+          lastConnectedAt: new Date().toISOString(),
+        };
+        saveSession(session);
+        setActiveSession(session);
+        setActiveSessionId(session.id);
+        setSavedSessions(getSavedSessions());
+        // Clean URL query
+        window.history.replaceState({}, document.title, window.location.pathname);
+        return;
+      }
+    }
 
     const activeId = getActiveSessionId();
     if (activeId) {
