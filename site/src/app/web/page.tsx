@@ -10,7 +10,6 @@ import {
   saveSession,
   getActiveSessionId,
   setActiveSessionId,
-  INITIAL_DEMO_MESSAGES,
 } from "@/components/web/web-client";
 import { PairScreen } from "@/components/web/pair-screen";
 import { WebChat } from "@/components/web/web-chat";

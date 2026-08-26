@@ -1,7 +1,14 @@
 "use client";
 
-import { useState, useEffect, useRef, useTransition } from "react";
-import { WebChatMessage, PairedSession, PeerPresence } from "./web-client";
+import { useState, useEffect, useRef } from "react";
+import {
+  WebChatMessage,
+  PairedSession,
+  PeerPresence,
+  ConnectionState,
+  ToolCallData,
+  RemotePiRelayClient,
+} from "./web-client";
 
 interface WebChatProps {
   session: PairedSession;
@@ -19,7 +26,9 @@ export function WebChat({
   const [messages, setMessages] = useState<WebChatMessage[]>([]);
   const [inputText, setInputText] = useState("");
   const [isWorking, setIsWorking] = useState(false);
-  const [presence, setPresence] = useState<PeerPresence>("online");
+  const [presence, setPresence] = useState<PeerPresence>("connecting" as PeerPresence);
+  const [connState, setConnState] = useState<ConnectionState>("connecting");
+  const [connError, setConnError] = useState<string | null>(null);
   const [showScrollBottom, setShowScrollBottom] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
   const [history, setHistory] = useState<string[]>([]);
@@ -29,18 +38,152 @@ export function WebChat({
 
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  const [, startTransition] = useTransition();
+  const clientRef = useRef<RemotePiRelayClient | null>(null);
+  const activeStreamIdRef = useRef<string | null>(null);
 
-  // Initialize with initial conversation
+  // Initialize Real WebSocket Relay Client
   useEffect(() => {
-    setMessages([
-      {
-        id: "msg-welcome",
-        role: "assistant",
-        text: `Connected to **${session.device}** (${session.roomId}). Remote Pi Web Client is ready.\n\nYou can send instructions, run commands, and approve tool calls directly from this browser window.`,
+    const client = new RemotePiRelayClient(session);
+    clientRef.current = client;
+
+    client.onStateChange = (state, err) => {
+      setConnState(state);
+      if (err) setConnError(err);
+      if (state === "connected") {
+        setConnError(null);
+        setPresence("online");
+      } else if (state === "disconnected" || state === "error") {
+        setPresence("offline");
+      }
+    };
+
+    client.onPresenceChange = (p) => {
+      setPresence(p);
+      setIsWorking(p === "working");
+    };
+
+    client.onSessionHistory = (histMsgs) => {
+      if (histMsgs.length > 0) {
+        setMessages(histMsgs);
+        setTimeout(() => scrollToBottom(false), 50);
+      }
+    };
+
+    client.onMessage = (msg) => {
+      setMessages((prev) => {
+        // If message with same id exists, update it; otherwise append
+        const exists = prev.some((m) => m.id === msg.id);
+        if (exists) {
+          return prev.map((m) => (m.id === msg.id ? { ...m, ...msg } : m));
+        }
+        return [...prev, msg];
+      });
+
+      // Increment unread count if user is scrolled up
+      if (scrollContainerRef.current) {
+        const { scrollTop, scrollHeight, clientHeight } = scrollContainerRef.current;
+        if (scrollHeight - scrollTop - clientHeight > 120) {
+          setUnreadCount((c) => c + 1);
+        } else {
+          setTimeout(() => scrollToBottom(true), 50);
+        }
+      }
+    };
+
+    client.onStreamingChunk = (delta, inReplyTo) => {
+      activeStreamIdRef.current = inReplyTo;
+      setIsWorking(true);
+      setMessages((prev) => {
+        const streamMsgId = `stream-${inReplyTo}`;
+        const existingIdx = prev.findIndex((m) => m.id === streamMsgId);
+        if (existingIdx >= 0) {
+          const updated = [...prev];
+          updated[existingIdx] = {
+            ...updated[existingIdx],
+            text: updated[existingIdx].text + delta,
+            isStreaming: true,
+          };
+          return updated;
+        } else {
+          return [
+            ...prev,
+            {
+              id: streamMsgId,
+              role: "assistant",
+              text: delta,
+              timestamp: Date.now(),
+              isStreaming: true,
+            },
+          ];
+        }
+      });
+
+      // Auto-scroll if near bottom
+      if (scrollContainerRef.current) {
+        const { scrollTop, scrollHeight, clientHeight } = scrollContainerRef.current;
+        if (scrollHeight - scrollTop - clientHeight <= 120) {
+          scrollToBottom(true);
+        }
+      }
+    };
+
+    client.onAgentDone = (inReplyTo) => {
+      setIsWorking(false);
+      activeStreamIdRef.current = null;
+      setMessages((prev) =>
+        prev.map((m) => (m.id === `stream-${inReplyTo}` ? { ...m, isStreaming: false } : m))
+      );
+      setTimeout(() => scrollToBottom(true), 50);
+    };
+
+    client.onToolRequest = (tool) => {
+      setIsWorking(true);
+      const toolMsg: WebChatMessage = {
+        id: `tool-${tool.id}`,
+        role: "tool",
+        text: `${tool.tool}: ${tool.command || JSON.stringify(tool.args || {})}`,
         timestamp: Date.now(),
-      },
-    ]);
+        tool,
+      };
+      setMessages((prev) => [...prev, toolMsg]);
+      setTimeout(() => scrollToBottom(true), 50);
+    };
+
+    client.onToolResult = (toolCallId, result, error) => {
+      setMessages((prev) =>
+        prev.map((m) => {
+          if (m.tool && m.tool.id === toolCallId) {
+            return {
+              ...m,
+              tool: {
+                ...m.tool,
+                status: error ? "error" : "done",
+                error,
+                output: typeof result === "string" ? result : JSON.stringify(result, null, 2),
+              },
+            };
+          }
+          return m;
+        })
+      );
+    };
+
+    client.onCompaction = (summary, tokensBefore) => {
+      const compMsg: WebChatMessage = {
+        id: `comp-${Date.now()}`,
+        role: "compaction",
+        text: summary,
+        timestamp: Date.now(),
+        tokensBefore,
+      };
+      setMessages((prev) => [...prev, compMsg]);
+    };
+
+    client.connect();
+
+    return () => {
+      client.disconnect();
+    };
   }, [session]);
 
   // Scroll detection for "Scroll to bottom" button
@@ -63,17 +206,18 @@ export function WebChat({
     setShowScrollBottom(false);
   };
 
-  // Send message
-  const handleSendMessage = (textToSend?: string) => {
-    const text = (textToSend ?? inputText).trim();
+  // Send message over WebSocket
+  const handleSendMessage = () => {
+    const text = inputText.trim();
     if (!text) return;
 
+    // Optimistically add user message to list
     const userMsg: WebChatMessage = {
-      id: `msg-${Date.now()}`,
+      id: `cli_${Date.now()}`,
       role: "user",
       text,
       timestamp: Date.now(),
-      status: "sent",
+      status: "sending",
     };
 
     setMessages((prev) => [...prev, userMsg]);
@@ -81,76 +225,53 @@ export function WebChat({
     setHistoryIndex(-1);
     setInputText("");
     setSlashMenuOpen(false);
-    setIsWorking(true);
 
     // Auto-scroll to bottom immediately
     setTimeout(() => scrollToBottom(true), 50);
 
-    // Simulate Agent Turn Execution
-    setTimeout(() => {
-      // Step 1: Tool Execution or Streaming Response
-      if (text.toLowerCase().includes("test") || text.toLowerCase().includes("check")) {
-        const toolMsg: WebChatMessage = {
-          id: `msg-tool-${Date.now()}`,
-          role: "tool",
-          text: "bash: pnpm test",
-          timestamp: Date.now(),
-          tool: {
-            id: `t-${Date.now()}`,
-            tool: "bash",
-            command: "pnpm test",
-            output: "✓ 583 tests passed (0 failures)",
-            status: "done",
-          },
-        };
-        setMessages((prev) => [...prev, toolMsg]);
-        setTimeout(() => scrollToBottom(true), 50);
-      } else if (text.toLowerCase().includes("edit") || text.toLowerCase().includes("fix")) {
-        const toolMsg: WebChatMessage = {
-          id: `msg-tool-${Date.now()}`,
-          role: "tool",
-          text: "edit: src/app/web/page.tsx",
-          timestamp: Date.now(),
-          tool: {
-            id: `t-${Date.now()}`,
-            tool: "edit",
-            command: "edit src/app/web/page.tsx",
-            status: "done",
-            diff: {
-              file: "src/app/web/page.tsx",
-              hunks: [
-                "- // Previous implementation",
-                "+ // Auto-scroll to bottom on send enabled",
-                "+ const isScrollBottomActive = true;",
-              ],
-            },
-          },
-        };
-        setMessages((prev) => [...prev, toolMsg]);
-        setTimeout(() => scrollToBottom(true), 50);
+    // Send to WebSocket
+    if (clientRef.current) {
+      if (isWorking) {
+        // Steering send
+        clientRef.current.sendInner({
+          type: "user_message",
+          id: userMsg.id,
+          text,
+          streaming_behavior: "steer",
+        });
+      } else {
+        clientRef.current.sendMessage(text);
       }
-
-      // Step 2: Final Assistant Response
-      setTimeout(() => {
-        const replyText = `I processed your request for **${session.device}**:\n\n` +
-          `\`\`\`typescript\n// Operation completed successfully\nconst status = "OK";\nconsole.log("Remote Pi Web Client active");\n\`\`\`\n\n` +
-          `All changes are synchronized with your desktop session.`;
-
-        const assistantMsg: WebChatMessage = {
-          id: `msg-asst-${Date.now()}`,
-          role: "assistant",
-          text: replyText,
-          timestamp: Date.now(),
-        };
-
-        setMessages((prev) => [...prev, assistantMsg]);
-        setIsWorking(false);
-        setTimeout(() => scrollToBottom(true), 50);
-      }, 1000);
-    }, 600);
+    }
   };
 
-  // Keyboard navigation for history recall and sending
+  const handleToolDecision = (toolCallId: string, decision: "allow" | "deny") => {
+    if (clientRef.current) {
+      clientRef.current.approveTool(toolCallId, decision);
+    }
+    setMessages((prev) =>
+      prev.map((m) => {
+        if (m.tool && m.tool.id === toolCallId) {
+          return {
+            ...m,
+            tool: {
+              ...m.tool,
+              status: decision === "allow" ? "done" : "denied",
+              output: decision === "allow" ? "Approved by user." : "Denied by user.",
+            },
+          };
+        }
+        return m;
+      })
+    );
+  };
+
+  const handleCancelTurn = () => {
+    if (clientRef.current && activeStreamIdRef.current) {
+      clientRef.current.cancelTurn(activeStreamIdRef.current);
+    }
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -158,7 +279,6 @@ export function WebChat({
       return;
     }
 
-    // Up arrow for command history
     if (e.key === "ArrowUp" && inputText === "" && history.length > 0) {
       e.preventDefault();
       const nextIdx = Math.min(historyIndex + 1, history.length - 1);
@@ -167,7 +287,6 @@ export function WebChat({
       return;
     }
 
-    // Down arrow for command history
     if (e.key === "ArrowDown" && historyIndex >= 0) {
       e.preventDefault();
       const nextIdx = historyIndex - 1;
@@ -176,7 +295,6 @@ export function WebChat({
       return;
     }
 
-    // Slash command trigger
     if (e.key === "/" && inputText === "") {
       setSlashMenuOpen(true);
     } else if (inputText.length > 0 && !inputText.startsWith("/")) {
@@ -188,24 +306,6 @@ export function WebChat({
     navigator.clipboard.writeText(text);
     setCopiedId(id);
     setTimeout(() => setCopiedId(null), 2000);
-  };
-
-  const handleToolDecision = (msgId: string, decision: "allowed" | "denied") => {
-    setMessages((prev) =>
-      prev.map((m) => {
-        if (m.id === msgId && m.tool) {
-          return {
-            ...m,
-            tool: {
-              ...m.tool,
-              status: decision === "allowed" ? "done" : "denied",
-              output: decision === "allowed" ? "Execution approved by user via Web Client." : "Execution denied by user.",
-            },
-          };
-        }
-        return m;
-      })
-    );
   };
 
   return (
@@ -241,12 +341,20 @@ export function WebChat({
                       ? "bg-[#4fc3f7] animate-pulse"
                       : presence === "online"
                       ? "bg-[#5fd38a]"
+                      : presence === "reconnecting"
+                      ? "bg-amber-400 animate-pulse"
                       : "bg-[#888]"
                   }`}
                 />
                 <span
                   className={`text-[11px] ${
-                    isWorking ? "text-[#4fc3f7]" : presence === "online" ? "text-[#5fd38a]" : "text-[#888]"
+                    isWorking
+                      ? "text-[#4fc3f7]"
+                      : presence === "online"
+                      ? "text-[#5fd38a]"
+                      : presence === "reconnecting"
+                      ? "text-amber-400"
+                      : "text-[#888]"
                   }`}
                 >
                   {isWorking ? "working…" : presence}
@@ -296,12 +404,44 @@ export function WebChat({
         </div>
       </div>
 
+      {/* Connection Notice / Error Banner */}
+      {connError && (
+        <div className="px-4 py-2 bg-red-500/15 border-b border-red-500/30 text-red-300 text-xs font-mono flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span>⚠️</span>
+            <span>{connError}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => clientRef.current?.connect()}
+            className="underline hover:text-white cursor-pointer"
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
       {/* 2. CHAT TIMELINE / MESSAGE LIST */}
       <div
         ref={scrollContainerRef}
         onScroll={handleScroll}
         className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4 relative scroll-smooth"
       >
+        {messages.length === 0 && (
+          <div className="flex flex-col items-center justify-center h-full text-center p-6 text-[#777]">
+            <div className="w-12 h-12 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-center text-[#4fc3f7] mb-3">
+              <svg className="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <polyline points="4 17 10 11 4 5" />
+                <line x1="12" y1="19" x2="20" y2="19" />
+              </svg>
+            </div>
+            <div className="text-sm font-medium text-white">No messages yet</div>
+            <div className="text-xs text-[#666] font-mono mt-1">
+              Send a prompt below to interact with your Pi agent.
+            </div>
+          </div>
+        )}
+
         {messages.map((m) => (
           <div key={m.id} className="w-full">
             {/* USER BUBBLE */}
@@ -309,8 +449,10 @@ export function WebChat({
               <div className="flex justify-end mb-2">
                 <div className="max-w-[85%] sm:max-w-[75%] rounded-2xl rounded-tr-sm bg-[#16202c] border border-[#4fc3f7]/25 px-4 py-3 text-white text-sm shadow-md">
                   <div className="whitespace-pre-wrap font-[family-name:var(--ff-body)]">{m.text}</div>
-                  <div className="mt-1 text-[10px] text-[#4fc3f7]/70 text-right font-mono">
-                    {new Date(m.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                  <div className="mt-1 text-[10px] text-[#4fc3f7]/70 text-right font-mono flex items-center justify-end gap-1.5">
+                    <span>{new Date(m.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+                    {m.status === "sending" && <span className="text-[#888]">⏳</span>}
+                    {m.status === "sent" && <span className="text-[#5fd38a]">✓</span>}
                   </div>
                 </div>
               </div>
@@ -319,10 +461,13 @@ export function WebChat({
             {/* ASSISTANT MESSAGE */}
             {m.role === "assistant" && (
               <div className="flex justify-start mb-2">
-                <div className="w-full max-w-[92%] sm:max-w-[88%] text-sm text-[#e0e0e0] leading-relaxed">
+                <div className="w-full max-w-[94%] sm:max-w-[90%] text-sm text-[#e0e0e0] leading-relaxed">
                   <div className="bg-[#0e1117] border border-white/10 rounded-2xl px-4 py-3.5 shadow-sm">
-                    <div className="whitespace-pre-wrap font-[family-name:var(--ff-body)] text-sm prose prose-invert max-w-none">
+                    <div className="whitespace-pre-wrap font-[family-name:var(--ff-body)] text-sm">
                       {m.text}
+                      {m.isStreaming && (
+                        <span className="inline-block w-2 h-4 ml-1 bg-[#4fc3f7] animate-pulse align-middle" />
+                      )}
                     </div>
                   </div>
                 </div>
@@ -331,14 +476,14 @@ export function WebChat({
 
             {/* TOOL CALL CARD */}
             {m.role === "tool" && m.tool && (
-              <div className="my-2 max-w-[92%] sm:max-w-[88%]">
+              <div className="my-2 max-w-[94%] sm:max-w-[90%]">
                 <div className="rounded-xl border border-white/15 bg-[#0b0d13] overflow-hidden shadow-sm">
                   {/* Tool Header */}
                   <div className="px-3.5 py-2.5 bg-white/[0.04] border-b border-white/10 flex items-center justify-between">
                     <div className="flex items-center gap-2 font-mono text-xs text-[#4fc3f7]">
                       <span className="w-2 h-2 rounded-full bg-[#4fc3f7]" />
                       <span className="font-semibold uppercase">{m.tool.tool}</span>
-                      <span className="text-[#888] truncate max-w-[200px] sm:max-w-[340px]">{m.tool.command}</span>
+                      <span className="text-[#888] truncate max-w-[180px] sm:max-w-[340px]">{m.tool.command}</span>
                     </div>
 
                     <div className="flex items-center gap-2">
@@ -346,14 +491,14 @@ export function WebChat({
                         <div className="flex items-center gap-1.5">
                           <button
                             type="button"
-                            onClick={() => handleToolDecision(m.id, "allowed")}
+                            onClick={() => handleToolDecision(m.tool!.id, "allow")}
                             className="px-2.5 py-1 bg-[#5fd38a] hover:bg-[#4bc275] text-[#04222e] text-xs font-semibold rounded cursor-pointer transition-colors"
                           >
                             Approve
                           </button>
                           <button
                             type="button"
-                            onClick={() => handleToolDecision(m.id, "denied")}
+                            onClick={() => handleToolDecision(m.tool!.id, "deny")}
                             className="px-2.5 py-1 bg-red-500/20 hover:bg-red-500/30 text-red-400 text-xs font-semibold rounded border border-red-500/40 cursor-pointer transition-colors"
                           >
                             Deny
@@ -367,6 +512,9 @@ export function WebChat({
                       )}
                       {m.tool.status === "denied" && (
                         <span className="text-[11px] font-mono text-red-400">✗ Denied</span>
+                      )}
+                      {m.tool.status === "error" && (
+                        <span className="text-[11px] font-mono text-red-400">✗ Error</span>
                       )}
                     </div>
                   </div>
@@ -399,13 +547,33 @@ export function WebChat({
                 </div>
               </div>
             )}
+
+            {/* COMPACTION MESSAGE */}
+            {m.role === "compaction" && (
+              <div className="my-3 flex justify-center">
+                <div className="px-3.5 py-1.5 rounded-full bg-white/[0.04] border border-white/10 text-xs font-mono text-[#888] flex items-center gap-2">
+                  <span>📦</span>
+                  <span>{m.text}</span>
+                  {m.tokensBefore && <span className="text-[#555]">({m.tokensBefore.toLocaleString()} tokens)</span>}
+                </div>
+              </div>
+            )}
           </div>
         ))}
 
         {isWorking && (
-          <div className="flex items-center gap-2 text-xs font-mono text-[#4fc3f7] py-2 px-3 rounded-xl bg-[#4fc3f7]/10 border border-[#4fc3f7]/20 w-fit animate-pulse">
-            <span className="w-2 h-2 rounded-full bg-[#4fc3f7]" />
-            Agent is thinking & writing…
+          <div className="flex items-center justify-between text-xs font-mono text-[#4fc3f7] py-2 px-3 rounded-xl bg-[#4fc3f7]/10 border border-[#4fc3f7]/20 w-fit animate-pulse">
+            <div className="flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-[#4fc3f7]" />
+              Agent is working…
+            </div>
+            <button
+              type="button"
+              onClick={handleCancelTurn}
+              className="ml-4 text-red-400 hover:text-red-300 underline cursor-pointer"
+            >
+              Stop
+            </button>
           </div>
         )}
       </div>
@@ -467,7 +635,11 @@ export function WebChat({
             value={inputText}
             onChange={(e) => setInputText(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Type a message, run a task, or type / for commands…"
+            placeholder={
+              isWorking
+                ? "Agent is working… type to steer or queue next message"
+                : "Type a prompt, or / for slash commands…"
+            }
             className="w-full bg-transparent p-3 text-sm text-white placeholder:text-[#555] font-[family-name:var(--ff-body)] resize-none outline-none max-h-40"
           />
 
@@ -483,7 +655,7 @@ export function WebChat({
               </button>
               <button
                 type="button"
-                onClick={() => alert("Image attachment: drag & drop into chat or paste directly from clipboard.")}
+                onClick={() => alert("Image attachment: paste directly from clipboard or drag into chat.")}
                 className="p-1.5 text-[#888] hover:text-white hover:bg-white/5 rounded-lg transition-colors cursor-pointer"
                 title="Attach file"
               >
@@ -498,13 +670,23 @@ export function WebChat({
                 Enter to send &bull; Shift+Enter newline
               </span>
 
+              {isWorking && (
+                <button
+                  type="button"
+                  onClick={handleCancelTurn}
+                  className="px-3 py-1.5 bg-red-500/20 hover:bg-red-500/30 text-red-300 border border-red-500/40 rounded-xl text-xs font-mono font-semibold transition-all cursor-pointer"
+                >
+                  Stop
+                </button>
+              )}
+
               <button
                 type="button"
                 onClick={() => handleSendMessage()}
-                disabled={!inputText.trim() && !isWorking}
+                disabled={!inputText.trim()}
                 className="px-4 py-2 bg-[#4fc3f7] hover:bg-[#38bdf8] active:scale-95 text-[#04222e] font-semibold text-xs rounded-xl transition-all cursor-pointer flex items-center gap-1.5 shadow-md shadow-[#4fc3f7]/20 disabled:opacity-40 disabled:cursor-not-allowed"
               >
-                <span>Send</span>
+                <span>{isWorking ? "Steer" : "Send"}</span>
                 <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
                   <line x1="22" y1="2" x2="11" y2="13" />
                   <polygon points="22 2 15 22 11 13 2 9 22 2" />
