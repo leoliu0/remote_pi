@@ -226,7 +226,10 @@ export default function WebPage() {
     if (!activeSession) return;
     try {
       if (action === "set_model" && payload) {
-        setActiveSession({ ...activeSession, model: payload });
+        const updated = { ...activeSession, model: payload };
+        setActiveSession(updated);
+        saveSession(updated);
+        setSavedSessions(getSavedSessions());
         await fetch("/api/relay-bridge", {
           method: "POST",
           headers: { "Content-Type": "application/json" },

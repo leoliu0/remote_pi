@@ -246,27 +246,43 @@ export async function handleModelSet(
   sender: ActionReplySender,
   msg: ModelSetMsg,
   onPersist?: (provider: string, modelId: string) => void,
+  onModelChanged?: (name: string) => void,
 ): Promise<void> {
   await runAsync(sender, msg, "model_set", async () => {
     // Prefer Pi's LIVE session registry when available so the app sees models
     // registered dynamically by extensions via `pi.registerProvider(...)`.
     // Fall back to remote-pi's own disk-backed registry when no ctx exists.
     const liveReg = ctx?.modelRegistry ?? reg;
-    // Refresh first so a model just-added via `/login` is visible.
     liveReg.refresh();
-    const model = liveReg.find(msg.provider, msg.model_id);
+    let model = liveReg.find(msg.provider, msg.model_id);
+    if (!model) {
+      const available = liveReg.getAvailable();
+      model = available.find(
+        (m) =>
+          (m.provider.toLowerCase() === msg.provider.toLowerCase() ||
+            (msg.provider === "google" && m.provider === "gemini") ||
+            (msg.provider === "gemini" && m.provider === "google")) &&
+          (m.id.toLowerCase() === msg.model_id.toLowerCase() ||
+            m.id.toLowerCase().includes(msg.model_id.toLowerCase()) ||
+            msg.model_id.toLowerCase().includes(m.id.toLowerCase()))
+      );
+    }
+    if (!model) {
+      const available = liveReg.getAvailable();
+      model = available.find(
+        (m) =>
+          m.id.toLowerCase() === msg.model_id.toLowerCase() ||
+          (m.name && m.name.toLowerCase() === msg.model_id.toLowerCase())
+      );
+    }
     if (!model) {
       throw new Error(`model "${msg.provider}/${msg.model_id}" not in registry`);
     }
     const success = await pi.setModel(model);
     if (!success) throw new Error("no auth configured for this model");
-    // `pi.setModel` only sets the LIVE model — it does NOT persist. Without
-    // this, a model picked from the app reverts to the saved default on the
-    // next Pi/daemon restart (the TUI persists because AgentSession.setModel
-    // writes the default; this path doesn't). `onPersist` writes the new
-    // default so the app's choice survives. Best-effort — the caller's writer
-    // must not throw, so a failed settings write never fails the model change.
+    const friendlyName = model.name ?? model.id;
     onPersist?.(model.provider, model.id);
+    onModelChanged?.(friendlyName);
   });
 }
 

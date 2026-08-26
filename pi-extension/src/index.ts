@@ -1196,18 +1196,23 @@ export function _setPiForTest(pi: unknown): void {
  * settings write must not fail the live model change, which already applied).
  */
 function _persistModelDefault(provider: string, modelId: string): void {
-  try {
-    const path = join(process.cwd(), ".pi", "settings.json");
-    let obj: Record<string, unknown> = {};
+  const paths = [
+    join(homedir(), ".pi", "agent", "settings.json"),
+    join(process.cwd(), ".pi", "settings.json"),
+  ];
+  for (const path of paths) {
     try {
-      const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
-      if (parsed && typeof parsed === "object") obj = parsed as Record<string, unknown>;
-    } catch { /* no existing/parseable file → start fresh */ }
-    obj["defaultProvider"] = provider;
-    obj["defaultModel"] = modelId;
-    mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, JSON.stringify(obj, null, 2));
-  } catch { /* best-effort — model change already applied live */ }
+      let obj: Record<string, unknown> = {};
+      try {
+        const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
+        if (parsed && typeof parsed === "object") obj = parsed as Record<string, unknown>;
+      } catch {}
+      obj["defaultProvider"] = provider;
+      obj["defaultModel"] = modelId;
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, JSON.stringify(obj, null, 2));
+    } catch {}
+  }
 }
 
 type ClientUserMessage = Extract<ClientMessage, { type: "user_message" }>;
@@ -4841,6 +4846,9 @@ export function _routeClientMessageFrom(
         sender,
         msg,
         _persistModelDefault,
+        (friendlyName) => {
+          _setCurrentModel(friendlyName);
+        },
       );
       break;
     case "thinking_set":
