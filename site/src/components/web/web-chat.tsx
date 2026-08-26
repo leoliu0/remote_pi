@@ -231,17 +231,7 @@ export function WebChat({
 
     // Send to WebSocket
     if (clientRef.current) {
-      if (isWorking) {
-        // Steering send
-        clientRef.current.sendInner({
-          type: "user_message",
-          id: userMsg.id,
-          text,
-          streaming_behavior: "steer",
-        });
-      } else {
-        clientRef.current.sendMessage(text);
-      }
+      clientRef.current.sendMessage(text);
     }
   };
 

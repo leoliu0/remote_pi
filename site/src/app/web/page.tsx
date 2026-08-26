@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { SiteHeader } from "@/components/header";
 import {
   PairedSession,
   parsePairUri,
@@ -127,10 +126,8 @@ export default function WebPage() {
   }
 
   return (
-    <div className="min-h-screen bg-[#050608] text-white flex flex-col selection:bg-[#4fc3f7]/20 selection:text-[#4fc3f7]">
-      <SiteHeader />
-
-      <main className="flex-1 flex flex-col">
+    <div className="flex-1 flex flex-col selection:bg-[#4fc3f7]/20 selection:text-[#4fc3f7]">
+      <div className="flex-1 flex flex-col">
         {!activeSession ? (
           <PairScreen
             onPaired={handlePaired}
@@ -147,7 +144,7 @@ export default function WebPage() {
             onOpenQuickActions={() => setShowQuickActions(true)}
           />
         )}
-      </main>
+      </div>
 
       {/* Modals */}
       {showSessionInfo && activeSession && (
