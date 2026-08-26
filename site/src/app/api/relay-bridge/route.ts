@@ -46,16 +46,61 @@ function getLocalConfig(): { relayUrl: string; targetEpk: string } {
   return { relayUrl, targetEpk };
 }
 
+function getWebClientIdentity(): { privKey: Uint8Array; pubKeyB64: string } {
+  const identityPath = path.join(os.homedir(), ".pi", "remote", "web_identity.json");
+  try {
+    if (fs.existsSync(identityPath)) {
+      const data = JSON.parse(fs.readFileSync(identityPath, "utf8"));
+      if (data.privateKey && data.publicKey) {
+        return {
+          privKey: Buffer.from(data.privateKey, "base64"),
+          pubKeyB64: data.publicKey,
+        };
+      }
+    }
+  } catch {}
+
+  const privKey = ed.utils.randomSecretKey();
+  const pubKey = ed.getPublicKey(privKey);
+  const pubKeyB64 = Buffer.from(pubKey).toString("base64");
+  const privKeyB64 = Buffer.from(privKey).toString("base64");
+
+  try {
+    const dir = path.dirname(identityPath);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(identityPath, JSON.stringify({ privateKey: privKeyB64, publicKey: pubKeyB64 }, null, 2), "utf8");
+  } catch {}
+
+  return { privKey, pubKeyB64 };
+}
+
+function ensurePeerPaired(pubKeyB64: string) {
+  const peersPath = path.join(os.homedir(), ".pi", "remote", "peers.json");
+  try {
+    let peersData = { peers: [] as Array<{ name: string; remote_epk: string; paired_at: string }> };
+    if (fs.existsSync(peersPath)) {
+      peersData = JSON.parse(fs.readFileSync(peersPath, "utf8"));
+    }
+    const exists = peersData.peers.some((p) => p.remote_epk === pubKeyB64);
+    if (!exists) {
+      peersData.peers.push({
+        name: "Remote Pi Web",
+        remote_epk: pubKeyB64,
+        paired_at: new Date().toISOString(),
+      });
+      fs.writeFileSync(peersPath, JSON.stringify(peersData, null, 2), "utf8");
+    }
+  } catch {}
+}
+
 function getOrCreateRelay(sessionId: string, targetEpk: string, relayUrl: string, roomId = "main"): RelayState {
   let state = activeRelays.get(sessionId);
   if (state && state.ws && (state.ws.readyState === WebSocket.OPEN || state.ws.readyState === WebSocket.CONNECTING)) {
     return state;
   }
 
-  const privKey = ed.utils.randomSecretKey();
-  const pubKey = ed.getPublicKey(privKey);
-  const pubKeyB64 = Buffer.from(pubKey).toString("base64");
-
+  const { privKey, pubKeyB64 } = getWebClientIdentity();
+  ensurePeerPaired(pubKeyB64);
   state = {
     ws: null,
     connected: false,
