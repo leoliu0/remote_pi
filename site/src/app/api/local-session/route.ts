@@ -132,6 +132,16 @@ export async function GET() {
     const knownPeers = getKnownPeers();
     const { isRelayConnected, roomsByPeer } = await queryRelayPeers(relayUrl, knownPeers);
 
+    // Read default thinking level from local Pi settings
+    let defaultThinking = "high";
+    try {
+      const p = path.join(os.homedir(), ".pi", "agent", "settings.json");
+      if (fs.existsSync(p)) {
+        const d = JSON.parse(fs.readFileSync(p, "utf8"));
+        if (d.defaultThinkingLevel) defaultThinking = d.defaultThinkingLevel;
+      }
+    } catch {}
+
     const sessions: any[] = [];
     const seenRoomIds = new Set<string>();
 
@@ -151,6 +161,7 @@ export async function GET() {
           roomId: r.room_id,
           cwd: r.cwd,
           model: r.model || "Gemini 3.7 Flash",
+          thinking: r.thinking || defaultThinking,
           status,
           isLive: true,
           pairedAt: r.started_at ? new Date(r.started_at).toISOString() : new Date().toISOString(),
@@ -193,6 +204,7 @@ export async function GET() {
               relayUrl,
               roomId: rId,
               cwd: item.dir,
+              thinking: defaultThinking,
               status: "offline",
               isLive: false,
               pairedAt: new Date().toISOString(),

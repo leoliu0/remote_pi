@@ -229,6 +229,14 @@ export function WebChat({
       };
       setMessages((prev) => [...prev, compMsg]);
     };
+    client.onRoomMeta = (meta) => {
+      if (meta.thinking) {
+        session.thinking = meta.thinking;
+      }
+      if (meta.model) {
+        session.model = meta.model;
+      }
+    };
 
     client.connect();
 

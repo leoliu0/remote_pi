@@ -45,10 +45,10 @@ export default function WebPage() {
             device: s.device || data.device || "Remote Pi",
             remoteEpk: s.remoteEpk || data.remoteEpk,
             token: s.token,
-            relayUrl: s.relayUrl || data.relayUrl,
             roomId: s.roomId,
             cwd: s.cwd,
             model: s.model,
+            thinking: s.thinking,
             status: s.status,
             isLive: s.isLive,
             pairedAt: s.pairedAt || new Date().toISOString(),
@@ -240,7 +240,10 @@ export default function WebPage() {
           }),
         });
       } else if (action === "set_thinking" && payload) {
-        setActiveSession({ ...activeSession, thinking: payload });
+        const updated = { ...activeSession, thinking: payload };
+        setActiveSession(updated);
+        saveSession(updated);
+        setSavedSessions(getSavedSessions());
         await fetch("/api/relay-bridge", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
