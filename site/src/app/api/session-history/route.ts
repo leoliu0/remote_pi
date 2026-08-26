@@ -224,8 +224,6 @@ function findJsonlFilesForCwd(cwdParam: string | null, roomId: string | null): s
     path.join(home, ".pi", "agent", "sessions"),
   ];
 
-  const foundFiles: string[] = [];
-
   for (const baseDir of searchDirs) {
     if (!fs.existsSync(baseDir)) continue;
     try {
@@ -251,28 +249,29 @@ function findJsonlFilesForCwd(cwdParam: string | null, roomId: string | null): s
         }
 
         const files = fs.readdirSync(full).filter((x) => x.endsWith(".jsonl"));
-        if (files.length > 0) {
-          if (isMatch) {
-            for (const f of files) foundFiles.push(path.join(full, f));
-            continue;
-          }
+        if (files.length === 0) continue;
 
-          // Inspect the first few lines of the newest file to extract cwd
-          const newest = files.sort().pop()!;
-          const extractedCwd = findCwdInJsonl(path.join(full, newest));
-          if (extractedCwd) {
-            if (cwdParam && (extractedCwd === cwdParam || extractedCwd.toLowerCase() === cwdParam.toLowerCase())) {
-              for (const f of files) foundFiles.push(path.join(full, f));
-            } else if (roomId && roomIdForCwd(extractedCwd) === roomId) {
-              for (const f of files) foundFiles.push(path.join(full, f));
-            }
+        if (isMatch) {
+          return files.map((f) => path.join(full, f));
+        }
+
+        // Inspect the newest file to extract cwd
+        const newest = [...files].sort().pop()!;
+        const extractedCwd = findCwdInJsonl(path.join(full, newest));
+        if (extractedCwd) {
+          const extractedRoomId = roomIdForCwd(extractedCwd);
+          if (
+            (cwdParam && (extractedCwd === cwdParam || extractedCwd.toLowerCase() === cwdParam.toLowerCase())) ||
+            (roomId && extractedRoomId === roomId)
+          ) {
+            return files.map((f) => path.join(full, f));
           }
         }
       }
     } catch {}
   }
 
-  return foundFiles;
+  return [];
 }
 
 export async function GET(req: NextRequest) {

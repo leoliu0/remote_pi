@@ -231,11 +231,22 @@ function getOrCreateRelay(sessionId: string, targetEpk: string, relayUrl: string
           broadcast(state!, { type: "presence_states", states: frame.states });
           return;
         }
-        // 3. Inner frames
+        // 3. Inner frames (Strict Peer & Room Isolation)
         if (frame.peer && frame.ct) {
-          const innerStr = Buffer.from(frame.ct, "base64").toString("utf8");
-          const inner = JSON.parse(innerStr);
-          broadcast(state!, { type: "inner", data: inner });
+          if (frame.peer !== state!.targetEpk) {
+            return; // Belongs to a different peer — drop to prevent cross-session leaks
+          }
+          if (frame.room && state!.roomId && frame.room !== state!.roomId) {
+            return; // Belongs to a different room — drop to prevent cross-session leaks
+          }
+          try {
+            const innerStr = Buffer.from(frame.ct, "base64").toString("utf8");
+            const inner = JSON.parse(innerStr);
+            broadcast(state!, { type: "inner", data: inner });
+          } catch (err) {
+            console.warn("Malformed inner frame", err);
+          }
+          return;
         }
       } catch (err) {
         console.warn("Relay frame error", err);
