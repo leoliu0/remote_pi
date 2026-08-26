@@ -189,57 +189,60 @@ export function HomeView({
                         onClick={() => onOpenSession(s)}
                         className="group flex items-center justify-between p-4 hover:bg-white/[0.03] transition-[background-color] duration-150 cursor-pointer"
                       >
-                        {/* Avatar circle with initial letter */}
-                        <div className="w-10 h-10 rounded-full bg-[#161b22] border border-white/10 flex items-center justify-center text-[#4fc3f7] font-mono font-semibold text-base shrink-0 group-hover:border-[#4fc3f7]/40 transition-colors">
-                          {initial}
-                        </div>
-
-                        {/* Title Block */}
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-2">
-                            <span className="text-sm font-medium text-white group-hover:text-[#4fc3f7] transition-colors truncate">
-                              {s.name}
-                            </span>
-                            <span className="text-[11px] font-mono text-[#555] bg-white/[0.03] px-1.5 py-0.5 rounded border border-white/5">
-                              {s.roomId}
-                            </span>
+                        {/* Left: Avatar + Title Block */}
+                        <div className="flex items-center gap-3.5 min-w-0">
+                          {/* Avatar circle with initial letter */}
+                          <div className="w-10 h-10 rounded-full bg-[#161b22] border border-white/10 flex items-center justify-center text-[#4fc3f7] font-mono font-semibold text-base shrink-0 group-hover:border-[#4fc3f7]/40 transition-colors">
+                            {initial}
                           </div>
 
-                          {/* Subtitle: Model when online, or cwd / paired timestamp when offline */}
-                          <div className="text-xs font-mono mt-0.5 truncate">
-                            {isLive && s.model ? (
-                              <span className="text-[#4fc3f7] font-medium">{s.model}</span>
-                            ) : (
-                              <span className="text-[#888]">
-                                {s.cwd || `Last paired: ${new Date(s.pairedAt).toLocaleDateString()}`}
+                          {/* Title Block */}
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="text-sm font-medium text-white group-hover:text-[#4fc3f7] transition-colors truncate">
+                                {s.name}
                               </span>
-                            )}
+                              <span className="text-[11px] font-mono text-[#555] bg-white/[0.03] px-1.5 py-0.5 rounded border border-white/5">
+                                {s.roomId}
+                              </span>
+                            </div>
+
+                            {/* Subtitle: Model when online, or cwd / paired timestamp when offline */}
+                            <div className="text-xs font-mono mt-0.5 truncate">
+                              {isLive && s.model ? (
+                                <span className="text-[#4fc3f7] font-medium">{s.model}</span>
+                              ) : (
+                                <span className="text-[#888]">
+                                  {s.cwd || `Last paired: ${new Date(s.pairedAt).toLocaleDateString()}`}
+                                </span>
+                              )}
+                            </div>
                           </div>
                         </div>
-                      </div>
 
-                      {/* Right Presence Indicator & Chevron */}
-                      <div className="flex items-center gap-3 shrink-0 ml-4">
-                        {isWorking ? (
-                          <div className="flex items-center gap-1.5 text-xs font-mono text-[#38bdf8]">
-                            <span className="w-2.5 h-2.5 rounded-full bg-[#38bdf8] animate-pulse" />
-                            <span className="hidden sm:inline">working…</span>
-                          </div>
-                        ) : isLive ? (
-                          <div className="flex items-center gap-1.5 text-xs font-mono text-[#5fd38a]">
-                            <span className="w-2.5 h-2.5 rounded-full bg-[#5fd38a]" />
-                            <span className="hidden sm:inline">online</span>
-                          </div>
-                        ) : (
-                          <div className="flex items-center gap-1.5 text-xs font-mono text-[#666]">
-                            <span className="w-2 h-2 rounded-full bg-[#555]" />
-                            <span className="hidden sm:inline">offline</span>
-                          </div>
-                        )}
+                        {/* Right Presence Indicator & Chevron */}
+                        <div className="flex items-center gap-3 shrink-0 ml-4">
+                          {isWorking ? (
+                            <div className="flex items-center gap-1.5 text-xs font-mono text-[#38bdf8]">
+                              <span className="w-2.5 h-2.5 rounded-full bg-[#38bdf8] animate-pulse" />
+                              <span className="hidden sm:inline">working…</span>
+                            </div>
+                          ) : isLive ? (
+                            <div className="flex items-center gap-1.5 text-xs font-mono text-[#5fd38a]">
+                              <span className="w-2.5 h-2.5 rounded-full bg-[#5fd38a]" />
+                              <span className="hidden sm:inline">online</span>
+                            </div>
+                          ) : (
+                            <div className="flex items-center gap-1.5 text-xs font-mono text-[#666]">
+                              <span className="w-2 h-2 rounded-full bg-[#555]" />
+                              <span className="hidden sm:inline">offline</span>
+                            </div>
+                          )}
 
-                        <svg className="w-4 h-4 text-[#555] group-hover:text-white transition-colors" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                          <polyline points="9 18 15 12 9 6" />
-                        </svg>
+                          <svg className="w-4 h-4 text-[#555] group-hover:text-white transition-colors" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                            <polyline points="9 18 15 12 9 6" />
+                          </svg>
+                        </div>
                       </div>
                       {!isLast && <div className="h-[1px] bg-white/[0.06] w-full" />}
                     </div>
