@@ -1,18 +1,7 @@
-import { Hero } from "@/components/landing/hero";
-import { Install } from "@/components/landing/install";
-import { Pillars, GetApp, Strip, GithubCTA } from "@/components/landing/sections";
-import { RevealController } from "@/components/landing/reveal-controller";
+"use client";
 
-export default function Home() {
-  return (
-    <>
-      <Hero />
-      <Pillars />
-      <Install />
-      <GetApp />
-      <Strip />
-      <GithubCTA />
-      <RevealController />
-    </>
-  );
+import WebPage from "@/app/web/page";
+
+export default function RootPage() {
+  return <WebPage />;
 }
