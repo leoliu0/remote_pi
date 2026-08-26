@@ -37,6 +37,8 @@ export function WebChat({
   const [historyIndex, setHistoryIndex] = useState(-1);
   const [slashMenuOpen, setSlashMenuOpen] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [toolDisplay, setToolDisplay] = useState<"brief" | "full" | "hidden">("brief");
+  const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
 
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -45,6 +47,23 @@ export function WebChat({
 
   // Initialize Real WebSocket Relay Client & Load Session History
   useEffect(() => {
+    try {
+      const savedMode = localStorage.getItem("remotepi_tool_display");
+      if (savedMode === "brief" || savedMode === "full" || savedMode === "hidden") {
+        setToolDisplay(savedMode);
+      }
+    } catch {}
+
+    const handleStorageChange = () => {
+      try {
+        const savedMode = localStorage.getItem("remotepi_tool_display");
+        if (savedMode === "brief" || savedMode === "full" || savedMode === "hidden") {
+          setToolDisplay(savedMode);
+        }
+      } catch {}
+    };
+    window.addEventListener("tool_display_changed", handleStorageChange);
+
     setMessages([]);
     // 1. Load on-disk / cached history immediately
     fetch(`/api/session-history?roomId=${encodeURIComponent(session.roomId)}&cwd=${encodeURIComponent(session.cwd || "")}`)
@@ -194,6 +213,7 @@ export function WebChat({
     client.connect();
 
     return () => {
+      window.removeEventListener("tool_display_changed", handleStorageChange);
       client.disconnect();
     };
   }, [session]);
@@ -498,69 +518,156 @@ export function WebChat({
               )}
 
               {/* TOOL CALL CARD (Mobile Parity: ToolRequestCard with Status Border & Glow) */}
-              {m.role === "tool" && m.tool && (
-                <div className="my-2 max-w-[95%] sm:max-w-[90%]">
-                  <div
-                    className="rounded-xl bg-[#0A0A0A] overflow-hidden transition-all"
-                    style={{
-                      border: `1px solid ${toolColor}`,
-                      boxShadow: `0 0 16px ${toolColor}1F`,
-                    }}
-                  >
-                    {/* Tool Header */}
-                    <div className="px-3.5 py-2 bg-white/[0.02] border-b border-[#1A1A1A] flex items-center justify-between">
-                      <div className="flex items-center gap-2 font-mono text-xs font-bold" style={{ color: toolColor }}>
-                        <span>&gt;_</span>
-                        <span className="tracking-wide uppercase">{m.tool.tool}</span>
-                        {m.tool.command && (
-                          <span className="text-[#8A8A8A] font-normal font-mono truncate max-w-[180px] sm:max-w-[360px]">
-                            {m.tool.command}
+              {/* TOOL CALL CARD (Mobile Parity: Brief Pill / Full Card) */}
+              {m.role === "tool" && m.tool && toolDisplay !== "hidden" && (() => {
+                const toolKey = m.id || `${m.tool?.id || "tool"}_${m.timestamp}`;
+                const isExpanded = toolDisplay === "full" || expandedTools.has(toolKey);
+                const summary: string =
+                  typeof m.tool.command === "string" && m.tool.command
+                    ? m.tool.command
+                    : m.tool.args && typeof m.tool.args === "object"
+                    ? String(
+                        (m.tool.args as Record<string, any>).path ||
+                          (m.tool.args as Record<string, any>).pattern ||
+                          (m.tool.args as Record<string, any>).query ||
+                          (m.tool.args as Record<string, any>).command ||
+                          JSON.stringify(m.tool.args)
+                      )
+                    : typeof m.tool.args === "string"
+                    ? m.tool.args
+                    : "";
+                if (!isExpanded) {
+                  return (
+                    <div key={toolKey} className="my-1.5 max-w-[95%] sm:max-w-[90%]">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setExpandedTools((prev) => {
+                            const next = new Set(prev);
+                            next.add(toolKey);
+                            return next;
+                          });
+                        }}
+                        className="w-full text-left rounded-lg bg-[#050505] px-3 py-1.5 transition-all flex items-center justify-between gap-2 cursor-pointer group hover:bg-[#0f0f0f]"
+                        style={{
+                          border: `1px solid ${toolColor}55`,
+                        }}
+                      >
+                        <div className="flex items-center gap-2 min-w-0 font-mono text-xs">
+                          <span className="font-bold shrink-0" style={{ color: toolColor }}>
+                            &gt;_ {m.tool.tool.toUpperCase()}
                           </span>
-                        )}
-                      </div>
-
-                      <div className="flex items-center gap-2">
-                        {toolStatus === "pending" && (
-                          <div className="flex items-center gap-1.5">
-                            <button
-                              type="button"
-                              onClick={() => handleToolDecision(m.tool!.id, "allow")}
-                              className="px-2 py-0.5 bg-[#6CD28A] hover:bg-[#5bc078] text-[#000000] text-xs font-semibold rounded font-mono cursor-pointer transition-colors"
-                            >
-                              Approve
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => handleToolDecision(m.tool!.id, "deny")}
-                              className="px-2 py-0.5 bg-red-500/20 hover:bg-red-500/30 text-[#E5484D] text-xs font-semibold rounded border border-[#E5484D]/40 font-mono cursor-pointer transition-colors"
-                            >
-                              Deny
-                            </button>
-                          </div>
-                        )}
-
-                        <span className="text-[11px] font-mono font-bold tracking-wider" style={{ color: toolColor }}>
-                          {statusLabel}
-                        </span>
-                      </div>
+                          {summary ? (
+                            <span className="text-[#A3A3A3] font-normal truncate text-[11px] max-w-[200px] sm:max-w-[420px]">
+                              {summary}
+                            </span>
+                          ) : (
+                            <span className="text-[#666] italic text-[11px]">
+                              {toolStatus === "pending" ? "waiting for approval…" : "completed"}
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0 font-mono text-xs">
+                          {toolStatus === "pending" && (
+                            <span className="text-[10px] text-[#E5B800] bg-[#E5B800]/15 px-1.5 py-0.5 rounded font-semibold">
+                              Action Required
+                            </span>
+                          )}
+                          <span className="font-bold text-xs" style={{ color: toolColor }}>
+                            {toolStatus === "done"
+                              ? "✓"
+                              : toolStatus === "error"
+                              ? "✗"
+                              : toolStatus === "denied"
+                              ? "⊘"
+                              : "⏳"}
+                          </span>
+                          <span className="text-[#666] group-hover:text-white transition-colors text-[10px]">
+                            ▾
+                          </span>
+                        </div>
+                      </button>
                     </div>
+                  );
+                }
 
-                    {/* Tool Command / Args Box */}
-                    {m.tool.args && Object.keys(m.tool.args).length > 0 && !m.tool.command && (
-                      <div className="p-2.5 bg-[#050505] font-mono text-xs text-[#8A8A8A] border-b border-[#1A1A1A] overflow-x-auto">
-                        <pre className="text-white/80">{JSON.stringify(m.tool.args, null, 2)}</pre>
+                return (
+                  <div key={toolKey} className="my-2 max-w-[95%] sm:max-w-[90%]">
+                    <div
+                      className="rounded-xl bg-[#0A0A0A] overflow-hidden transition-all"
+                      style={{
+                        border: `1px solid ${toolColor}`,
+                        boxShadow: `0 0 16px ${toolColor}1F`,
+                      }}
+                    >
+                      {/* Tool Header */}
+                      <div
+                        className="px-3.5 py-2 bg-white/[0.02] border-b border-[#1A1A1A] flex items-center justify-between cursor-pointer"
+                        onClick={() => {
+                          if (toolDisplay === "brief") {
+                            setExpandedTools((prev) => {
+                              const next = new Set(prev);
+                              next.delete(toolKey);
+                              return next;
+                            });
+                          }
+                        }}
+                      >
+                        <div className="flex items-center gap-2 font-mono text-xs font-bold" style={{ color: toolColor }}>
+                          <span>&gt;_</span>
+                          <span className="tracking-wide uppercase">{m.tool.tool}</span>
+                          {m.tool.command && (
+                            <span className="text-[#8A8A8A] font-normal font-mono truncate max-w-[180px] sm:max-w-[360px]">
+                              {m.tool.command}
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          {toolStatus === "pending" && (
+                            <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+                              <button
+                                type="button"
+                                onClick={() => handleToolDecision(m.tool!.id, "allow")}
+                                className="px-2 py-0.5 bg-[#6CD28A] hover:bg-[#5bc078] text-[#000000] text-xs font-semibold rounded font-mono cursor-pointer transition-colors"
+                              >
+                                Approve
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleToolDecision(m.tool!.id, "deny")}
+                                className="px-2 py-0.5 bg-red-500/20 hover:bg-red-500/30 text-[#E5484D] text-xs font-semibold rounded border border-[#E5484D]/40 font-mono cursor-pointer transition-colors"
+                              >
+                                Deny
+                              </button>
+                            </div>
+                          )}
+
+                          <span className="text-[11px] font-mono font-bold tracking-wider" style={{ color: toolColor }}>
+                            {statusLabel}
+                          </span>
+                          {toolDisplay === "brief" && (
+                            <span className="text-[#888] text-[10px]">▲</span>
+                          )}
+                        </div>
                       </div>
-                    )}
 
-                    {/* Tool Diff / Output View */}
-                    {m.tool.diff && m.tool.diff.hunks && (
-                      <div className="p-3 bg-[#050505] font-mono text-xs overflow-x-auto space-y-0.5 border-t border-[#1A1A1A]">
-                        {m.tool.diff.hunks.map((line, i) => (
-                          <div
-                            key={i}
-                            className={`px-2 py-0.5 rounded ${
-                              line.startsWith("+")
-                                ? "bg-[#6CD28A]/15 text-[#6CD28A] font-semibold"
+                      {/* Tool Command / Args Box */}
+                      {m.tool.args && Object.keys(m.tool.args).length > 0 && !m.tool.command && (
+                        <div className="p-2.5 bg-[#050505] font-mono text-xs text-[#8A8A8A] border-b border-[#1A1A1A] overflow-x-auto">
+                          <pre className="text-white/80">{JSON.stringify(m.tool.args, null, 2)}</pre>
+                        </div>
+                      )}
+
+                      {/* Tool Diff / Output View */}
+                      {m.tool.diff && m.tool.diff.hunks && (
+                        <div className="p-3 bg-[#050505] font-mono text-xs overflow-x-auto space-y-0.5 border-t border-[#1A1A1A]">
+                          {m.tool.diff.hunks.map((line, i) => (
+                            <div
+                              key={i}
+                              className={`px-2 py-0.5 rounded ${
+                                line.startsWith("+")
+                                  ? "bg-[#6CD28A]/15 text-[#6CD28A] font-semibold"
                                 : line.startsWith("-")
                                 ? "bg-[#E5484D]/15 text-[#E5484D]"
                                 : "text-[#8A8A8A]"
@@ -580,7 +687,8 @@ export function WebChat({
                     )}
                   </div>
                 </div>
-              )}
+              );
+            })()}
 
               {/* COMPACTION MESSAGE (Mobile Parity: Pill with ModelBadge tokens) */}
               {m.role === "compaction" && (

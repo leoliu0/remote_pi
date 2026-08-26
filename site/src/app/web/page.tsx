@@ -275,6 +275,11 @@ export default function WebPage() {
             action: "new_session",
           }),
         });
+      } else if (action === "set_tool_display" && payload) {
+        try {
+          localStorage.setItem("remotepi_tool_display", payload);
+          window.dispatchEvent(new Event("tool_display_changed"));
+        } catch {}
       }
     } catch (err) {
       console.warn("Failed to dispatch quick action", err);

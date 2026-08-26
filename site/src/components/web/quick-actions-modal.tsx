@@ -2,18 +2,24 @@
 
 import { useState } from "react";
 
+export type ToolDisplayMode = "brief" | "full" | "hidden";
+
 interface QuickActionsModalProps {
   activeModel?: string;
   activeThinking?: string;
+  toolDisplay?: ToolDisplayMode;
   onClose: () => void;
   onAction: (action: string, payload?: string) => void;
+  onSetToolDisplay?: (mode: ToolDisplayMode) => void;
 }
 
 export function QuickActionsModal({
   activeModel,
   activeThinking = "medium",
+  toolDisplay = "brief",
   onClose,
   onAction,
+  onSetToolDisplay,
 }: QuickActionsModalProps) {
   // Normalize initial active model
   const normalizeModel = (m?: string) => {
@@ -48,6 +54,7 @@ export function QuickActionsModal({
 
   const [selectedModel, setSelectedModel] = useState(normalizeModel(activeModel));
   const [selectedThinking, setSelectedThinking] = useState(activeThinking);
+  const [selectedToolDisplay, setSelectedToolDisplay] = useState<ToolDisplayMode>(toolDisplay);
 
   const models = [
     { id: "google/gemini-3.7-flash", name: "Gemini 3.7 Flash", tag: "Default", provider: "Google" },
@@ -65,6 +72,12 @@ export function QuickActionsModal({
     { id: "low", label: "Low (1k)" },
     { id: "medium", label: "Medium (4k)" },
     { id: "high", label: "High (16k)" },
+  ];
+
+  const toolDisplayOptions: Array<{ id: ToolDisplayMode; label: string; desc: string }> = [
+    { id: "brief", label: "Brief", desc: "Compact pill" },
+    { id: "full", label: "Full", desc: "Full card & code" },
+    { id: "hidden", label: "Hidden", desc: "Hide tool calls" },
   ];
 
   return (
@@ -88,7 +101,7 @@ export function QuickActionsModal({
           {/* Action 1: Model Selection */}
           <div>
             <div className="text-[#888] mb-2 uppercase tracking-wider text-[10px]">Active Model</div>
-            <div className="grid grid-cols-1 gap-1.5 max-h-52 overflow-y-auto pr-1">
+            <div className="grid grid-cols-1 gap-1.5 max-h-48 overflow-y-auto pr-1">
               {models.map((m) => {
                 const isSelected = selectedModel === m.id || normalizeModel(activeModel) === m.id;
                 return (
@@ -118,7 +131,42 @@ export function QuickActionsModal({
             </div>
           </div>
 
-          {/* Action 2: Thinking Budget */}
+          {/* Action 2: Tool Call Display (Full / Brief / Hidden) */}
+          <div>
+            <div className="text-[#888] mb-1.5 uppercase tracking-wider text-[10px] flex items-center justify-between">
+              <span>Tool Calls Mode</span>
+              <span className="text-[10px] text-[#4fc3f7]">
+                {selectedToolDisplay === "brief"
+                  ? "Brief (Default Pill)"
+                  : selectedToolDisplay === "full"
+                  ? "Full (Expanded)"
+                  : "Hidden"}
+              </span>
+            </div>
+            <div className="grid grid-cols-3 gap-1.5">
+              {toolDisplayOptions.map((opt) => (
+                <button
+                  key={opt.id}
+                  type="button"
+                  onClick={() => {
+                    setSelectedToolDisplay(opt.id);
+                    if (onSetToolDisplay) onSetToolDisplay(opt.id);
+                    onAction("set_tool_display", opt.id);
+                  }}
+                  className={`py-1.5 px-1.5 text-center rounded-lg border text-xs transition-all cursor-pointer ${
+                    selectedToolDisplay === opt.id
+                      ? "bg-[#4fc3f7]/20 border-[#4fc3f7]/50 text-[#4fc3f7] font-semibold"
+                      : "bg-white/[0.02] border-white/10 text-[#888] hover:text-white hover:bg-white/5"
+                  }`}
+                >
+                  <div className="font-medium">{opt.label}</div>
+                  <div className="text-[9px] text-[#888] truncate">{opt.desc}</div>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Action 3: Thinking Budget */}
           <div>
             <div className="text-[#888] mb-1.5 uppercase tracking-wider text-[10px]">Thinking Level</div>
             <div className="grid grid-cols-4 gap-1.5">
@@ -142,7 +190,7 @@ export function QuickActionsModal({
             </div>
           </div>
 
-          {/* Action 3: Session Operations */}
+          {/* Action 4: Session Operations */}
           <div>
             <div className="text-[#888] mb-1.5 uppercase tracking-wider text-[10px]">Operations</div>
             <div className="grid grid-cols-2 gap-2">
