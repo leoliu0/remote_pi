@@ -23,18 +23,31 @@ export function HomeView({
   // Mobile Parity: default tab is "online" (matches HomeList.filter = HomeFilter.online in Flutter)
   const [filter, setFilter] = useState<"all" | "online" | "offline">("online");
 
-  // Calculate live vs offline counts
-  const onlineSessions = sessions.filter((s) => s.isLive || s.status === "online" || s.status === "working");
-  const offlineSessions = sessions.filter((s) => !s.isLive && s.status !== "online" && s.status !== "working");
+  // Deterministic session sorting (working -> online -> offline -> alphabetical)
+  const sortSessions = (list: PairedSession[]) =>
+    [...list].sort((a, b) => {
+      const rank = (s: PairedSession) =>
+        s.status === "working" ? 0 : s.isLive || s.status === "online" ? 1 : 2;
+      const rankDiff = rank(a) - rank(b);
+      if (rankDiff !== 0) return rankDiff;
+      const nameA = (a.name || a.roomId || "").toLowerCase();
+      const nameB = (b.name || b.roomId || "").toLowerCase();
+      if (nameA !== nameB) return nameA.localeCompare(nameB);
+      return (a.roomId || "").localeCompare(b.roomId || "");
+    });
+
+  const sortedAll = sortSessions(sessions);
+  const onlineSessions = sortedAll.filter((s) => s.isLive || s.status === "online" || s.status === "working");
+  const offlineSessions = sortedAll.filter((s) => !s.isLive && s.status !== "online" && s.status !== "working");
 
   const counts = {
-    all: sessions.length,
+    all: sortedAll.length,
     online: onlineSessions.length,
     offline: offlineSessions.length,
   };
 
   const visibleSessions = filter === "all"
-    ? sessions
+    ? sortedAll
     : filter === "online"
     ? onlineSessions
     : offlineSessions;
@@ -47,8 +60,7 @@ export function HomeView({
     groupedByDevice[dev].push(s);
   }
 
-  const deviceKeys = Object.keys(groupedByDevice);
-
+  const deviceKeys = Object.keys(groupedByDevice).sort();
   return (
     <div className="flex-1 max-w-4xl mx-auto w-full px-4 sm:px-6 py-6 sm:py-8 flex flex-col">
       {/* 1. iOS-style Large Title Header (Mobile Parity) */}

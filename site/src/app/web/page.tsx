@@ -65,7 +65,19 @@ export default function WebPage() {
             }
           }
 
-          const next = Array.from(map.values());
+          const sortSessions = (list: PairedSession[]) =>
+            [...list].sort((a, b) => {
+              const rank = (s: PairedSession) =>
+                s.status === "working" ? 0 : s.isLive || s.status === "online" ? 1 : 2;
+              const rankDiff = rank(a) - rank(b);
+              if (rankDiff !== 0) return rankDiff;
+              const nameA = (a.name || a.roomId || "").toLowerCase();
+              const nameB = (b.name || b.roomId || "").toLowerCase();
+              if (nameA !== nameB) return nameA.localeCompare(nameB);
+              return (a.roomId || "").localeCompare(b.roomId || "");
+            });
+
+          const next = sortSessions(Array.from(map.values()));
           setSavedSessions((prev) => {
             if (prev.length === next.length) {
               let same = true;
