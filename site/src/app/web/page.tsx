@@ -10,12 +10,14 @@ import {
   getActiveSessionId,
   setActiveSessionId,
 } from "@/components/web/web-client";
+import { HomeView } from "@/components/web/home-view";
 import { PairScreen } from "@/components/web/pair-screen";
 import { WebChat } from "@/components/web/web-chat";
 import { SessionInfoModal } from "@/components/web/session-info-modal";
 import { QuickActionsModal } from "@/components/web/quick-actions-modal";
 
 export default function WebPage() {
+  const [view, setView] = useState<"home" | "chat" | "pair">("home");
   const [activeSession, setActiveSession] = useState<PairedSession | null>(null);
   const [savedSessions, setSavedSessions] = useState<PairedSession[]>([]);
   const [showSessionInfo, setShowSessionInfo] = useState(false);
@@ -24,10 +26,65 @@ export default function WebPage() {
 
   useEffect(() => {
     setMounted(true);
-    const sessions = getSavedSessions();
-    setSavedSessions(sessions);
+    let sessions = getSavedSessions();
 
-    // Check if pairing parameters are provided in URL query (e.g. ?epk=...&t=... or ?pair=remotepi://pair...)
+    // 1. Auto-discover local Pi host sessions
+    fetch("/api/local-session")
+      .then((res) => res.json())
+      .then((data) => {
+        if (data && data.localPiDetected) {
+          const localSessions: PairedSession[] = [];
+
+          // Add default session
+          localSessions.push({
+            id: `local_main`,
+            name: "Remote Pi (main)",
+            device: data.deviceName,
+            remoteEpk: data.remoteEpk,
+            token: data.token,
+            relayUrl: data.relayUrl,
+            roomId: "main",
+            pairedAt: new Date().toISOString(),
+            lastConnectedAt: new Date().toISOString(),
+          });
+
+          // Add recent workspace project sessions
+          if (Array.isArray(data.recentSessions)) {
+            for (const s of data.recentSessions) {
+              localSessions.push({
+                id: `local_${s.roomId}`,
+                name: s.name,
+                device: data.deviceName,
+                remoteEpk: data.remoteEpk,
+                token: data.token,
+                relayUrl: data.relayUrl,
+                roomId: s.roomId,
+                cwd: s.path,
+                pairedAt: new Date().toISOString(),
+                lastConnectedAt: new Date().toISOString(),
+              });
+            }
+          }
+
+          // Merge local sessions with saved sessions
+          const merged = [...sessions];
+          for (const ls of localSessions) {
+            const exists = merged.some((s) => s.id === ls.id || (s.remoteEpk === ls.remoteEpk && s.roomId === ls.roomId));
+            if (!exists) {
+              merged.push(ls);
+              saveSession(ls);
+            }
+          }
+          setSavedSessions(merged);
+        } else {
+          setSavedSessions(sessions);
+        }
+      })
+      .catch(() => {
+        setSavedSessions(sessions);
+      });
+
+    // 2. Check if pairing parameters are provided in URL query
     if (typeof window !== "undefined" && window.location.search) {
       const search = window.location.search;
       const params = new URLSearchParams(search);
@@ -40,7 +97,7 @@ export default function WebPage() {
           device: parsed.device || "Remote Host",
           remoteEpk: parsed.remoteEpk,
           token: parsed.token,
-          relayUrl: parsed.relayUrl || "wss://relay-rp1.jacobmoura.work",
+          relayUrl: parsed.relayUrl || "ws://178.157.59.181:3000",
           roomId: parsed.roomId || "main",
           pairedAt: new Date().toISOString(),
           lastConnectedAt: new Date().toISOString(),
@@ -48,36 +105,31 @@ export default function WebPage() {
         saveSession(session);
         setActiveSession(session);
         setActiveSessionId(session.id);
-        setSavedSessions(getSavedSessions());
-        // Clean URL query
+        setView("chat");
         window.history.replaceState({}, document.title, window.location.pathname);
-        return;
       }
     }
-
-    const activeId = getActiveSessionId();
-    if (activeId) {
-      const found = sessions.find((s) => s.id === activeId);
-      if (found) setActiveSession(found);
-    }
   }, []);
+
+  const handleOpenSession = (session: PairedSession) => {
+    setActiveSession(session);
+    setActiveSessionId(session.id);
+    setView("chat");
+  };
 
   const handlePaired = (session: PairedSession) => {
     setActiveSession(session);
     setActiveSessionId(session.id);
     setSavedSessions(getSavedSessions());
+    setView("chat");
   };
 
-  const handleSelectSaved = (session: PairedSession) => {
-    setActiveSession(session);
-    setActiveSessionId(session.id);
-  };
-
-  const handleDeleteSaved = (id: string) => {
+  const handleDeleteSession = (id: string) => {
     deleteSession(id);
-    setSavedSessions(getSavedSessions());
+    setSavedSessions((prev) => prev.filter((s) => s.id !== id));
     if (activeSession?.id === id) {
       setActiveSession(null);
+      setView("home");
     }
   };
 
@@ -87,7 +139,7 @@ export default function WebPage() {
       name: "Remote Pi (Demo)",
       device: "MacBook Pro (Demo Agent)",
       remoteEpk: "epk_demo_9824_preview_key",
-      relayUrl: "wss://relay-rp1.jacobmoura.work",
+      relayUrl: "ws://178.157.59.181:3000",
       roomId: "workspace/remote-pi",
       pairedAt: new Date().toISOString(),
       lastConnectedAt: new Date().toISOString(),
@@ -96,10 +148,12 @@ export default function WebPage() {
     setActiveSession(demoSession);
     setActiveSessionId(demoSession.id);
     setSavedSessions(getSavedSessions());
+    setView("chat");
   };
 
   const handleDisconnect = () => {
     setActiveSession(null);
+    setView("home");
   };
 
   const handleQuickAction = (action: string, payload?: string) => {
@@ -128,15 +182,27 @@ export default function WebPage() {
   return (
     <div className="flex-1 flex flex-col selection:bg-[#4fc3f7]/20 selection:text-[#4fc3f7]">
       <div className="flex-1 flex flex-col">
-        {!activeSession ? (
+        {view === "home" && (
+          <HomeView
+            sessions={savedSessions}
+            onOpenSession={handleOpenSession}
+            onOpenPairModal={() => setView("pair")}
+            onDeleteSession={handleDeleteSession}
+            onStartDemo={handleStartDemo}
+          />
+        )}
+
+        {view === "pair" && (
           <PairScreen
             onPaired={handlePaired}
             savedSessions={savedSessions}
-            onSelectSaved={handleSelectSaved}
-            onDeleteSaved={handleDeleteSaved}
+            onSelectSaved={handleOpenSession}
+            onDeleteSaved={handleDeleteSession}
             onStartDemo={handleStartDemo}
           />
-        ) : (
+        )}
+
+        {view === "chat" && activeSession && (
           <WebChat
             session={activeSession}
             onDisconnect={handleDisconnect}
