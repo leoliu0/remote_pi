@@ -338,6 +338,26 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true, id: payload.id });
     }
 
+    if (body.action === "queue_message" && body.text) {
+      const payload = {
+        type: "queued_message_set",
+        id: `q_${Date.now()}`,
+        text: body.text,
+      };
+      sendToRelay(state, payload);
+      return NextResponse.json({ ok: true, id: payload.id });
+    }
+
+    if (body.action === "clear_queued") {
+      const payload = {
+        type: "queued_message_clear",
+        id: `cq_${Date.now()}`,
+        target_id: body.targetId,
+      };
+      sendToRelay(state, payload);
+      return NextResponse.json({ ok: true });
+    }
+
     if (body.action === "approve_tool" && body.toolCallId) {
       const payload = {
         type: "approve_tool",

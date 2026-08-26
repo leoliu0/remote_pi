@@ -60,6 +60,7 @@ export function WebChat({
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [toolDisplay, setToolDisplay] = useState<"brief" | "full" | "hidden">("brief");
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
+  const [queuedItems, setQueuedItems] = useState<Array<{ id: string; text: string; editable?: boolean }>>([]);
 
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const isInitialLoadRef = useRef(true);
@@ -245,6 +246,11 @@ export function WebChat({
       };
       setMessages((prev) => [...prev, compMsg]);
     };
+
+    client.onQueuedState = (items) => {
+      setQueuedItems(items);
+    };
+
     client.onRoomMeta = (meta) => {
       if (meta.thinking) {
         session.thinking = meta.thinking;
@@ -284,6 +290,30 @@ export function WebChat({
     }
     setUnreadCount(0);
     setShowScrollBottom(false);
+  };
+
+  const handleQueueMessage = () => {
+    const text = inputText.trim();
+    if (!text) return;
+    if (clientRef.current) {
+      clientRef.current.queueMessage(text);
+    }
+    setInputText("");
+  };
+
+  const handleEditQueued = (item: { id: string; text: string }) => {
+    if (clientRef.current) {
+      clientRef.current.clearQueuedMessage(item.id);
+    }
+    setInputText(item.text);
+    inputRef.current?.focus();
+  };
+
+  const handleClearQueued = (id: string) => {
+    if (clientRef.current) {
+      clientRef.current.clearQueuedMessage(id);
+    }
+    setQueuedItems((prev) => prev.filter((q) => q.id !== id));
   };
 
   // Send message over WebSocket
@@ -831,8 +861,42 @@ export function WebChat({
 
       {/* 5. COMPACT BOTTOM COMPOSER */}
       <div className="p-2 sm:px-4 sm:py-2 border-t border-white/10 bg-[#0a0c10]/95 backdrop-blur-md shrink-0">
+        {/* Queued Message Previews matching Flutter InputBar */}
+        {queuedItems.length > 0 && (
+          <div className="mb-2 space-y-1.5">
+            {queuedItems.map((q) => (
+              <div
+                key={q.id}
+                className="p-2 px-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-200 text-xs font-mono flex items-center justify-between shadow-xs animate-in fade-in"
+              >
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="text-amber-400">⏳</span>
+                  <span className="font-semibold text-[11px] text-amber-400">Queued:</span>
+                  <span className="truncate text-amber-100">{q.text}</span>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => handleEditQueued(q)}
+                    className="px-2 py-0.5 rounded bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 hover:text-white cursor-pointer transition-colors"
+                  >
+                    Edit
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleClearQueued(q.id)}
+                    className="p-1 text-amber-400 hover:text-white cursor-pointer"
+                    title="Remove from queue"
+                  >
+                    ✕
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
         <div className="relative flex items-center gap-2 rounded-xl bg-black/60 border border-white/15 focus-within:border-[#4fc3f7]/60 focus-within:ring-1 focus-within:ring-[#4fc3f7]/60 px-2.5 py-1.5 transition-all">
-          {/* Left Action Buttons matching Flutter InputBar */}
           <div className="flex items-center gap-0.5 shrink-0">
             {/* Quick Actions icon visible when input is empty (matching Flutter) */}
             {!inputText && (
@@ -883,6 +947,7 @@ export function WebChat({
           />
 
           {/* Right Buttons */}
+          {/* Right Buttons matching Flutter InputBar */}
           <div className="flex items-center gap-1.5 shrink-0">
             {isWorking && (
               <button
@@ -891,6 +956,25 @@ export function WebChat({
                 className="px-2.5 py-1 bg-red-500/20 hover:bg-red-500/30 text-red-300 border border-red-500/40 rounded-lg text-xs font-mono font-semibold transition-all cursor-pointer"
               >
                 Stop
+              </button>
+            )}
+
+            {isWorking && inputText.trim() && (
+              <button
+                type="button"
+                onClick={handleQueueMessage}
+                className="px-2.5 py-1.5 bg-[#4fc3f7]/15 hover:bg-[#4fc3f7]/25 text-[#4fc3f7] border border-[#4fc3f7]/40 rounded-lg text-xs font-mono font-semibold transition-all cursor-pointer flex items-center gap-1 shadow-xs"
+                title="Queue for next turn"
+              >
+                <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <line x1="8" y1="6" x2="21" y2="6" />
+                  <line x1="8" y1="12" x2="21" y2="12" />
+                  <line x1="8" y1="18" x2="16" y2="18" />
+                  <line x1="3" y1="6" x2="3.01" y2="6" />
+                  <line x1="3" y1="12" x2="3.01" y2="12" />
+                  <line x1="3" y1="18" x2="3.01" y2="18" />
+                </svg>
+                <span className="hidden sm:inline">Queue</span>
               </button>
             )}
 

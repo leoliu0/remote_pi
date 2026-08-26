@@ -244,7 +244,7 @@ export class RemotePiRelayClient {
   public onSessionHistory?: (messages: WebChatMessage[]) => void;
   public onCompaction?: (summary: string, tokensBefore: number) => void;
   public onRoomMeta?: (meta: { model?: string; thinking?: string; working?: boolean }) => void;
-
+  public onQueuedState?: (items: Array<{ id: string; text: string; editable?: boolean }>) => void;
   constructor(session: PairedSession) {
     this.session = session;
   }
@@ -421,6 +421,16 @@ export class RemotePiRelayClient {
           this.onRoomMeta?.(update);
         }
         break;
+
+      case "queued_message_state":
+        if (Array.isArray(msg.items)) {
+          this.onQueuedState?.(msg.items as Array<{ id: string; text: string; editable?: boolean }>);
+        } else if (typeof msg.text === "string" && msg.text) {
+          this.onQueuedState?.([{ id: (msg.id as string) || "q1", text: msg.text, editable: true }]);
+        } else {
+          this.onQueuedState?.([]);
+        }
+        break;
     }
   }
   public async postAction(action: string, payload: Record<string, unknown> = {}): Promise<void> {
@@ -450,10 +460,17 @@ export class RemotePiRelayClient {
     this.postAction("send_message", { text });
   }
 
+  public queueMessage(text: string): void {
+    this.postAction("queue_message", { text });
+  }
+
+  public clearQueuedMessage(targetId?: string): void {
+    this.postAction("clear_queued", { targetId });
+  }
+
   public approveTool(toolCallId: string, decision: "allow" | "deny"): void {
     this.postAction("approve_tool", { toolCallId, decision });
   }
-
   public cancelTurn(targetId: string): void {
     this.postAction("cancel", { targetId });
   }
