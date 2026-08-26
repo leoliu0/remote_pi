@@ -21,7 +21,6 @@ export function QuickActionsModal({
   onAction,
   onSetToolDisplay,
 }: QuickActionsModalProps) {
-  // Normalize initial active model
   const normalizeModel = (m?: string) => {
     if (!m) return "google/gemini-3.7-flash";
     const lower = m.toLowerCase();
@@ -55,6 +54,7 @@ export function QuickActionsModal({
   const [selectedModel, setSelectedModel] = useState(normalizeModel(activeModel));
   const [selectedThinking, setSelectedThinking] = useState(activeThinking);
   const [selectedToolDisplay, setSelectedToolDisplay] = useState<ToolDisplayMode>(toolDisplay);
+  const [showModelPicker, setShowModelPicker] = useState(false);
 
   const models = [
     { id: "google/gemini-3.7-flash", name: "Gemini 3.7 Flash", tag: "Default", provider: "Google" },
@@ -76,17 +76,24 @@ export function QuickActionsModal({
 
   const toolDisplayOptions: Array<{ id: ToolDisplayMode; label: string; desc: string }> = [
     { id: "brief", label: "Brief", desc: "Compact pill" },
-    { id: "full", label: "Full", desc: "Full card & code" },
-    { id: "hidden", label: "Hidden", desc: "Hide tool calls" },
+    { id: "full", label: "Full", desc: "Expanded card" },
+    { id: "hidden", label: "Hidden", desc: "Chat only" },
   ];
+
+  const currentModelObj = models.find((m) => m.id === selectedModel) || {
+    id: selectedModel,
+    name: selectedModel,
+    tag: "Custom",
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-150">
       <div className="bg-[#0e1117] border border-white/15 rounded-2xl w-full max-w-md overflow-hidden shadow-2xl">
+        {/* Header matching quick_actions_sheet.dart */}
         <div className="px-5 py-3.5 border-b border-white/10 flex items-center justify-between">
           <div className="text-xs font-semibold text-white font-mono flex items-center gap-2">
             <span className="text-[#4fc3f7]">⚡</span>
-            <span>Quick Actions</span>
+            <span>Quick actions</span>
           </div>
           <button
             type="button"
@@ -97,41 +104,159 @@ export function QuickActionsModal({
           </button>
         </div>
 
-        <div className="p-4 space-y-4 text-xs font-mono">
-          {/* Action 1: Model Selection */}
+        <div className="p-4 space-y-3.5 text-xs font-mono">
+          {/* 1. COMPACT CONTEXT (Item 1 in mobile quick_actions_sheet.dart) */}
+          <button
+            type="button"
+            onClick={() => {
+              onAction("compact");
+              onClose();
+            }}
+            className="w-full p-3 rounded-xl bg-white/[0.02] hover:bg-white/5 border border-white/10 text-left transition-all flex items-center justify-between group cursor-pointer"
+          >
+            <div className="flex items-center gap-3">
+              <div className="w-8 h-8 rounded-lg bg-[#4fc3f7]/10 border border-[#4fc3f7]/20 flex items-center justify-center text-[#4fc3f7] shrink-0">
+                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M4 14h6v6m10-10h-6V4m0 6 7-7M10 14l-7 7" />
+                </svg>
+              </div>
+              <div>
+                <div className="font-semibold text-white group-hover:text-[#4fc3f7] transition-colors">
+                  Compact context
+                </div>
+                <div className="text-[#888] text-[11px]">
+                  Summarize old turns to free room.
+                </div>
+              </div>
+            </div>
+            <span className="text-[#666] group-hover:text-white transition-colors">›</span>
+          </button>
+
+          {/* 2. NEW SESSION (Item 2 in mobile quick_actions_sheet.dart) */}
+          <button
+            type="button"
+            onClick={() => {
+              if (confirm("Start a new session?\n\nThis clears the Pi-side conversation history. The current thread cannot be resumed.")) {
+                onAction("new_session");
+                onClose();
+              }
+            }}
+            className="w-full p-3 rounded-xl bg-red-500/[0.03] hover:bg-red-500/10 border border-red-500/20 text-left transition-all flex items-center justify-between group cursor-pointer"
+          >
+            <div className="flex items-center gap-3">
+              <div className="w-8 h-8 rounded-lg bg-red-500/10 border border-red-500/30 flex items-center justify-center text-red-400 shrink-0">
+                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M12 3v18M3 12h18" />
+                </svg>
+              </div>
+              <div>
+                <div className="font-semibold text-red-300 group-hover:text-red-200 transition-colors">
+                  New session
+                </div>
+                <div className="text-[#888] text-[11px]">
+                  Clears the conversation on the Pi.
+                </div>
+              </div>
+            </div>
+            <span className="text-[#666] group-hover:text-white transition-colors">›</span>
+          </button>
+
+          <div className="border-t border-white/10" />
+
+          {/* 3. MODEL ROW (Item 3 in mobile quick_actions_sheet.dart) */}
           <div>
-            <div className="text-[#888] mb-2 uppercase tracking-wider text-[10px]">Active Model</div>
-            <div className="grid grid-cols-1 gap-1.5 max-h-48 overflow-y-auto pr-1">
-              {models.map((m) => {
-                const isSelected = selectedModel === m.id || normalizeModel(activeModel) === m.id;
-                return (
-                  <button
-                    key={m.id}
-                    type="button"
-                    onClick={() => {
-                      setSelectedModel(m.id);
-                      onAction("set_model", m.id);
-                    }}
-                    className={`w-full p-2 rounded-xl border flex items-center justify-between transition-all cursor-pointer ${
-                      isSelected
-                        ? "bg-[#4fc3f7]/15 border-[#4fc3f7]/60 text-white"
-                        : "bg-white/[0.02] border-white/5 text-[#a3a3a3] hover:text-white hover:bg-white/5"
-                    }`}
-                  >
-                    <div className="flex items-center gap-2 min-w-0">
-                      <span className={`w-2 h-2 rounded-full shrink-0 ${isSelected ? "bg-[#4fc3f7]" : "bg-white/10"}`} />
-                      <span className="font-medium text-xs truncate">{m.name}</span>
-                    </div>
-                    <span className="text-[10px] px-1.5 py-0.2 rounded bg-white/10 text-[#888] shrink-0 ml-2">
-                      {m.tag}
-                    </span>
-                  </button>
-                );
-              })}
+            <div className="text-[#888] mb-2 uppercase tracking-wider text-[10px] flex items-center justify-between">
+              <span>Model</span>
+              <button
+                type="button"
+                onClick={() => setShowModelPicker(!showModelPicker)}
+                className="text-[#4fc3f7] hover:underline text-[10px] cursor-pointer"
+              >
+                {showModelPicker ? "Collapse" : "Change"}
+              </button>
+            </div>
+
+            {!showModelPicker ? (
+              <button
+                type="button"
+                onClick={() => setShowModelPicker(true)}
+                className="w-full p-2.5 rounded-xl bg-white/[0.02] hover:bg-white/5 border border-white/10 flex items-center justify-between cursor-pointer group"
+              >
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <span className="w-2.5 h-2.5 rounded-full bg-[#4fc3f7] shrink-0" />
+                  <span className="font-medium text-white text-xs truncate">{currentModelObj.name}</span>
+                </div>
+                <span className="text-[10px] px-2 py-0.5 rounded bg-[#4fc3f7]/15 text-[#4fc3f7] font-semibold shrink-0">
+                  {currentModelObj.tag}
+                </span>
+              </button>
+            ) : (
+              <div className="grid grid-cols-1 gap-1.5 max-h-44 overflow-y-auto pr-1 animate-in fade-in">
+                {models.map((m) => {
+                  const isSelected = selectedModel === m.id;
+                  return (
+                    <button
+                      key={m.id}
+                      type="button"
+                      onClick={() => {
+                        setSelectedModel(m.id);
+                        onAction("set_model", m.id);
+                        setShowModelPicker(false);
+                      }}
+                      className={`w-full p-2 rounded-xl border flex items-center justify-between transition-all cursor-pointer ${
+                        isSelected
+                          ? "bg-[#4fc3f7]/15 border-[#4fc3f7]/60 text-white"
+                          : "bg-white/[0.02] border-white/5 text-[#a3a3a3] hover:text-white hover:bg-white/5"
+                      }`}
+                    >
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className={`w-2 h-2 rounded-full shrink-0 ${isSelected ? "bg-[#4fc3f7]" : "bg-white/10"}`} />
+                        <span className="font-medium text-xs truncate">{m.name}</span>
+                      </div>
+                      <span className="text-[10px] px-1.5 py-0.2 rounded bg-white/10 text-[#888] shrink-0 ml-2">
+                        {m.tag}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          <div className="border-t border-white/10" />
+
+          {/* 4. THINKING BUDGET (Item 4 in mobile quick_actions_sheet.dart) */}
+          <div>
+            <div className="text-[#888] mb-1.5 uppercase tracking-wider text-[10px] flex items-center justify-between">
+              <span>Thinking</span>
+              <span className="text-[10px] text-[#4fc3f7]">
+                {selectedThinking.toUpperCase()}
+              </span>
+            </div>
+            <div className="grid grid-cols-4 gap-1.5">
+              {thinkingLevels.map((t) => (
+                <button
+                  key={t.id}
+                  type="button"
+                  onClick={() => {
+                    setSelectedThinking(t.id);
+                    onAction("set_thinking", t.id);
+                  }}
+                  className={`py-1.5 px-1 text-center rounded-lg border text-[11px] transition-all cursor-pointer ${
+                    selectedThinking === t.id
+                      ? "bg-[#4fc3f7]/20 border-[#4fc3f7]/50 text-[#4fc3f7] font-semibold"
+                      : "bg-white/[0.02] border-white/10 text-[#888] hover:text-white hover:bg-white/5"
+                  }`}
+                >
+                  {t.label}
+                </button>
+              ))}
             </div>
           </div>
 
-          {/* Action 2: Tool Call Display (Full / Brief / Hidden) */}
+          <div className="border-t border-white/10" />
+
+          {/* 5. TOOL CALLS DISPLAY (Item 5) */}
           <div>
             <div className="text-[#888] mb-1.5 uppercase tracking-wider text-[10px] flex items-center justify-between">
               <span>Tool Calls Mode</span>
@@ -163,61 +288,6 @@ export function QuickActionsModal({
                   <div className="text-[9px] text-[#888] truncate">{opt.desc}</div>
                 </button>
               ))}
-            </div>
-          </div>
-
-          {/* Action 3: Thinking Budget */}
-          <div>
-            <div className="text-[#888] mb-1.5 uppercase tracking-wider text-[10px]">Thinking Level</div>
-            <div className="grid grid-cols-4 gap-1.5">
-              {thinkingLevels.map((t) => (
-                <button
-                  key={t.id}
-                  type="button"
-                  onClick={() => {
-                    setSelectedThinking(t.id);
-                    onAction("set_thinking", t.id);
-                  }}
-                  className={`py-1.5 px-1 text-center rounded-lg border text-[11px] transition-all cursor-pointer ${
-                    selectedThinking === t.id
-                      ? "bg-[#4fc3f7]/20 border-[#4fc3f7]/50 text-[#4fc3f7] font-semibold"
-                      : "bg-white/[0.02] border-white/10 text-[#888] hover:text-white hover:bg-white/5"
-                  }`}
-                >
-                  {t.label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Action 4: Session Operations */}
-          <div>
-            <div className="text-[#888] mb-1.5 uppercase tracking-wider text-[10px]">Operations</div>
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                type="button"
-                onClick={() => {
-                  onAction("compact");
-                  onClose();
-                }}
-                className="p-2 rounded-xl bg-white/[0.03] hover:bg-white/10 border border-white/10 text-white text-xs font-mono transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
-              >
-                <span>📦</span>
-                <span>Compact Context</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  if (confirm("Start a new clean session? This resets current message context.")) {
-                    onAction("new_session");
-                    onClose();
-                  }
-                }}
-                className="p-2 rounded-xl bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 text-red-300 text-xs font-mono transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
-              >
-                <span>✨</span>
-                <span>New Session</span>
-              </button>
             </div>
           </div>
         </div>

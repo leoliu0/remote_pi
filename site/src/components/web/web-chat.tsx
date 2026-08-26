@@ -389,6 +389,7 @@ export function WebChat({
         </div>
 
         {/* Top Actions */}
+        {/* Top Actions matching Flutter ChatTopBar */}
         <div className="flex items-center gap-1">
           <button
             type="button"
@@ -427,18 +428,6 @@ export function WebChat({
               </svg>
             </button>
           )}
-
-          <button
-            type="button"
-            onClick={onDisconnect}
-            className="p-2 text-[#888] hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-colors cursor-pointer"
-            title="Disconnect"
-          >
-            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M18.36 6.64a9 9 0 1 1-12.73 0" />
-              <line x1="12" y1="2" x2="12" y2="12" />
-            </svg>
-          </button>
         </div>
       </div>
 
@@ -788,16 +777,21 @@ export function WebChat({
       {/* 5. COMPACT BOTTOM COMPOSER */}
       <div className="p-2 sm:px-4 sm:py-2 border-t border-white/10 bg-[#0a0c10]/95 backdrop-blur-md shrink-0">
         <div className="relative flex items-center gap-2 rounded-xl bg-black/60 border border-white/15 focus-within:border-[#4fc3f7]/60 focus-within:ring-1 focus-within:ring-[#4fc3f7]/60 px-2.5 py-1.5 transition-all">
-          {/* Left Action Buttons */}
+          {/* Left Action Buttons matching Flutter InputBar */}
           <div className="flex items-center gap-0.5 shrink-0">
-            <button
-              type="button"
-              onClick={() => setSlashMenuOpen((s) => !s)}
-              className="p-1.5 text-[#888] hover:text-[#4fc3f7] hover:bg-white/5 rounded-lg text-xs font-mono font-bold transition-colors cursor-pointer"
-              title="Slash commands"
-            >
-              /
-            </button>
+            {/* Quick Actions icon visible when input is empty (matching Flutter) */}
+            {!inputText && (
+              <button
+                type="button"
+                onClick={onOpenQuickActions}
+                className="p-1.5 text-[#4fc3f7] hover:bg-[#4fc3f7]/10 rounded-lg transition-colors cursor-pointer"
+                title="Quick Actions"
+              >
+                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
+                </svg>
+              </button>
+            )}
             <button
               type="button"
               onClick={() => alert("Image attachment: paste directly from clipboard or drag into chat.")}
@@ -807,6 +801,14 @@ export function WebChat({
               <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
               </svg>
+            </button>
+            <button
+              type="button"
+              onClick={() => setSlashMenuOpen((s) => !s)}
+              className="p-1.5 text-[#888] hover:text-[#4fc3f7] hover:bg-white/5 rounded-lg text-xs font-mono font-bold transition-colors cursor-pointer"
+              title="Slash commands"
+            >
+              /
             </button>
           </div>
 
