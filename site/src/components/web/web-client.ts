@@ -140,6 +140,7 @@ export function parsePairUri(uri: string): Partial<PairedSession> | null {
     const relay = url.searchParams.get("r") || url.searchParams.get("relay") || "ws://178.157.59.181:3000";
     const room = url.searchParams.get("rm") || url.searchParams.get("room") || "main";
     const name = url.searchParams.get("n") || url.searchParams.get("name") || (room === "main" ? "Remote Pi" : room);
+    const cwd = url.searchParams.get("cwd") || undefined;
 
     if (!epk && !token) return null;
 
@@ -151,6 +152,7 @@ export function parsePairUri(uri: string): Partial<PairedSession> | null {
       relayUrl: relay,
       roomId: room,
       name,
+      cwd,
       device: name || `Device (${stdEpk.substring(0, 8)})`,
     };
   } catch {
@@ -238,7 +240,13 @@ export class RemotePiRelayClient {
     this.onStateChange?.("connecting");
 
     try {
-      const url = `/api/relay-bridge?sessionId=${encodeURIComponent(this.session.id)}`;
+      const params = new URLSearchParams({
+        sessionId: this.session.id,
+        roomId: this.session.roomId || "main",
+        remoteEpk: this.session.remoteEpk || "",
+        relayUrl: this.session.relayUrl || "",
+      });
+      const url = `/api/relay-bridge?${params.toString()}`;
       this.eventSource = new EventSource(url);
 
       this.eventSource.onopen = () => {
@@ -399,6 +407,9 @@ export class RemotePiRelayClient {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           sessionId: this.session.id,
+          roomId: this.session.roomId || "main",
+          remoteEpk: this.session.remoteEpk,
+          relayUrl: this.session.relayUrl,
           action,
           ...payload,
         }),

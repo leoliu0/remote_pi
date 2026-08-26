@@ -41,11 +41,26 @@ export function WebChat({
   const clientRef = useRef<RemotePiRelayClient | null>(null);
   const activeStreamIdRef = useRef<string | null>(null);
 
-  // Initialize Real WebSocket Relay Client
+  // Initialize Real WebSocket Relay Client & Load Session History
   useEffect(() => {
+    // 1. Load on-disk / cached history immediately
+    fetch(`/api/session-history?roomId=${encodeURIComponent(session.roomId)}&cwd=${encodeURIComponent(session.cwd || "")}`)
+      .then((res) => res.json())
+      .then((data) => {
+        if (data && data.ok && Array.isArray(data.messages) && data.messages.length > 0) {
+          setMessages((prev) => {
+            if (prev.length === 0) {
+              return data.messages;
+            }
+            return prev;
+          });
+          setTimeout(() => scrollToBottom(false), 50);
+        }
+      })
+      .catch(() => {});
+
     const client = new RemotePiRelayClient(session);
     clientRef.current = client;
-
     client.onStateChange = (state, err) => {
       setConnState(state);
       if (err) setConnError(err);

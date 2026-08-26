@@ -206,9 +206,12 @@ function broadcast(state: RelayState, event: Record<string, unknown>) {
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const sessionId = searchParams.get("sessionId") || "default_web_client";
-  const { relayUrl, targetEpk } = getLocalConfig();
-  const state = getOrCreateRelay(sessionId, targetEpk, relayUrl);
+  const { relayUrl: defaultRelay, targetEpk: defaultTarget } = getLocalConfig();
+  const targetEpk = searchParams.get("remoteEpk") || defaultTarget;
+  const relayUrl = searchParams.get("relayUrl") || defaultRelay;
+  const roomId = searchParams.get("roomId") || "main";
 
+  const state = getOrCreateRelay(sessionId, targetEpk, relayUrl, roomId);
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
     start(controller) {
@@ -254,9 +257,12 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
     const sessionId = body.sessionId || "default_web_client";
-    const { relayUrl, targetEpk } = getLocalConfig();
-    const state = getOrCreateRelay(sessionId, targetEpk, relayUrl);
+    const { relayUrl: defaultRelay, targetEpk: defaultTarget } = getLocalConfig();
+    const targetEpk = body.remoteEpk || defaultTarget;
+    const relayUrl = body.relayUrl || defaultRelay;
+    const roomId = body.roomId || "main";
 
+    const state = getOrCreateRelay(sessionId, targetEpk, relayUrl, roomId);
     if (body.action === "send_message" && body.text) {
       const payload = {
         type: "user_message",
