@@ -373,12 +373,19 @@ export function WebChat({
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // Ctrl+Enter or Cmd+Enter: Queue message for next turn
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      handleQueueMessage();
+      return;
+    }
+
+    // Plain Enter (without Shift/Ctrl/Cmd): Send / Steer message
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       handleSendMessage();
       return;
     }
-
     if (e.key === "ArrowUp" && inputText === "" && history.length > 0) {
       e.preventDefault();
       const nextIdx = Math.min(historyIndex + 1, history.length - 1);
@@ -940,7 +947,7 @@ export function WebChat({
             onKeyDown={handleKeyDown}
             placeholder={
               isWorking
-                ? "Agent is working… type to steer or queue"
+                ? "Agent is working… Enter to steer, Ctrl+Enter to queue"
                 : "Type a prompt, or / for commands…"
             }
             className="flex-1 bg-transparent py-1 px-1 text-sm text-white placeholder:text-[#555] font-[family-name:var(--ff-body)] resize-none outline-none max-h-32 min-h-[26px] leading-relaxed"
@@ -964,7 +971,7 @@ export function WebChat({
                 type="button"
                 onClick={handleQueueMessage}
                 className="px-2.5 py-1.5 bg-[#4fc3f7]/15 hover:bg-[#4fc3f7]/25 text-[#4fc3f7] border border-[#4fc3f7]/40 rounded-lg text-xs font-mono font-semibold transition-all cursor-pointer flex items-center gap-1 shadow-xs"
-                title="Queue for next turn"
+                title="Queue for next turn (Ctrl+Enter)"
               >
                 <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                   <line x1="8" y1="6" x2="21" y2="6" />
