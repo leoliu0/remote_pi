@@ -54,17 +54,16 @@ export default function WebPage() {
             lastConnectedAt: new Date().toISOString(),
           }));
 
-          // Merge: Live active sessions at top, then saved custom sessions
+          // Merge: Live active sessions from relay are authoritative (keyed by roomId)
           const map = new Map<string, PairedSession>();
           for (const s of remoteSessions) {
-            map.set(s.id, s);
+            map.set(s.roomId, s);
           }
           for (const s of stored) {
-            if (!map.has(s.id)) {
-              map.set(s.id, s);
+            if (!map.has(s.roomId)) {
+              map.set(s.roomId, s);
             }
           }
-
           const sortSessions = (list: PairedSession[]) =>
             [...list].sort((a, b) => {
               const rank = (s: PairedSession) =>

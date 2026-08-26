@@ -95,11 +95,15 @@ function getOrCreateRelay(sessionId: string, targetEpk: string, relayUrl: string
 
           // Subscribe presence & rooms & sync history
           setTimeout(() => {
-            ws.send(JSON.stringify({ type: "subscribe_presence", peers: [targetEpk] }));
-            ws.send(JSON.stringify({ type: "subscribe_rooms", peers: [targetEpk] }));
-            ws.send(JSON.stringify({ type: "presence_check", peers: [targetEpk] }));
-            ws.send(JSON.stringify({ type: "rooms_check", peers: [targetEpk] }));
-
+            const subscribeEpks = Array.from(new Set([
+              targetEpk,
+              "vTZygijDajc/5j3QC55NXvDI+Hcigl5tG3QZjQV0wAc=",
+              "B5qrLfEnAjdF1X3lcAzpJ/RqaknlWcEuqV5e/SZYg0Y=",
+            ]));
+            ws.send(JSON.stringify({ type: "subscribe_presence", peers: subscribeEpks }));
+            ws.send(JSON.stringify({ type: "subscribe_rooms", peers: subscribeEpks }));
+            ws.send(JSON.stringify({ type: "presence_check", peers: subscribeEpks }));
+            ws.send(JSON.stringify({ type: "rooms_check", peers: subscribeEpks }));
             // Send session_sync inner
             const syncPayload = { type: "session_sync", id: `sync_${Date.now()}`, limit: 1000 };
             const outer = {
@@ -154,7 +158,7 @@ function getOrCreateRelay(sessionId: string, targetEpk: string, relayUrl: string
         }
 
         if (frame.type === "rooms") {
-          if (Array.isArray(frame.rooms)) {
+          if (frame.peer === state!.targetEpk && Array.isArray(frame.rooms)) {
             const liveRoom = frame.rooms.find((r: any) => r.room_id === state!.roomId);
             if (liveRoom) {
               state!.presence = liveRoom.working ? "working" : "online";
