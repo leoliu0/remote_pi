@@ -258,6 +258,7 @@ export default function WebPage() {
 
         {view === "chat" && activeSession && (
           <WebChat
+            key={activeSession.id}
             session={activeSession}
             onDisconnect={handleDisconnect}
             onOpenSessionInfo={() => setShowSessionInfo(true)}

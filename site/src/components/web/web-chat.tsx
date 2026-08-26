@@ -43,17 +43,13 @@ export function WebChat({
 
   // Initialize Real WebSocket Relay Client & Load Session History
   useEffect(() => {
+    setMessages([]);
     // 1. Load on-disk / cached history immediately
     fetch(`/api/session-history?roomId=${encodeURIComponent(session.roomId)}&cwd=${encodeURIComponent(session.cwd || "")}`)
       .then((res) => res.json())
       .then((data) => {
         if (data && data.ok && Array.isArray(data.messages) && data.messages.length > 0) {
-          setMessages((prev) => {
-            if (prev.length === 0) {
-              return data.messages;
-            }
-            return prev;
-          });
+          setMessages(data.messages);
           setTimeout(() => scrollToBottom(false), 50);
         }
       })
