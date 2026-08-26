@@ -19,10 +19,11 @@ export default function WebPage() {
   const [view, setView] = useState<"home" | "chat" | "pair">("home");
   const [activeSession, setActiveSession] = useState<PairedSession | null>(null);
   const [savedSessions, setSavedSessions] = useState<PairedSession[]>([]);
+  const [isRelayConnected, setIsRelayConnected] = useState(true);
+  const [deviceName, setDeviceName] = useState("Remote Pi");
   const [showSessionInfo, setShowSessionInfo] = useState(false);
   const [showQuickActions, setShowQuickActions] = useState(false);
   const [mounted, setMounted] = useState(false);
-
   useEffect(() => {
     setMounted(true);
     let stored = getSavedSessions();
@@ -32,22 +33,27 @@ export default function WebPage() {
       .then((res) => res.json())
       .then((data) => {
         if (data && data.localPiDetected && Array.isArray(data.sessions)) {
+          if (typeof data.relayConnected === "boolean") {
+            setIsRelayConnected(data.relayConnected);
+          }
+          if (data.device) {
+            setDeviceName(data.device);
+          }
           const remoteSessions: PairedSession[] = data.sessions.map((s: any) => ({
-            id: `session_${s.roomId}`,
+            id: s.id || `session_${s.roomId}`,
             name: s.name,
-            device: data.deviceName,
-            remoteEpk: data.remoteEpk,
-            token: data.token,
-            relayUrl: data.relayUrl,
+            device: s.device || data.device || "Remote Pi",
+            remoteEpk: s.remoteEpk || data.remoteEpk,
+            token: s.token,
+            relayUrl: s.relayUrl || data.relayUrl,
             roomId: s.roomId,
-            cwd: s.path,
+            cwd: s.cwd,
             model: s.model,
             status: s.status,
             isLive: s.isLive,
-            pairedAt: new Date().toISOString(),
+            pairedAt: s.pairedAt || new Date().toISOString(),
             lastConnectedAt: new Date().toISOString(),
           }));
-
           // Merge: Live active sessions at top, then saved custom sessions
           const map = new Map<string, PairedSession>();
           for (const s of remoteSessions) {
@@ -153,6 +159,8 @@ export default function WebPage() {
         {view === "home" && (
           <HomeView
             sessions={savedSessions}
+            isRelayConnected={isRelayConnected}
+            deviceName={deviceName}
             onOpenSession={handleOpenSession}
             onOpenPairModal={() => setView("pair")}
             onDeleteSession={handleDeleteSession}

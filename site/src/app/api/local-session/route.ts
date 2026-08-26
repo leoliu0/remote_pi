@@ -7,180 +7,170 @@ import WebSocket from "ws";
 import * as ed from "@noble/ed25519";
 import { sha512 } from "@noble/hashes/sha2.js";
 
+// Wire SHA-512 into @noble/ed25519
 ed.hashes.sha512 = (...messages: Uint8Array[]) => sha512(ed.etc.concatBytes(...messages));
+function getLocalEpk(): { publicKey: string; privateKey: string; keypairFound: boolean } {
+  const homeDir = os.homedir();
+  const candidates = [
+    path.join(homeDir, ".pi", "remote", "identity.json"),
+    path.join(homeDir, ".config", "remote-pi", "identity.json"),
+    path.join(homeDir, ".pi", "remote", "config.json"),
+    path.join(homeDir, ".config", "remote-pi", "config.json"),
+  ];
 
-interface LiveRoomInfo {
-  room_id: string;
-  name: string;
-  cwd?: string;
-  model?: string;
-  thinking?: string;
-  working: boolean;
+  for (const p of candidates) {
+    try {
+      if (fs.existsSync(p)) {
+        const raw = JSON.parse(fs.readFileSync(p, "utf8"));
+        const pub = raw?.publicKey || raw?.public_key;
+        const priv = raw?.privateKey || raw?.private_key;
+        if (pub && priv) {
+          return {
+            publicKey: pub,
+            privateKey: priv,
+            keypairFound: true,
+          };
+        }
+      }
+    } catch {}
+  }
+  return { publicKey: "", privateKey: "", keypairFound: false };
 }
 
-async function queryLiveRelayRooms(relayUrl: string, targetEpk: string): Promise<LiveRoomInfo[]> {
-  return new Promise((resolve) => {
-    try {
-      const privKey = ed.utils.randomSecretKey();
-      const pubKey = ed.getPublicKey(privKey);
-      const pubKeyB64 = Buffer.from(pubKey).toString("base64");
+interface RelayRoom {
+  room_id: string;
+  name?: string;
+  cwd?: string;
+  model?: string;
+  started_at?: number;
+  thinking?: string;
+  working?: boolean;
+}
 
-      const ws = new WebSocket(relayUrl);
-      const timeout = setTimeout(() => {
-        try { ws.close(); } catch {}
-        resolve([]);
-      }, 2000);
+interface QueryResult {
+  isRelayConnected: boolean;
+  rooms: RelayRoom[];
+  peerOnline: boolean;
+}
 
-      ws.on("open", () => {
-        ws.send(JSON.stringify({ type: "hello", pubkey: pubKeyB64 }));
-      });
+async function queryRelay(
+  relayUrl: string,
+  targetEpk: string,
+  keyInfo: { publicKey: string; privateKey: string }
+): Promise<QueryResult> {
+  const { promise, resolve } = Promise.withResolvers<QueryResult>();
 
-      ws.on("message", (data: WebSocket.Data) => {
-        try {
-          const frame = JSON.parse(data.toString());
-          if (frame.type === "challenge" && frame.nonce) {
-            const nonce = Buffer.from(frame.nonce, "base64");
-            const sig = ed.sign(nonce, privKey);
-            ws.send(JSON.stringify({ type: "auth", sig: Buffer.from(sig).toString("base64") }));
-            setTimeout(() => {
-              ws.send(JSON.stringify({ type: "rooms_check", peers: [targetEpk] }));
-            }, 50);
-          } else if (frame.type === "rooms" && Array.isArray(frame.rooms)) {
-            clearTimeout(timeout);
-            try { ws.close(); } catch {}
-            resolve(frame.rooms);
-          }
-        } catch {
-          clearTimeout(timeout);
-          try { ws.close(); } catch {}
-          resolve([]);
-        }
-      });
+  const wsUrl = relayUrl.replace(/^http:\/\//, "ws://").replace(/^https:\/\//, "wss://");
+  const ws = new WebSocket(wsUrl);
 
-      ws.on("error", () => {
-        clearTimeout(timeout);
-        resolve([]);
-      });
-    } catch {
-      resolve([]);
-    }
+  const clientPriv = new Uint8Array(randomBytes(32));
+  const clientPub = await ed.getPublicKeyAsync(clientPriv);
+  const clientPubB64 = Buffer.from(clientPub).toString("base64");
+
+  const timeout = setTimeout(() => {
+    try { ws.close(); } catch {}
+    resolve({ isRelayConnected: false, rooms: [], peerOnline: false });
+  }, 3000);
+
+  let peerOnline = false;
+  let rooms: RelayRoom[] = [];
+
+  ws.on("error", () => {
+    clearTimeout(timeout);
+    resolve({ isRelayConnected: false, rooms: [], peerOnline: false });
   });
+
+  ws.on("open", () => {
+    ws.send(JSON.stringify({ type: "hello", pubkey: clientPubB64 }));
+  });
+
+  ws.on("message", async (data: Buffer | string) => {
+    try {
+      const msg = JSON.parse(data.toString());
+      if (msg.type === "challenge") {
+        const nonce = new Uint8Array(Buffer.from(msg.nonce, "base64"));
+        const sig = await ed.signAsync(nonce, clientPriv);
+        const sigB64 = Buffer.from(sig).toString("base64");
+        ws.send(JSON.stringify({ type: "auth", sig: sigB64 }));
+
+        // Subscribe & query rooms & presence immediately
+        ws.send(JSON.stringify({ type: "subscribe_presence", peers: [targetEpk] }));
+        ws.send(JSON.stringify({ type: "subscribe_rooms", peers: [targetEpk] }));
+        ws.send(JSON.stringify({ type: "presence_check", peers: [targetEpk] }));
+        ws.send(JSON.stringify({ type: "rooms_check", peers: [targetEpk] }));
+      } else if (msg.type === "presence") {
+        if (Array.isArray(msg.states)) {
+          const st = msg.states.find((s: any) => s.peer === targetEpk);
+          if (st && st.online) peerOnline = true;
+        }
+      } else if (msg.type === "rooms") {
+        if (Array.isArray(msg.rooms)) {
+          rooms = msg.rooms;
+        }
+        clearTimeout(timeout);
+        try { ws.close(); } catch {}
+        resolve({ isRelayConnected: true, rooms, peerOnline });
+      }
+    } catch {}
+  });
+
+  return promise;
 }
 
 export async function GET() {
   try {
-    const homeDir = os.homedir();
-    const remoteDir = path.join(homeDir, ".pi", "remote");
-    const configPath = path.join(remoteDir, "config.json");
-    const peersPath = path.join(remoteDir, "peers.json");
-    const agentSessionsDir = path.join(homeDir, ".pi", "agent", "sessions");
+    const keyInfo = getLocalEpk();
+    const relayUrl = process.env.REMOTE_PI_RELAY_URL || "ws://178.157.59.181:3000";
+    const hostName = os.hostname() || "Remote Pi";
 
-    // 1. Relay configuration
-    let relayUrl = "ws://178.157.59.181:3000";
-    if (fs.existsSync(configPath)) {
-      try {
-        const cfg = JSON.parse(fs.readFileSync(configPath, "utf8"));
-        if (cfg.relay) {
-          let r = cfg.relay as string;
-          if (r.startsWith("http://")) r = r.replace("http://", "ws://");
-          if (r.startsWith("https://")) r = r.replace("https://", "wss://");
-          relayUrl = r;
-        }
-      } catch (err) {
-        console.warn("Failed to parse config.json", err);
-      }
-    }
-
-    // 2. Identity
-    let remoteEpk = "vTZygijDajc/5j3QC55NXvDI+Hcigl5tG3QZjQV0wAc=";
-    const identityPath = path.join(remoteDir, "identity.json");
-    if (fs.existsSync(identityPath)) {
-      try {
-        const idJson = JSON.parse(fs.readFileSync(identityPath, "utf8"));
-        if (idJson.publicKey) remoteEpk = idJson.publicKey;
-      } catch {}
-    }
-
-    // 3. Query Real Live Rooms from Relay
-    const liveRooms = await queryLiveRelayRooms(relayUrl, remoteEpk);
-    const liveRoomIds = new Set(liveRooms.map((r) => r.room_id));
-
-    // 4. Read registered peers
-    let peersCount = 0;
-    if (fs.existsSync(peersPath)) {
-      try {
-        const peersJson = JSON.parse(fs.readFileSync(peersPath, "utf8"));
-        if (Array.isArray(peersJson.peers)) {
-          peersCount = peersJson.peers.length;
-        }
-      } catch {}
-    }
-
-    // 5. Build session list: Live active rooms FIRST, then offline historical projects
-    const sessions: Array<{
-      name: string;
-      path: string;
-      roomId: string;
-      model?: string;
-      isLive: boolean;
-      isWorking: boolean;
-      status: "online" | "working" | "offline";
-    }> = [];
-
-    for (const lr of liveRooms) {
-      sessions.push({
-        name: lr.name || "Remote Pi",
-        path: lr.cwd || lr.name,
-        roomId: lr.room_id,
-        model: lr.model || "Gemini 3.7 Flash",
-        isLive: true,
-        isWorking: lr.working || false,
-        status: lr.working ? "working" : "online",
+    if (!keyInfo.keypairFound || !keyInfo.publicKey) {
+      return NextResponse.json({
+        localPiDetected: false,
+        relayConnected: false,
+        device: hostName,
+        sessions: [],
       });
     }
 
-    // Add historical sessions as offline if not currently live
-    if (fs.existsSync(agentSessionsDir)) {
-      try {
-        const dirs = fs.readdirSync(agentSessionsDir);
-        for (const d of dirs.slice(0, 10)) {
-          if (d.startsWith("--") && d.endsWith("--")) {
-            const rawPath = d.slice(2, -2).replace(/-/g, "/");
-            const name = path.basename(rawPath) || rawPath;
-            const hash = createHash("sha256").update(rawPath).digest("base64url").slice(0, 12);
-            if (!liveRoomIds.has(hash)) {
-              sessions.push({
-                name,
-                path: rawPath,
-                roomId: hash,
-                model: undefined,
-                isLive: false,
-                isWorking: false,
-                status: "offline",
-              });
-            }
-          }
-        }
-      } catch {}
-    }
+    const { isRelayConnected, rooms } = await queryRelay(relayUrl, keyInfo.publicKey, {
+      publicKey: keyInfo.publicKey,
+      privateKey: keyInfo.privateKey,
+    });
 
-    const token = randomBytes(16).toString("base64url");
-    const deviceName = `${os.hostname()} (${os.type()})`;
+    // Mobile Parity: build sessions from legitimate discovered rooms
+    const sessions = rooms.map((r) => {
+      const isWorking = !!r.working;
+      const status: "working" | "online" | "offline" = isWorking ? "working" : "online";
+      return {
+        id: `${keyInfo.publicKey}_${r.room_id}`,
+        name: r.name || (r.cwd ? path.basename(r.cwd) : r.room_id),
+        device: hostName,
+        remoteEpk: keyInfo.publicKey,
+        relayUrl,
+        roomId: r.room_id,
+        cwd: r.cwd,
+        model: r.model || "Gemini 3.7 Flash",
+        status,
+        isLive: true,
+        pairedAt: r.started_at ? new Date(r.started_at).toISOString() : new Date().toISOString(),
+        lastConnectedAt: new Date().toISOString(),
+      };
+    });
 
     return NextResponse.json({
       localPiDetected: true,
-      deviceName,
+      relayConnected: isRelayConnected,
+      device: hostName,
+      remoteEpk: keyInfo.publicKey,
       relayUrl,
-      remoteEpk,
-      token,
-      liveRoomsCount: liveRooms.length,
-      peersCount,
       sessions,
     });
   } catch (err: any) {
     return NextResponse.json({
       localPiDetected: false,
+      relayConnected: false,
       error: err?.message || "Failed to inspect local environment",
+      sessions: [],
     });
   }
 }
