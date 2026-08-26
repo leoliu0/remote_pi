@@ -178,15 +178,30 @@ Future<void> handleRemoteWorkspaceAction(
   }
   final label = _labelOf(vm, wsId);
   final page = context.t.cockpit.cockpitPage;
-  switch (action) {
+  // Ações git chegam como `<ação>|<root>` (o kebab direciona a UMA root, e em
+  // multirepo remoto a pasta-mãe não é repo nenhum). Root vazia = o menu não
+  // resolveu nada; cai na pasta do pin, que é o caso single-root.
+  final sep = action.indexOf('|');
+  final verb = sep < 0 ? action : action.substring(0, sep);
+  final picked = sep < 0 ? '' : action.substring(sep + 1);
+  final root = picked.isNotEmpty ? picked : vm.remoteRootOf(wsId);
+  switch (verb) {
     case 'pull':
-      await _runRemoteGitDialog(context, wsId, const [
-        'pull',
-      ], title: page.pullTitle(label: label));
+      await _runRemoteGitDialog(
+        context,
+        wsId,
+        const ['pull'],
+        title: page.pullTitle(label: label),
+        root: root,
+      );
     case 'push':
-      await _runRemoteGitDialog(context, wsId, const [
-        'push',
-      ], title: page.pushTitle(label: label));
+      await _runRemoteGitDialog(
+        context,
+        wsId,
+        const ['push'],
+        title: page.pushTitle(label: label),
+        root: root,
+      );
     case 'sync':
       // pull e, se OK, push — mesma semântica do sync local, num só dialog.
       await _runRemoteGitDialog(
@@ -195,9 +210,10 @@ Future<void> handleRemoteWorkspaceAction(
         const ['pull'],
         then: const ['push'],
         title: page.syncTitle(label: label),
+        root: root,
       );
     case 'worktree':
-      await _createRemoteWorktreeFlow(context, wsId);
+      await _createRemoteWorktreeFlow(context, wsId, root);
     case 'config':
       await _configureRemoteWorkspace(context, wsId);
     case 'close':
@@ -210,9 +226,10 @@ Future<void> handleRemoteWorkspaceAction(
 Future<void> _createRemoteWorktreeFlow(
   BuildContext context,
   String wsId,
+  String root,
 ) async {
   final vm = _vm(context);
-  final namespace = await vm.remoteWorktreeNamespace(wsId);
+  final namespace = await vm.remoteWorktreeNamespace(wsId, root: root);
   final label = _labelOf(vm, wsId);
   if (!context.mounted) return;
   await showWorktreeCreateDialog(
@@ -227,7 +244,7 @@ Future<void> _createRemoteWorktreeFlow(
           copyIgnored = false,
           copyUntracked = false,
           fetchRemote = true,
-        }) => vm.createRemoteWorktree(wsId, name),
+        }) => vm.createRemoteWorktree(wsId, name, root: root),
   );
 }
 
@@ -277,16 +294,17 @@ Future<void> _runRemoteGitDialog(
   List<String> args, {
   List<String>? then,
   required String title,
+  String? root,
 }) async {
   final vm = _vm(context);
   final controller = StreamController<String>();
   final success = () async {
     try {
-      final first = await vm.remoteGitRun(wsId, args);
+      final first = await vm.remoteGitRun(wsId, args, root: root);
       if (first.stdout.isNotEmpty) controller.add(first.stdout);
       if (first.stderr.isNotEmpty) controller.add(first.stderr);
       if (first.code != 0 || then == null) return first.code == 0;
-      final second = await vm.remoteGitRun(wsId, then);
+      final second = await vm.remoteGitRun(wsId, then, root: root);
       if (second.stdout.isNotEmpty) controller.add(second.stdout);
       if (second.stderr.isNotEmpty) controller.add(second.stderr);
       return second.code == 0;

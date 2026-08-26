@@ -85,6 +85,7 @@ import 'package:cockpit/app/cockpit/domain/services/terminal_harness_monitor.dar
 import 'package:cockpit/app/cockpit/ui/session/terminal_session.dart';
 import 'package:cockpit/app/cockpit/ui/states/pane_node.dart';
 import 'package:cockpit/app/cockpit/ui/viewmodels/cockpit_cli_handler.dart';
+import 'package:cockpit_remote/cockpit_remote.dart' show RemoteCliCommand;
 import 'package:cockpit/app/cockpit/data/filesystem/unified_diff_parser.dart';
 import 'package:cockpit/app/cockpit/domain/entities/remote_host.dart';
 import 'package:cockpit/app/cockpit/domain/entities/remote_workspace_pin.dart';
@@ -191,6 +192,9 @@ class CockpitViewModel extends ChangeNotifier {
 
   /// Assinatura do turn-status remoto (Wave G); cancelada no dispose.
   StreamSubscription<RemoteTurnStatus>? _remoteTurnSub;
+
+  /// Assinatura dos comandos da CLI vindos dos hosts; cancelada no dispose.
+  StreamSubscription<RemoteCliCommand>? _remoteCliSub;
 
   /// Idem para o sidecar LOCAL — desde que o PTY nasce nele, é por aqui que o
   /// turn-status do agente local chega (ver [init]).
@@ -676,28 +680,48 @@ class CockpitViewModel extends ChangeNotifier {
 
   /// Roots git do projeto. Sempre não-vazio: single-root = `[path]`
   /// (comportamento histórico, N=1); multi-root = as filhas-repo derivadas.
-  List<String> rootsOf(String projectId) => git.rootsOf(projectId);
+  /// Vale igual para workspace **local e remoto** — no remoto as roots são
+  /// descobertas por `fs.list` no host (ver `RemoteRootFinder`).
+  List<String> rootsOf(String projectId) =>
+      _isRemote(projectId) ? remote.rootsOf(projectId) : git.rootsOf(projectId);
 
   /// `true` quando o workspace é multi-root (pasta-mãe sem `.git` com 2+
   /// repos filhos). Toda a UI multi-root é gateada por isto — N=1 nunca muda.
   bool isMultiRoot(String projectId) => rootsOf(projectId).length > 1;
 
-  /// Estado git de uma **root** específica ([rootPath] absoluto).
+  /// `true` se [projectId] é um workspace de host remoto.
+  bool _isRemote(String projectId) =>
+      projectById(projectId)?.isRemoteTerminal ?? false;
+
+  /// Estado git de uma **root** específica ([rootPath] absoluto) do workspace
+  /// ativo. Para perguntar por outro workspace (badge do rail), use
+  /// [gitInfoForRootIn] — no remoto a mesma root só faz sentido dentro do seu
+  /// workspace, já que dois hosts têm caminhos iguais.
   GitInfo? gitInfoForRoot(String rootPath) {
-    final remote = _activeRemoteGitInfo;
-    if (remote != null && _activeRemoteHost() != null) return remote;
-    return git.infoForRoot(rootPath);
+    final pid = _selectedProjectId;
+    if (pid == null) return git.infoForRoot(rootPath);
+    return gitInfoForRootIn(pid, rootPath);
   }
+
+  /// Estado git da root [rootPath] **no workspace [projectId]**.
+  GitInfo? gitInfoForRootIn(String projectId, String rootPath) =>
+      _isRemote(projectId)
+      ? remote.infoForRoot(projectId, rootPath)
+      : git.infoForRoot(rootPath);
 
   /// Estado git do projeto (branch + sujos), ou `null` se não for repo git.
   /// Em multi-root não existe "o" GitInfo do workspace — devolve `null` (a
   /// rail usa [rootsGitSummary] pro chip agregado).
-  GitInfo? gitInfo(String projectId) => git.infoOf(projectId);
+  GitInfo? gitInfo(String projectId) => _isRemote(projectId)
+      ? remote.gitInfoOf(projectId)
+      : git.infoOf(projectId);
 
   /// Agregado pro chip da rail em multi-root: (nº de roots, roots com
   /// **alteração de arquivo**). Ver [GitController.rootsSummary].
   (int roots, int dirtyRoots) rootsGitSummary(String projectId) =>
-      git.rootsSummary(projectId);
+      _isRemote(projectId)
+      ? remote.rootsSummary(projectId)
+      : git.rootsSummary(projectId);
 
   /// Root (path absoluto) que contém [absolutePath] no projeto [projectId],
   /// ou `null` se o caminho está fora de todas (ex.: solto na pasta-mãe).
@@ -715,28 +739,13 @@ class CockpitViewModel extends ChangeNotifier {
   GitFileStatus? gitStatusForPath(String absolutePath) {
     final pid = _selectedProjectId;
     if (pid == null) return null;
-    // Workspace remoto: status vem do cache remoto, por caminho relativo à
-    // pasta do pin.
-    final remote = _activeRemoteGitInfo;
-    if (remote != null && _activeRemoteHost() != null) {
-      final rootPath = selectedProject?.remotePath ?? '';
-      if (absolutePath == rootPath) {
-        return remote.files.isEmpty ? null : GitFileStatus.modified;
-      }
-      final rel = relativeUnder(absolutePath, rootPath);
-      // Match exato (arquivo).
-      final exact = remote.files[rel];
-      if (exact != null) return exact;
-      // Pasta: agrega o status mais severo dos descendentes (acende a pasta).
-      GitFileStatus? agg;
-      final prefix = '$rel/';
-      for (final e in remote.files.entries) {
-        if (e.key.startsWith(prefix)) {
-          agg = GitFileStatus.strongest(agg, e.value);
-        }
-      }
-      if (agg != null) return agg;
-      return remote.isUntracked(rel) ? GitFileStatus.untracked : null;
+    // Workspace remoto: o controller resolve a root dona do caminho (multirepo)
+    // e calcula o relativo contra ela.
+    if (_activeRemoteHost() != null) {
+      return remote.statusForPath(
+        selectedProject?.remotePath ?? '',
+        absolutePath,
+      );
     }
     final root = rootContaining(pid, absolutePath);
     if (root == null) return null;
@@ -792,14 +801,11 @@ class CockpitViewModel extends ChangeNotifier {
     return p.path;
   }
 
-  /// Roots da árvore (multi-root local; único remoto por enquanto).
+  /// Roots da árvore — multirepo vale igual no local e no remoto: a árvore
+  /// aparece seccionada por repo em vez de uma raiz só.
   List<String> get treeRoots {
     final p = selectedProject;
     if (p == null) return const [];
-    if (p.isRemoteTerminal) {
-      final path = p.remotePath ?? '';
-      return path.isEmpty ? const [] : [path];
-    }
     return rootsOf(p.id);
   }
 
@@ -876,24 +882,29 @@ class CockpitViewModel extends ChangeNotifier {
   /// GitInfo remoto de um workspace [wsId] (pro badge do rail).
   GitInfo? remoteGitInfoOf(String wsId) => remote.gitInfoOf(wsId);
 
-  /// GitInfo remoto da pasta do workspace ativo (ou null).
-  GitInfo? get _activeRemoteGitInfo => remote.activeGitInfo;
-
   Future<void> _refreshRemoteGit() => remote.refreshActive();
 
   Future<RemoteGitService> _activeRemoteGit() => remote.activeGitService();
 
   void _ensureRemoteGitLoaded() => remote.ensureLoaded();
 
+  /// Pasta do workspace remoto [wsId] no host (a raiz do pin). É o fallback
+  /// das ações git quando o menu não direciona uma root (single-root).
+  String remoteRootOf(String wsId) => _projectById(wsId)?.remotePath ?? '';
+
   /// Namespace (branches/worktrees/base) do host — valida o dialog de criar.
-  Future<WorktreeNamespace> remoteWorktreeNamespace(String wsId) =>
-      remote.worktreeNamespace(wsId);
+  /// [root] escolhe o repo em multirepo; omitido = a pasta do pin.
+  Future<WorktreeNamespace> remoteWorktreeNamespace(
+    String wsId, {
+    String? root,
+  }) => remote.worktreeNamespace(wsId, root: root);
 
   WorktreeAddRun<Project> createRemoteWorktree(
     String wsId,
     String name, {
     String? baseRef,
-  }) => remote.createWorktree(wsId, name, baseRef: baseRef);
+    String? root,
+  }) => remote.createWorktree(wsId, name, baseRef: baseRef, root: root);
 
   Future<Result<void, WorktreeOpError>> removeRemoteWorktree(String forkId) =>
       remote.removeWorktree(forkId);
@@ -911,9 +922,15 @@ class CockpitViewModel extends ChangeNotifier {
   /// Aplica a lista de forks remotos reconciliada pelo [RemoteWorkspaceController]:
   /// tira da UI os que sumiram (encerrando o runtime no fim do frame), insere ou
   /// atualiza os que ficaram e registra a origem de cada um.
-  void _applyRemoteForks(String wsId, List<Project> forks, String origin) {
+  void _applyRemoteForks(
+    String wsId,
+    List<Project> forks,
+    Map<String, String> originOf,
+  ) {
     for (final f in forks) {
-      _forkOrigin[f.id] = origin; // origem = repo do pai no host
+      // Origem = a root do host de onde ESTE fork saiu (multirepo tem várias).
+      final origin = originOf[f.id];
+      if (origin != null) _forkOrigin[f.id] = origin;
     }
     final newIds = forks.map((f) => f.id).toSet();
     for (final f in _worktrees[wsId] ?? const <Project>[]) {
@@ -1231,6 +1248,52 @@ class CockpitViewModel extends ChangeNotifier {
       target.reveal(revealLine, select: false);
     } else {
       target.notifyListeners();
+    }
+  }
+
+  /// Comandos da CLI que **não** viajam de um host para cá, e por quê. A
+  /// recusa é explícita (e não um erro obscuro) porque um agente que entende o
+  /// motivo escolhe outro caminho, enquanto um erro genérico o faz insistir.
+  static const Map<String, String> _remoteCliRefusals = <String, String>{
+    'browse':
+        'browse runs on the Cockpit machine, so a URL from this host '
+        '(localhost included) would not resolve there',
+    'redis-browse':
+        'browse runs on the Cockpit machine, so a URL from this host '
+        '(localhost included) would not resolve there',
+    'mongo-browse':
+        'browse runs on the Cockpit machine, so a URL from this host '
+        '(localhost included) would not resolve there',
+    'http-run':
+        'the request would leave from the Cockpit machine, not from this '
+        'host — run it here with curl instead',
+    'http-list':
+        'the request would leave from the Cockpit machine, not from this '
+        'host — run it here with curl instead',
+    'orchestrate':
+        'layout files describe panes on the Cockpit machine; run it there',
+  };
+
+  /// Atende um comando da CLI vindo de um host remoto. Roteia para o mesmo
+  /// [CockpitCliHandler] da CLI local depois de aplicar a política do que pode
+  /// atravessar (ver [_remoteCliRefusals]).
+  Future<void> _onRemoteCliCommand(RemoteCliCommand command) async {
+    final request = command.request;
+    final cmd = (request['cmd'] ?? '').toString();
+    final refusal = _remoteCliRefusals[cmd];
+    if (refusal != null) {
+      command.fail('$cmd is not available from a remote terminal: $refusal');
+      return;
+    }
+    final tabId = request['tabId']?.toString();
+    final args = (request['args'] as Map?)?.cast<String, dynamic>() ?? const {};
+    final result = await _cli.handle(
+      CockpitCommand(cmd: cmd, tabId: tabId, args: args),
+    );
+    if (result.ok) {
+      command.respond(result.data);
+    } else {
+      command.fail(result.error ?? 'command failed');
     }
   }
 
@@ -1567,19 +1630,31 @@ class CockpitViewModel extends ChangeNotifier {
   /// multi-root: qualquer root (habilita a aba Source Control).
   bool isGitRepo(String projectId) {
     final p = _projectById(projectId);
-    if (p != null && p.isRemoteTerminal) return remote.gitInfoOf(p.id) != null;
+    if (p != null && p.isRemoteTerminal) return remote.hasGit(p.id);
     return git.isGitRepo(projectId);
   }
 
   /// Status git (relativo à **root**) dos arquivos com mudança de uma root.
+  /// No remoto multirepo cada root tem o seu — não existe mais "o" status do
+  /// workspace.
   Map<String, GitFileStatus> changedFilesOfRoot(String rootPath) =>
-      _activeRemoteGitInfo?.files ?? git.changedFilesOfRoot(rootPath);
+      _remoteInfoForRoot(rootPath)?.files ?? git.changedFilesOfRoot(rootPath);
 
   Map<String, GitFileStatus> stagedFilesOfRoot(String rootPath) =>
-      _activeRemoteGitInfo?.stagedFiles ?? git.stagedFilesOfRoot(rootPath);
+      _remoteInfoForRoot(rootPath)?.stagedFiles ??
+      git.stagedFilesOfRoot(rootPath);
 
   Map<String, GitFileStatus> unstagedFilesOfRoot(String rootPath) =>
-      _activeRemoteGitInfo?.changedFiles ?? git.unstagedFilesOfRoot(rootPath);
+      _remoteInfoForRoot(rootPath)?.changedFiles ??
+      git.unstagedFilesOfRoot(rootPath);
+
+  /// GitInfo remoto de [rootPath] no workspace ativo, ou `null` se o ativo é
+  /// local (aí quem responde é o [GitController]).
+  GitInfo? _remoteInfoForRoot(String rootPath) {
+    final pid = _selectedProjectId;
+    if (pid == null || _activeRemoteHost() == null) return null;
+    return remote.infoForRoot(pid, rootPath);
+  }
 
   /// Caminhos **absolutos** com mudança git do projeto selecionado (exclui
   /// ignorados), varrendo **todas as roots** — alimenta a árvore podada do
@@ -1601,8 +1676,7 @@ class CockpitViewModel extends ChangeNotifier {
     final project = selectedProject;
     if (project == null) return const [];
     final out = <String>[];
-    // Remoto: a única root é a pasta do pin (rootsOf é do git local, vazio).
-    final roots = project.isRemoteTerminal ? treeRoots : rootsOf(project.id);
+    final roots = rootsOf(project.id);
     for (var root in roots) {
       if (root.endsWith('/')) root = root.substring(0, root.length - 1);
       for (final rel in filesForRoot(root).keys) {
@@ -1637,11 +1711,12 @@ class CockpitViewModel extends ChangeNotifier {
     final leaf = findLeaf(tree, paneId);
     if (leaf == null) return;
     final remoteDiff = _activeRemoteHost() != null && commitHash == null;
-    // Diff roda contra a root que contém o arquivo (multi-root: o repo filho).
-    // Remoto: a root é a pasta do pin.
-    final root = remoteDiff
-        ? (selectedProject?.remotePath ?? '')
-        : (repoRoot ?? rootContaining(projectId, path));
+    // Diff roda contra a root que contém o arquivo (multirepo: o repo filho) —
+    // local e remoto usam a mesma resolução; o fallback é a pasta do pin.
+    final root =
+        repoRoot ??
+        rootContaining(projectId, path) ??
+        (remoteDiff ? selectedProject?.remotePath : null);
     if (root == null || root.isEmpty) return;
 
     // Já aberto? Seleciona (e fixa se não é preview).
@@ -2194,6 +2269,10 @@ class CockpitViewModel extends ChangeNotifier {
     );
 
     _remoteTurnSub = _remoteHosts.turnStatus.listen(onRemoteTurn);
+    // CLI `cockpit` rodando NUM HOST remoto: o comando viaja pelo protocolo e
+    // é atendido aqui, pelo MESMO handler da CLI local — quem tem abas,
+    // workspaces e conexões de banco é este cliente, não o host.
+    _remoteCliSub = _remoteHosts.cliCommands.listen(_onRemoteCliCommand);
     // Turn-status LOCAL pelo mesmo caminho: desde que o PTY passou a nascer no
     // sidecar, o servidor injeta o socket de status DELE no env do shell
     // (sobrescrevendo o `hookEnv` do cliente), então o hook do agente reporta
@@ -2442,16 +2521,20 @@ class CockpitViewModel extends ChangeNotifier {
   }
 
   /// Roda um git cru no host do workspace remoto [wsId] (Camada A do menu do
-  /// rail: pull/push/sync). Resolve host + pasta do pin e usa o `git.run`.
-  /// Lança se [wsId] não for remoto.
-  Future<GitRunResult> remoteGitRun(String wsId, List<String> args) async {
+  /// rail: pull/push/sync). [root] escolhe o repo em multirepo; omitido, roda
+  /// na pasta do pin (single-root). Lança se [wsId] não for remoto.
+  Future<GitRunResult> remoteGitRun(
+    String wsId,
+    List<String> args, {
+    String? root,
+  }) async {
     final host = remoteHostForWorkspace(wsId);
     if (host == null) {
       throw StateError('remoteGitRun em workspace não-remoto: $wsId');
     }
-    final root = _projectById(wsId)?.remotePath ?? '';
+    final target = (root == null || root.isEmpty) ? remoteRootOf(wsId) : root;
     final service = await _remoteHosts.gitServiceFor(host);
-    return service.run(root, args);
+    return service.run(target, args);
   }
 
   /// Atualiza as Configurações de um workspace remoto (nome/cor/imagem de
@@ -3224,8 +3307,10 @@ class CockpitViewModel extends ChangeNotifier {
     if (pid == null) return const [];
     final String logOut;
     if (_activeRemoteHost() != null) {
-      final root = selectedProject?.remotePath ?? '';
-      if (root.isEmpty) return const [];
+      // Multirepo não tem "o" histórico do workspace (idem local, abaixo).
+      final roots = rootsOf(pid);
+      if (roots.length != 1 || roots.single.isEmpty) return const [];
+      final root = roots.single;
       try {
         final r = await (await _activeRemoteGit()).run(root, [
           'log',
@@ -3267,10 +3352,10 @@ class CockpitViewModel extends ChangeNotifier {
     final pid = _selectedProjectId;
     if (pid == null) return null;
     if (_activeRemoteHost() != null) {
-      final root = selectedProject?.remotePath ?? '';
-      if (root.isEmpty) return null;
+      final roots = rootsOf(pid);
+      if (roots.length != 1 || roots.single.isEmpty) return null;
       try {
-        final r = await (await _activeRemoteGit()).run(root, [
+        final r = await (await _activeRemoteGit()).run(roots.single, [
           'log',
           '-1',
           '--format=%B',
@@ -3296,10 +3381,18 @@ class CockpitViewModel extends ChangeNotifier {
     final pid = _selectedProjectId;
     if (pid == null) return 'No workspace selected.';
     if (_activeRemoteHost() != null) {
-      final root = selectedProject?.remotePath ?? '';
-      if (_activeRemoteGitInfo?.stagedFiles.isEmpty ?? true) {
+      // Mesma regra do local: commit implícito em dois repositórios diferentes
+      // não acontece — o usuário comita cada um por vez.
+      final staged = rootsOf(
+        pid,
+      ).where((root) => stagedFilesOfRoot(root).isNotEmpty).toList();
+      if (staged.isEmpty) {
         return 'There are no staged changes to commit.';
       }
+      if (staged.length > 1) {
+        return 'Stage changes belong to multiple repositories. Commit them separately.';
+      }
+      final root = staged.single;
       try {
         final git = await _activeRemoteGit();
         if (amendHash != null) {
@@ -3399,26 +3492,43 @@ class CockpitViewModel extends ChangeNotifier {
     return err;
   }
 
-  /// Stage/unstage remoto: converte paths absolutos → relativos à pasta do
-  /// pin e chama o RemoteGitService; refresca o cache no fim.
+  /// Stage/unstage remoto: agrupa os paths **por root** (multirepo), converte
+  /// para relativos à root dona e chama o RemoteGitService uma vez por repo.
+  /// Refresca o cache no fim.
   Future<String?> _remoteStage(
     List<String> absPaths, {
     required bool staged,
   }) async {
-    final root = selectedProject?.remotePath ?? '';
-    final rels = [for (final p in absPaths) relativeUnder(p, root)];
+    final byRoot = <String, List<String>>{};
+    for (final path in absPaths) {
+      final root = _remoteRootFor(path);
+      if (root == null || root.isEmpty) {
+        return 'File is outside the workspace roots: $path';
+      }
+      byRoot.putIfAbsent(root, () => []).add(relativeUnder(path, root));
+    }
     try {
       final service = await _activeRemoteGit();
-      if (staged) {
-        await service.stage(root, rels);
-      } else {
-        await service.unstage(root, rels);
+      for (final entry in byRoot.entries) {
+        if (staged) {
+          await service.stage(entry.key, entry.value);
+        } else {
+          await service.unstage(entry.key, entry.value);
+        }
       }
       await _refreshRemoteGit();
       return null;
     } catch (e) {
       return '$e';
     }
+  }
+
+  /// Root remota dona de [absPath] no workspace ativo. Fallback para a pasta
+  /// do pin (single-root, e caminho solto na pasta-mãe de um multirepo).
+  String? _remoteRootFor(String absPath) {
+    final pid = _selectedProjectId;
+    if (pid == null) return null;
+    return remote.rootContaining(pid, absPath) ?? selectedProject?.remotePath;
   }
 
   /// Unstage (Source Control): `git restore --staged -- <arquivo>` na root
@@ -3492,7 +3602,7 @@ class CockpitViewModel extends ChangeNotifier {
     String pid,
     String absPath,
   ) async {
-    final root = selectedProject?.remotePath ?? '';
+    final root = _remoteRootFor(absPath) ?? '';
     if (root.isEmpty) {
       return const FileOperationError(FileOperationErrorKind.invalidPath);
     }
@@ -3504,8 +3614,7 @@ class CockpitViewModel extends ChangeNotifier {
       final isNew = inHead.code != 0;
       final GitRunResult r;
       if (isNew) {
-        final staged =
-            _activeRemoteGitInfo?.stagedFiles.containsKey(rel) ?? false;
+        final staged = stagedFilesOfRoot(root).containsKey(rel);
         r = staged
             ? await git.run(root, ['rm', '-f', '--', rel])
             : await git.run(root, ['clean', '-f', '--', rel]);
@@ -5660,6 +5769,7 @@ class CockpitViewModel extends ChangeNotifier {
     unawaited(_statusServer.stop());
     unawaited(_previewSub?.cancel());
     unawaited(_remoteTurnSub?.cancel());
+    unawaited(_remoteCliSub?.cancel());
     unawaited(_sidecarTurnSub?.cancel());
     // O GitController é dono dos próprios timers/watchers; o módulo o
     // descarta junto com a rota. Aqui só desligamos o repasse de notify.

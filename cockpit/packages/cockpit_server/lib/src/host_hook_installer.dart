@@ -34,15 +34,17 @@ class HostHookInstaller {
   Future<void> ensureInstalled() async {
     final home = Platform.environment['HOME'];
     if (home == null || home.isEmpty) return;
-    final cli = await _resolveCli();
+    final cli = await resolveCli();
     if (cli == null) return;
     await _writeClaudeConfig(home, '${_quote(cli)} hook');
   }
 
-  /// Resolve a CLI `cockpit` que sabe o subcomando `hook`. Ordem: override →
+  /// Resolve a CLI `cockpit` que sabe o subcomando `hook`. Público porque o
+  /// servidor também precisa do caminho: é a pasta dela que entra no PATH das
+  /// PTYs, para `cockpit …` resolver num terminal remoto. Ordem: override →
   /// ao lado do executável do server → PATH (`which`). Confirma pelo sufixo `r`
   /// da versão (só a CLI Rust o emite).
-  Future<String?> _resolveCli() async {
+  Future<String?> resolveCli() async {
     final candidates = <String?>[
       if (cliPathOverride != null && cliPathOverride!.isNotEmpty)
         cliPathOverride!,

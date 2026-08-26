@@ -701,8 +701,15 @@ class _RailPanel extends StatelessWidget {
           rootsSummary: vm.rootsGitSummary,
           forkOriginName: vm.forkOriginName,
           rootsOf: (id) => [
+            // O git é perguntado **por workspace**: no remoto a mesma root
+            // existe em hosts diferentes, então resolver pelo selecionado
+            // pintaria o badge do vizinho.
             for (final r in vm.rootsOf(id))
-              (path: r, name: r.split('/').last, git: vm.gitInfoForRoot(r)),
+              (
+                path: r,
+                name: r.split('/').last,
+                git: vm.gitInfoForRootIn(id, r),
+              ),
           ],
           onSelect: (id) {
             vm.selectProject(id);

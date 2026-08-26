@@ -53,6 +53,11 @@ class RemoteHostsController extends ChangeNotifier {
   final _turnStatus = StreamController<RemoteTurnStatus>.broadcast();
   Stream<RemoteTurnStatus> get turnStatus => _turnStatus.stream;
 
+  /// Comandos da CLI `cockpit` de TODOS os hosts, mesclados — a VM assina e
+  /// devolve ao `CockpitCliHandler`, o mesmo que atende a CLI local.
+  final _cliCommands = StreamController<RemoteCliCommand>.broadcast();
+  Stream<RemoteCliCommand> get cliCommands => _cliCommands.stream;
+
   RemoteHostConnector _connectorFor(
     RemoteHost host,
   ) => _connectors.putIfAbsent(host.id, () {
@@ -72,6 +77,7 @@ class RemoteHostsController extends ChangeNotifier {
           HostKeyVerdict.reject,
     );
     connector.turnStatus.listen(_turnStatus.add);
+    connector.cliCommands.listen(_cliCommands.add);
     // Fases notificam AQUI (e não só em terminalGateway): o badge e o botão
     // de reconectar precisam repintar mesmo em host sem aba de terminal
     // aberta — por exemplo enquanto o retry automático roda em segundo plano.
@@ -334,6 +340,7 @@ class RemoteHostsController extends ChangeNotifier {
     }
     _connectors.clear();
     unawaited(_turnStatus.close());
+    unawaited(_cliCommands.close());
     super.dispose();
   }
 }

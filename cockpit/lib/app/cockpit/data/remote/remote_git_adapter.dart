@@ -11,11 +11,25 @@ GitInfo remoteGitInfo(core.GitStatus status) {
   final stagedFiles = <String, app.GitFileStatus>{};
   final changedFiles = <String, app.GitFileStatus>{};
   final untrackedDirs = <String>{};
+  final ignored = <String>{};
 
   for (final f in status.files) {
     final x = f.staged; // index
     final y = f.worktree; // working tree
-    final path = f.path;
+    // O porcelain marca PASTA colapsada com barra final (`?? .cockpit/`).
+    // Servidor atualizado manda `-uall` e não colapsa mais, mas host com
+    // servidor antigo continua mandando — e guardar a chave COM a barra fazia
+    // a árvore do Source Control desenhar a pasta como se fosse um arquivo.
+    final isDir = f.path.endsWith('/');
+    final path = isDir ? f.path.substring(0, f.path.length - 1) : f.path;
+    if (path.isEmpty) continue;
+
+    // Raiz ignorada (`!!`, com `--ignored=matching`): cobre os descendentes e
+    // NÃO é mudança — sem este ramo ela cairia como "staged" logo abaixo.
+    if (x == '!' && y == '!') {
+      ignored.add(path);
+      continue;
+    }
 
     if (_isConflict(x, y)) {
       files[path] = app.GitFileStatus.conflict;
@@ -28,8 +42,9 @@ GitInfo remoteGitInfo(core.GitStatus status) {
       final u = app.GitFileStatus.untracked;
       files[path] = u;
       changedFiles[path] = u;
-      if (path.endsWith('/'))
-        untrackedDirs.add(path.substring(0, path.length - 1));
+      // Pasta colapsada: guarda a raiz pra tingir os descendentes, que o git
+      // não enumerou (só acontece com servidor antigo, sem `-uall`).
+      if (isDir) untrackedDirs.add(path);
       continue;
     }
 
@@ -55,6 +70,7 @@ GitInfo remoteGitInfo(core.GitStatus status) {
     stagedFiles: stagedFiles,
     changedFiles: changedFiles,
     untrackedDirs: untrackedDirs,
+    ignored: ignored,
   );
 }
 

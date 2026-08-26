@@ -21,6 +21,7 @@ import 'package:cockpit/app/core/domain/result.dart';
 import 'package:cockpit/app/core/ui/file_icons/file_icons.dart';
 import 'package:cockpit/app/core/ui/settings_controller.dart';
 import 'package:cockpit/app/core/ui/themes/themes.dart';
+import 'package:cockpit/app/core/ui/widgets/context_menu_gesture.dart';
 import 'package:cockpit/app/core/ui/widgets/app_menu.dart';
 import 'package:cockpit/app/core/ui/widgets/app_tooltip.dart';
 import 'package:cockpit/app/core/ui/widgets/hover_tap.dart';
@@ -2170,9 +2171,12 @@ class _RowState extends State<_Row> {
     );
 
     // Em rename o gesto secundário/seleção fica desligado (o campo manda).
-    if (widget.renaming) return row;
-    return GestureDetector(
-      onSecondaryTapUp: (d) => _showMenu(context, d.globalPosition),
+    return ContextMenuGesture(
+      enabled: !widget.renaming,
+      // A linha usa LongPressDraggable no mobile (arrastar arquivo pra outro
+      // painel): o toque longo já está ocupado ali.
+      longPressOnMobile: false,
+      onMenu: (pos) => _showMenu(context, pos),
       child: row,
     );
   }
@@ -3008,10 +3012,10 @@ class _ChangedRowState extends State<_ChangedRow> {
     return MouseRegion(
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
-      child: GestureDetector(
-        onSecondaryTapDown: widget.onSecondaryTap == null
-            ? null
-            : (d) => widget.onSecondaryTap!(d.globalPosition),
+      child: ContextMenuGesture(
+        enabled: widget.onSecondaryTap != null,
+        longPressOnMobile: false, // idem: o long-press é o drag do arquivo
+        onMenu: (pos) => widget.onSecondaryTap?.call(pos),
         child: HoverTap(
           color: widget.selected ? colors.panel2 : Colors.transparent,
           hoverColor: colors.panel,

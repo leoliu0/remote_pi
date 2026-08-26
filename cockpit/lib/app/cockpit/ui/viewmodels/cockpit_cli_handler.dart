@@ -135,7 +135,10 @@ class CockpitCliHandler {
         if (path.isEmpty) {
           return const CockpitCommandResult.fail('missing path');
         }
-        if (!await File(path).exists()) {
+        // Aba remota: o path é do HOST. Checar no disco do cliente daria
+        // "file not found" (ou, pior, abriria um homônimo local) — quem valida
+        // é o `fs.read` do outro lado, dentro de `openFile`.
+        if (!_isRemoteTab(c.tabId) && !await File(path).exists()) {
           return CockpitCommandResult.fail('file not found: "$path"');
         }
         final from = c.tabId;
@@ -168,7 +171,8 @@ class CockpitCliHandler {
         if (cwd.isEmpty) {
           return const CockpitCommandResult.fail('missing cwd');
         }
-        if (!await Directory(cwd).exists()) {
+        // Idem `open`: num terminal remoto o cwd é uma pasta do host.
+        if (!_isRemoteTab(c.tabId) && !await Directory(cwd).exists()) {
           return CockpitCommandResult.fail('directory not found: "$cwd"');
         }
         final split = (c.args['split'] ?? '').toString();
@@ -762,6 +766,15 @@ class CockpitCliHandler {
   /// Molde dos comandos `db-*`: resolve o workspace (decisão K do plano 51 —
   /// `--workspace <id|path>` > pane emissor > erro, **nunca** cwd nem chute) e
   /// converte [DbQueryException] em `fail("<kind>: <mensagem>")`.
+  /// `true` se a aba emissora pertence a um workspace de host remoto — aí os
+  /// caminhos que chegam pela CLI são do host, não deste computador.
+  bool _isRemoteTab(String? tabId) {
+    if (tabId == null || tabId.isEmpty) return false;
+    final session = _vm.session(tabId);
+    if (session == null) return false;
+    return _vm.projectById(session.projectId)?.isRemoteTerminal ?? false;
+  }
+
   /// Lê e parseia o `.http` de `args['path']` (absoluto — a CLI resolve
   /// contra o cwd). Devolve `(doc, null)` ou `(null, erro em inglês)`.
   Future<(HttpDocument?, String?)> _httpDoc(CockpitCommand c) async {

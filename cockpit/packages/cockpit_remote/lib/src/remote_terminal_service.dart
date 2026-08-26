@@ -27,6 +27,22 @@ class RemoteTurnStatus {
   final String? harness;
 }
 
+/// Um comando da CLI do host à espera de resposta deste cliente.
+class RemoteCliCommand {
+  const RemoteCliCommand({
+    required this.request,
+    required this.respond,
+    required this.fail,
+  });
+
+  /// Envelope cru da CLI (`{cmd, args, tabId}`) — o mesmo que o socket local
+  /// entrega, para que o handler não precise saber de onde veio.
+  final Map<String, Object?> request;
+
+  final void Function(Object? data) respond;
+  final void Function(String message) fail;
+}
+
 /// Proxy do [TerminalService] falando o protocolo com um cockpit-server.
 ///
 /// A UI consome este e o nativo pelo MESMO contrato; a diferença é só a
@@ -35,6 +51,26 @@ class RemoteTerminalService implements TerminalService {
   RemoteTerminalService(this._connection);
 
   final RemoteConnection _connection;
+
+  /// Comandos da CLI `cockpit` rodando **no host**, encaminhados pelo servidor
+  /// (direção inversa do RPC). O host não executa nada: quem tem abas,
+  /// workspaces e conexões de banco é este cliente.
+  ///
+  /// Cada item traz o pedido e o `respond` que devolve a resposta pela mesma
+  /// `rid`. Fora do contrato [TerminalService], como o [turnStatus].
+  Stream<RemoteCliCommand> get cliCommands => _connection.messages
+      .where((m) => m is RpcRequest && m.method == 'cli.cmd')
+      .cast<RpcRequest>()
+      .map(
+        (m) => RemoteCliCommand(
+          request: m.params,
+          respond: (data) =>
+              _connection.send(RpcResponse(rid: m.rid, ok: true, data: data)),
+          fail: (message) => _connection.send(
+            RpcResponse(rid: m.rid, ok: false, code: 'cli', detail: message),
+          ),
+        ),
+      );
 
   /// Eventos de status de turno vindos do host (broadcast do protocolo). Fora
   /// do contrato [TerminalService]; consumido pelo connector/gateway remoto.

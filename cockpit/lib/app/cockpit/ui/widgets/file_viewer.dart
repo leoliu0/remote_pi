@@ -80,6 +80,10 @@ class _FileViewerState extends State<FileViewer> {
   /// "revelar linha" (resultado de busca) vindos da VM.
   int _lastRevealTick = 0;
 
+  /// Último `session.loading` visto — a transição true → false é o gatilho de
+  /// [_adoptLoadedContent] (workspace remoto, plano 60).
+  bool _lastLoading = false;
+
   /// Últimas decorações SCM publicadas — força rebuild do gutter.
   ScmLineDecorations _lastScmDecorations = ScmLineDecorations.empty;
 
@@ -169,21 +173,44 @@ class _FileViewerState extends State<FileViewer> {
     _lastObservedPath = widget.session.path;
     _lastRevealTick = widget.session.revealTick;
     _lastScmDecorations = widget.session.scmDecorations;
+    _lastLoading = widget.session.loading;
     widget.session.addListener(_onSession);
     // Reveal pendente num arquivo markdown/svg → abre direto na fonte (o editor
     // é quem sabe rolar + selecionar a linha; o preview renderizado não).
     if (widget.session.revealLine != null && _hasPreview) _editing = true;
-    final text = _editableText;
-    if (text != null) {
-      _baseline = text;
-      _ctrl = CodeEditingController(text: text, language: _language)
-        ..addListener(_onCtrlChanged);
-      // Expõe o save do buffer à sessão pro "Salvar e fechar" (limpo no dispose).
-      widget.session.saveDraft = _save;
-      _ensureAndBindScm(_ctrl!);
-      _startLsp(text);
-    }
+    // Workspace remoto: a aba nasce em loading e a `view` ainda é um texto
+    // VAZIO. Montar o controller/LSP agora os prenderia a esse vazio — o
+    // conteúdo real é adotado em [_adoptLoadedContent] quando o read termina.
+    if (!widget.session.loading) _initContent();
     // Aba já nasce focada (ex.: arquivo recém-aberto) → foca o editor.
+    _focusEditorIfActive();
+  }
+
+  /// Monta controller + SCM + LSP a partir do conteúdo atual da sessão.
+  /// Extraído do [initState] porque no caminho remoto isso só pode acontecer
+  /// depois que o arquivo chega pela rede.
+  void _initContent() {
+    final text = _editableText;
+    if (text == null) return;
+    _baseline = text;
+    _ctrl = CodeEditingController(text: text, language: _language)
+      ..addListener(_onCtrlChanged);
+    // Expõe o save do buffer à sessão pro "Salvar e fechar" (limpo no dispose).
+    widget.session.saveDraft = _save;
+    _ensureAndBindScm(_ctrl!);
+    _startLsp(text);
+  }
+
+  /// Fim do carregamento remoto: adota o conteúdo que chegou e repinta.
+  ///
+  /// Sem isto a aba ficava no spinner **para sempre** depois que o arquivo
+  /// chegava: `_onSession` só reagia a reveal/SCM, então o `loading = false`
+  /// do ViewModel não repintava nada. Trocar de aba e voltar "resolvia"
+  /// porque remontava o widget do zero.
+  void _adoptLoadedContent() {
+    _initContent();
+    if (mounted) setState(() {});
+    // O editor pode ter acabado de nascer; se a aba está ativa, foca.
     _focusEditorIfActive();
   }
 
@@ -360,6 +387,16 @@ class _FileViewerState extends State<FileViewer> {
 
   /// Reage a mudanças da sessão: reveal e/ou decorações SCM → rebuild do editor.
   void _onSession() {
+    // Chegada do conteúdo remoto (loading → false) tem prioridade: monta o
+    // editor com o texto real e repinta.
+    if (_lastLoading && !widget.session.loading) {
+      _lastLoading = false;
+      _lastRevealTick = widget.session.revealTick;
+      _lastScmDecorations = widget.session.scmDecorations;
+      _adoptLoadedContent();
+      return;
+    }
+    _lastLoading = widget.session.loading;
     final revealChanged = widget.session.revealTick != _lastRevealTick;
     final scmChanged = widget.session.scmDecorations != _lastScmDecorations;
     final ctrl = _ctrl;

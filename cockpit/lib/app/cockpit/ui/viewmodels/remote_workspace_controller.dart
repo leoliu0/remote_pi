@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:cockpit/app/cockpit/data/remote/remote_git_adapter.dart';
+import 'package:cockpit/app/cockpit/data/remote/remote_root_finder.dart';
 import 'package:cockpit/app/cockpit/data/remote/remote_worktree_gateway.dart';
 import 'package:cockpit/app/cockpit/domain/contracts/git_command_runner.dart';
 import 'package:cockpit/app/cockpit/domain/contracts/worktree_manager.dart';
@@ -47,13 +48,28 @@ class RemoteWorkspaceController extends ChangeNotifier {
   /// Aplica a lista reconciliada de forks de [wsId] — o VM mexe em
   /// `_projectList`/`_worktrees`/`_forkOrigin` e encerra o runtime dos que
   /// sumiram (o controller não conhece sessões).
-  void Function(String wsId, List<Project> forks, String origin)? applyForks;
+  ///
+  /// [originOf] dá a root que originou **cada** fork: em multirepo os forks de
+  /// um mesmo workspace vêm de repos diferentes, e a origem é o que decide
+  /// contra quem o fork mergeia e de quem herda a branch.
+  void Function(String wsId, List<Project> forks, Map<String, String> originOf)?
+  applyForks;
 
   // ---- estado ---------------------------------------------------------------
 
-  /// `git status` por workspace remoto. O painel de Source Control lê os
-  /// getters git do VM; quando o workspace é remoto, eles caem aqui.
-  final Map<String, GitInfo> _gitInfo = <String, GitInfo>{};
+  /// `git status` por workspace remoto **e por root**: `wsId → root → info`.
+  /// O painel de Source Control lê os getters git do VM; quando o workspace é
+  /// remoto, eles caem aqui.
+  ///
+  /// A chave é composta (e não só o path, como no [GitController] local)
+  /// porque dois hosts diferentes têm caminhos iguais — `/home/jacob/app` no
+  /// host A e no host B são repos distintos.
+  final Map<String, Map<String, GitInfo>> _gitInfo =
+      <String, Map<String, GitInfo>>{};
+
+  /// Roots git de cada workspace remoto (multirepo por detecção implícita,
+  /// igual ao local). Single-root = `[remotePath]`.
+  final Map<String, List<String>> _roots = <String, List<String>>{};
 
   /// Workspaces cujo git está carregando agora (evita disparo duplicado do
   /// lazy-load do badge).
@@ -80,15 +96,70 @@ class RemoteWorkspaceController extends ChangeNotifier {
   /// O [RemoteHost] do workspace ativo, ou `null` se o ativo é local.
   RemoteHost? get activeHost => hostForWorkspace(selectedId?.call());
 
+  /// Roots git de um workspace remoto. Nunca vazio enquanto o workspace tem
+  /// pasta: antes da descoberta terminar é `[remotePath]`, que é também a
+  /// resposta certa para o caso single-root (monorepo).
+  List<String> rootsOf(String wsId) {
+    final derived = _roots[wsId];
+    if (derived != null && derived.isNotEmpty) return derived;
+    final path = _project(wsId)?.remotePath ?? '';
+    return path.isEmpty ? const [] : [path];
+  }
+
+  /// `true` quando o workspace remoto é multirepo (pasta-mãe sem `.git` com
+  /// 2+ repos filhos).
+  bool isMultiRoot(String wsId) => rootsOf(wsId).length > 1;
+
+  /// GitInfo de uma **root** específica de um workspace remoto.
+  GitInfo? infoForRoot(String wsId, String rootPath) =>
+      _gitInfo[wsId]?[rootPath];
+
   /// GitInfo remoto da pasta do workspace ativo (ou `null`).
+  ///
+  /// Em multirepo não existe "o" git do workspace — devolve `null`, como o
+  /// [GitController] local faz, e quem precisa do estado usa [infoForRoot] ou
+  /// [rootsSummary].
   GitInfo? get activeGitInfo {
     final id = selectedId?.call();
-    return id == null ? null : _gitInfo[id];
+    return id == null ? null : gitInfoOf(id);
   }
 
   /// GitInfo remoto de um workspace (badge do rail). `null` enquanto o
-  /// lazy-load não terminou, ou se a pasta não é repo git.
-  GitInfo? gitInfoOf(String wsId) => _gitInfo[wsId];
+  /// lazy-load não terminou, se a pasta não é repo git, ou se é multirepo.
+  GitInfo? gitInfoOf(String wsId) {
+    final roots = rootsOf(wsId);
+    if (roots.length != 1) return null;
+    return _gitInfo[wsId]?[roots.first];
+  }
+
+  /// Agregado do chip da rail em multirepo: (nº de roots, roots sujas). Conta
+  /// só `isDirty`, como o local — divergência de upstream não acende o chip.
+  (int roots, int dirtyRoots) rootsSummary(String wsId) {
+    final roots = rootsOf(wsId);
+    final byRoot = _gitInfo[wsId] ?? const <String, GitInfo>{};
+    var dirty = 0;
+    for (final r in roots) {
+      if (byRoot[r]?.isDirty ?? false) dirty++;
+    }
+    return (roots.length, dirty);
+  }
+
+  /// `true` se alguma root do workspace remoto é repo git (habilita a aba
+  /// Source Control).
+  bool hasGit(String wsId) {
+    final byRoot = _gitInfo[wsId];
+    if (byRoot == null) return false;
+    return rootsOf(wsId).any(byRoot.containsKey);
+  }
+
+  /// Root (path no host) que contém [absolutePath], ou `null` se o caminho
+  /// está fora de todas (ex.: solto na pasta-mãe de um multirepo).
+  String? rootContaining(String wsId, String absolutePath) {
+    for (final r in rootsOf(wsId)) {
+      if (absolutePath == r || isUnderPath(absolutePath, r)) return r;
+    }
+    return null;
+  }
 
   /// Serviço git remoto do host ativo (para as mutações). Lança se não remoto.
   Future<RemoteGitService> activeGitService() =>
@@ -98,12 +169,19 @@ class RemoteWorkspaceController extends ChangeNotifier {
   /// pasta [rootPath] do workspace remoto ativo. Pasta agrega o status mais
   /// severo dos descendentes.
   GitFileStatus? statusForPath(String rootPath, String absolutePath) {
-    final info = activeGitInfo;
+    final wsId = selectedId?.call();
+    if (wsId == null) return null;
+    // Em multirepo o caminho pertence a UMA root: o status e o caminho
+    // relativo têm de ser calculados contra ela, não contra a pasta-mãe.
+    // [rootPath] é a raiz da árvore que fez a pergunta e serve de fallback
+    // (single-root, onde as duas coisas coincidem).
+    final owner = rootContaining(wsId, absolutePath) ?? rootPath;
+    final info = infoForRoot(wsId, owner);
     if (info == null) return null;
-    if (absolutePath == rootPath) {
+    if (absolutePath == owner) {
       return info.files.isEmpty ? null : GitFileStatus.modified;
     }
-    final rel = relativeUnder(absolutePath, rootPath);
+    final rel = relativeUnder(absolutePath, owner);
     final exact = info.files[rel];
     if (exact != null) return exact;
     GitFileStatus? agg;
@@ -123,16 +201,70 @@ class RemoteWorkspaceController extends ChangeNotifier {
     final id = selectedId?.call();
     final p = _project(id);
     final host = activeHost;
-    final root = p?.remotePath;
-    if (p == null || host == null || root == null || root.isEmpty) return;
-    try {
-      final service = await _hosts.gitServiceFor(host);
-      _gitInfo[p.id] = remoteGitInfo(await service.status(root));
-    } catch (_) {
-      // Pasta não é repo git (ou conexão caiu) → sem source control remoto.
-      _gitInfo.remove(p.id);
-    }
+    final path = p?.remotePath;
+    if (p == null || host == null || path == null || path.isEmpty) return;
+    await _readGit(p, host);
     notifyListeners();
+  }
+
+  /// Descobre as roots do workspace remoto e lê o `git status` de cada uma.
+  /// Núcleo compartilhado por [refreshActive] e [_loadGitFor].
+  Future<void> _readGit(Project p, RemoteHost host) async {
+    final path = p.remotePath ?? '';
+    if (path.isEmpty) return;
+    // Fork (worktree remoto) é sempre um checkout único: não vale gastar
+    // round-trips procurando repos filhos dentro dele.
+    final roots = p.parentId != null
+        ? [path]
+        : await _rootsFor(p.id, path, host);
+    final byRoot = <String, GitInfo>{};
+    final service = await _hosts.gitServiceFor(host);
+    for (final root in roots) {
+      try {
+        byRoot[root] = remoteGitInfo(await service.status(root));
+      } on Object {
+        // Root que não é repo git (ou conexão caiu) → fica de fora, sem
+        // derrubar as irmãs.
+      }
+    }
+    if (byRoot.isEmpty) {
+      _gitInfo.remove(p.id);
+    } else {
+      _gitInfo[p.id] = byRoot;
+    }
+  }
+
+  /// Roots do workspace, descobertas uma vez e cacheadas. A descoberta custa
+  /// listagens SSH, e a topologia de um workspace praticamente não muda —
+  /// quem quiser reavaliar chama [forgetRoots].
+  Future<List<String>> _rootsFor(
+    String wsId,
+    String path,
+    RemoteHost host,
+  ) async {
+    final cached = _roots[wsId];
+    if (cached != null && cached.isNotEmpty) return cached;
+    try {
+      final finder = RemoteRootFinder(await _hosts.fileServiceFor(host));
+      final roots = await finder.deriveRoots(path);
+      if (roots.isNotEmpty) _roots[wsId] = roots;
+      return roots.isEmpty ? [path] : roots;
+    } on Object {
+      return [path]; // host offline → segue single-root
+    }
+  }
+
+  /// Esquece as roots descobertas de [wsId] (repo clonado/removido na pasta
+  /// do workspace) — a próxima leitura redescobre.
+  void forgetRoots(String wsId) => _roots.remove(wsId);
+
+  /// Injeta o resultado de uma descoberta + leitura, sem tocar a rede — é o
+  /// que permite testar o roteamento por root (a parte onde um erro manda o
+  /// comando para o repositório errado).
+  @visibleForTesting
+  void seedGit(String wsId, List<String> roots, Map<String, GitInfo> byRoot) {
+    _roots[wsId] = roots;
+    _gitInfo[wsId] = byRoot;
   }
 
   /// Carrega o `git status` de UM workspace remoto (background, best-effort) e
@@ -145,8 +277,7 @@ class RemoteWorkspaceController extends ChangeNotifier {
     if (host == null || root == null || root.isEmpty) return;
     _loading.add(p.id);
     try {
-      final service = await _hosts.gitServiceFor(host);
-      _gitInfo[p.id] = remoteGitInfo(await service.status(root));
+      await _readGit(p, host);
     } catch (_) {
       _gitInfo.remove(p.id);
     } finally {
@@ -168,9 +299,20 @@ class RemoteWorkspaceController extends ChangeNotifier {
     }
   }
 
+  /// Soma de arquivos sujos de todas as roots de [wsId].
+  int _dirtyCountOf(String wsId) {
+    final byRoot = _gitInfo[wsId] ?? const <String, GitInfo>{};
+    var total = 0;
+    for (final root in rootsOf(wsId)) {
+      total += byRoot[root]?.dirtyCount ?? 0;
+    }
+    return total;
+  }
+
   /// Descarta o cache de um workspace que saiu do rail.
   void forget(String wsId) {
     _gitInfo.remove(wsId);
+    _roots.remove(wsId);
     _loading.remove(wsId);
     _worktreeToken.remove(wsId);
   }
@@ -203,14 +345,16 @@ class RemoteWorkspaceController extends ChangeNotifier {
   /// Best-effort: host offline / pasta não-git → sem forks.
   Future<void> refreshWorktrees(String wsId) async {
     final parent = _project(wsId);
-    final root = parent?.remotePath;
+    final path = parent?.remotePath;
     if (parent == null ||
         !parent.isRemoteTerminal ||
         parent.parentId != null ||
-        root == null ||
-        root.isEmpty) {
+        path == null ||
+        path.isEmpty) {
       return;
     }
+    final host = hostForWorkspace(wsId);
+    if (host == null) return;
     final gw = await _gatewayFor(wsId);
     if (gw == null) return;
     // Token anti-corrida: a listagem SSH leva ~s. Um refresh disparado no boot
@@ -219,30 +363,42 @@ class RemoteWorkspaceController extends ChangeNotifier {
     // mais recente por workspace é aplicado.
     final token = (_worktreeToken[wsId] ?? 0) + 1;
     _worktreeToken[wsId] = token;
-    List<RemoteWorktreeEntry> entries;
-    try {
-      entries = await gw.list(root);
-    } catch (_) {
-      return;
+    // Multirepo: `git worktree list` roda em CADA root — a pasta-mãe não é
+    // repo nenhum, e era por isso que um workspace remoto multirepo aparecia
+    // sem fork algum.
+    final roots = await _rootsFor(wsId, path, host);
+    final forks = <Project>[];
+    final originOf = <String, String>{};
+    for (final root in roots) {
+      final List<RemoteWorktreeEntry> entries;
+      try {
+        entries = await gw.list(root);
+      } catch (_) {
+        continue; // root sem git (ou offline) → sem forks, sem derrubar as irmãs
+      }
+      if (_worktreeToken[wsId] != token) return; // obsoleto → descarta
+      for (final e in entries) {
+        final id = '$wsId::${e.path}';
+        originOf[id] = root;
+        forks.add(
+          Project(
+            id: id,
+            name: e.branch,
+            path: '',
+            colorValue: parent.colorValue,
+            createdAt: parent.createdAt,
+            realmId: parent.realmId,
+            parentId: wsId,
+            order: parent.order,
+            kind: WorkspaceKind.remoteTerminal,
+            remoteHostId: parent.remoteHostId,
+            remotePath: e.path,
+          ),
+        );
+      }
     }
-    if (_worktreeToken[wsId] != token) return; // obsoleto → descarta
-    final forks = <Project>[
-      for (final e in entries)
-        Project(
-          id: '$wsId::${e.path}',
-          name: e.branch,
-          path: '',
-          colorValue: parent.colorValue,
-          createdAt: parent.createdAt,
-          realmId: parent.realmId,
-          parentId: wsId,
-          order: parent.order,
-          kind: WorkspaceKind.remoteTerminal,
-          remoteHostId: parent.remoteHostId,
-          remotePath: e.path,
-        ),
-    ];
-    applyForks?.call(wsId, forks, root);
+    if (_worktreeToken[wsId] != token) return;
+    applyForks?.call(wsId, forks, originOf);
     for (final f in forks) {
       if (!_gitInfo.containsKey(f.id) && !_loading.contains(f.id)) {
         unawaited(_loadGitFor(f));
@@ -252,8 +408,12 @@ class RemoteWorkspaceController extends ChangeNotifier {
   }
 
   /// Namespace (branches/worktrees/base) do host — valida o dialog de criar.
-  Future<WorktreeNamespace> worktreeNamespace(String wsId) async {
-    final root = _project(wsId)?.remotePath;
+  /// [root] escolhe o repo em multirepo; omitido = a pasta do pin.
+  Future<WorktreeNamespace> worktreeNamespace(
+    String wsId, {
+    String? root,
+  }) async {
+    root = (root == null || root.isEmpty) ? _project(wsId)?.remotePath : root;
     if (root == null || root.isEmpty) return const WorktreeNamespace.empty();
     final gw = await _gatewayFor(wsId);
     if (gw == null) return const WorktreeNamespace.empty();
@@ -271,12 +431,18 @@ class RemoteWorkspaceController extends ChangeNotifier {
     String wsId,
     String name, {
     String? baseRef,
+    String? root,
   }) {
     final controller = StreamController<String>();
     final result = () async {
       try {
-        final root = _project(wsId)?.remotePath;
-        if (root == null || root.isEmpty) {
+        // Root explícita (multirepo: o repo escolhido no kebab) ou a pasta do
+        // pin. Variável local — reatribuir o parâmetro dentro do closure
+        // impede a promoção de tipo.
+        final target = (root == null || root.isEmpty)
+            ? (_project(wsId)?.remotePath ?? '')
+            : root;
+        if (target.isEmpty) {
           return const Failure<Project, WorktreeOpError>(
             WorktreeOpError('Workspace not found.'),
           );
@@ -287,7 +453,7 @@ class RemoteWorkspaceController extends ChangeNotifier {
             WorktreeOpError('Host unavailable.'),
           );
         }
-        final r = await gw.add(root, name, baseRef: baseRef);
+        final r = await gw.add(target, name, baseRef: baseRef);
         if (r.stdout.isNotEmpty) controller.add(r.stdout);
         if (r.stderr.isNotEmpty) controller.add(r.stderr);
         if (r.code != 0) {
@@ -299,7 +465,7 @@ class RemoteWorkspaceController extends ChangeNotifier {
         }
         await refreshWorktrees(wsId);
         final fork = _project(
-          '$wsId::${RemoteWorktreeGateway.pathFor(root, name)}',
+          '$wsId::${RemoteWorktreeGateway.pathFor(target, name)}',
         );
         if (fork == null) {
           return const Failure<Project, WorktreeOpError>(
@@ -370,7 +536,9 @@ class RemoteWorkspaceController extends ChangeNotifier {
         await controller.close();
         return GitMergeStatus.error;
       }
-      if ((_gitInfo[parentId]?.dirtyCount ?? 0) > 0) {
+      // Fork tem uma root só (o checkout do worktree); o pai pode ser
+      // multirepo, e aí "sujo" é qualquer root suja.
+      if (_dirtyCountOf(parentId) > 0) {
         controller.add('Parent has uncommitted changes.');
         await controller.close();
         return GitMergeStatus.dirtyWorktree;
@@ -400,7 +568,14 @@ class RemoteWorkspaceController extends ChangeNotifier {
     final controller = StreamController<String>();
     final exit = () async {
       final parentId = fork.parentId;
-      final parentBranch = parentId == null ? null : _gitInfo[parentId]?.branch;
+      // A branch do pai vem da root que **originou** o fork (em multirepo o
+      // pai não tem uma branch só).
+      final parentOrigin = parentId == null ? null : forkOrigin?.call(fork.id);
+      final parentBranch = parentId == null
+          ? null
+          : (parentOrigin == null
+                ? gitInfoOf(parentId)?.branch
+                : infoForRoot(parentId, parentOrigin)?.branch);
       final root = fork.remotePath;
       final host = parentId == null ? null : hostForWorkspace(parentId);
       if (parentBranch == null ||

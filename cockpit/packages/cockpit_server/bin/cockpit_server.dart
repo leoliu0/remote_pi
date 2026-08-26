@@ -66,10 +66,15 @@ Future<void> _run(List<String> args) async {
   // HOST, apontando pra CLI `cockpit hook` (resolvida por --cli, ao lado do
   // server, ou no PATH). Assim uma sessão no terminal remoto reporta o turno →
   // socket de status do host → protocolo → cliente. Não-fatal.
+  final hookInstaller = HostHookInstaller(
+    cliPathOverride: _argValue(args, '--cli'),
+  );
+  unawaited(hookInstaller.ensureInstalled());
+  // Mesma CLI serve a dois papéis: o hook (acima) e os comandos digitados num
+  // terminal remoto. Guardar o caminho deixa a pasta dela entrar no PATH das
+  // PTYs; sem CLI, o shell remoto simplesmente segue sem o comando.
   unawaited(
-    HostHookInstaller(
-      cliPathOverride: _argValue(args, '--cli'),
-    ).ensureInstalled(),
+    hookInstaller.resolveCli().then((path) => RemoteServer.cliPath = path),
   );
 
   // Saída em inglês por decisão (CLI interna não se traduz).

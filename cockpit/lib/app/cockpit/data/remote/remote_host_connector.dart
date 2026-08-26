@@ -101,9 +101,17 @@ class RemoteHostConnector {
   StreamSubscription<RemoteTurnStatus>? _turnSub;
   Stream<RemoteTurnStatus> get turnStatus => _turnStatus.stream;
 
+  /// Comandos da CLI `cockpit` rodando no host, encaminhados pelo servidor.
+  /// Mesmo caminho do [turnStatus]: reassina a cada (re)conexão.
+  final _cliCommands = StreamController<RemoteCliCommand>.broadcast();
+  StreamSubscription<RemoteCliCommand>? _cliSub;
+  Stream<RemoteCliCommand> get cliCommands => _cliCommands.stream;
+
   void _bindTurnStatus() {
     _turnSub?.cancel();
     _turnSub = _service?.turnStatus.listen(_turnStatus.add);
+    _cliSub?.cancel();
+    _cliSub = _service?.cliCommands.listen(_cliCommands.add);
   }
 
   /// Senha resolvida na abertura atual (auth por senha); só em memória.
@@ -691,6 +699,8 @@ class RemoteHostConnector {
     await _reconnected.close();
     await _turnSub?.cancel();
     await _turnStatus.close();
+    await _cliSub?.cancel();
+    await _cliCommands.close();
     await _connection?.close();
     await _tunnel?.close();
     await _dartConn?.close();

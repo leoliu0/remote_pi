@@ -5,6 +5,7 @@ import 'package:cockpit/app/core/ui/widgets/app_menu.dart';
 import 'package:cockpit/app/cockpit/ui/widgets/update_card.dart';
 import 'package:cockpit/app/cockpit/ui/widgets/workspace_avatar.dart';
 import 'package:cockpit/app/core/ui/themes/themes.dart';
+import 'package:cockpit/app/core/ui/widgets/context_menu_gesture.dart';
 import 'package:cockpit/app/core/utils/platform_kind.dart';
 import 'package:cockpit/i18n/strings.g.dart';
 import 'package:cockpit/app/core/ui/widgets/hover_tap.dart';
@@ -211,7 +212,35 @@ class _ProjectsRailState extends State<ProjectsRail> {
   /// a lista de worktrees é exclusividade do chevron ([_toggleWorktrees]), pra
   /// dar de olhar os forks de um workspace sem trazê-lo pra frente.
   /// [onSelect] varia entre local e remoto — o resto da regra é o mesmo pros dois.
+  /// Último toque num card: (id do workspace, instante). Alimenta a detecção
+  /// de duplo toque do mobile — ver [_onCardTap].
+  String? _lastTapId;
+  DateTime? _lastTapAt;
+
+  /// Janela do duplo toque. O mesmo default do Flutter (`kDoubleTapTimeout`).
+  static const _doubleTapWindow = Duration(milliseconds: 300);
+
   void _onCardTap(Project project, VoidCallback onSelect) {
+    // Mobile: dois toques seguidos no mesmo card alternam a lista de forks (lá
+    // não há chevron). É detectado na mão, e não com `onDoubleTap`, porque
+    // declarar o gesto de duplo toque faria TODO toque simples esperar a
+    // janela de 300ms antes de selecionar — atraso perceptível em cada troca
+    // de workspace, só para servir a um gesto secundário.
+    if (isMobilePlatform && widget.worktreesOf(project.id).isNotEmpty) {
+      final now = DateTime.now();
+      final last = _lastTapAt;
+      final isSecond =
+          _lastTapId == project.id &&
+          last != null &&
+          now.difference(last) <= _doubleTapWindow;
+      _lastTapId = project.id;
+      _lastTapAt = now;
+      if (isSecond) {
+        _lastTapAt = null; // um triplo toque não conta como dois duplos
+        _toggleWorktrees(project);
+        return;
+      }
+    }
     if (project.id != widget.selectedId) onSelect();
   }
 
@@ -258,6 +287,8 @@ class _ProjectsRailState extends State<ProjectsRail> {
               imagePath: project.imagePath,
               selected: id == widget.selectedId,
               git: widget.remoteGitInfoOf(id),
+              rootsOf: () => widget.rootsOf(id),
+              rootsSummary: widget.rootsSummary(id),
               moveTargetsOf: () => widget.moveTargetsOf(id),
               worktreeCount: forks.length,
               hasWorktrees: hasWorktrees,
@@ -630,6 +661,36 @@ class _CockpitSlot extends StatelessWidget {
   }
 }
 
+/// Item de ação git do kebab: single-root executa direto (`<ação>|<root>`);
+/// multirepo abre submenu com uma entrada por root (roots sem git ficam de
+/// fora). Compartilhado pelo workspace local e pelo remoto — a regra de
+/// direcionar a ação a UMA root é a mesma nos dois.
+AppMenuItem<String> gitMenuItem(
+  List<RailRoot> roots,
+  String action,
+  String label,
+  IconData icon,
+) {
+  final gitRoots = roots.where((r) => r.git != null).toList();
+  if (roots.length <= 1) {
+    final path = roots.isEmpty ? '' : roots.first.path;
+    return AppMenuItem(value: '$action|$path', label: label, icon: icon);
+  }
+  return AppMenuItem(
+    value: action, // nunca devolvido — só os filhos
+    label: label,
+    icon: icon,
+    children: [
+      for (final r in gitRoots)
+        AppMenuItem(
+          value: '$action|${r.path}',
+          label: '${r.name}  ⎇ ${r.git?.branch}',
+          icon: Icons.folder_outlined,
+        ),
+    ],
+  );
+}
+
 /// Slot de um host remoto: badge com o nome do host + glifo de nuvem/terminal.
 /// Botão-direito (long-press no menu) remove o pin. Terminal-only via SSH.
 class _RemoteSlot extends StatelessWidget {
@@ -640,6 +701,8 @@ class _RemoteSlot extends StatelessWidget {
     required this.imagePath,
     required this.selected,
     required this.git,
+    required this.rootsOf,
+    required this.rootsSummary,
     required this.moveTargetsOf,
     required this.worktreeCount,
     required this.hasWorktrees,
@@ -674,6 +737,14 @@ class _RemoteSlot extends StatelessWidget {
   /// git no menu (a branch sai daqui).
   final GitInfo? git;
 
+  /// Roots git do workspace remoto (multirepo por detecção implícita no host).
+  /// Thunk: só é resolvido quando o menu abre. Single-root = 1 entrada.
+  final List<RailRoot> Function() rootsOf;
+
+  /// Agregado multirepo (nº de roots, roots sujas) — desenhado no lugar do
+  /// [_GitBadge] quando [git] é `null` e há 2+ roots, igual ao local.
+  final (int, int) rootsSummary;
+
   String? get branch {
     final b = git?.branch;
     return (b == null || b.isEmpty) ? null : b;
@@ -689,30 +760,19 @@ class _RemoteSlot extends StatelessWidget {
 
   Future<void> _showMenu(BuildContext context, Offset at) async {
     final tr = context.t.cockpit.projectsRail;
-    final hasGit = branch != null;
-    final moveTargets = moveTargetsOf(); // resolvido no clique, não por build
+    final roots = rootsOf(); // resolvido no clique, não por build
+    final hasGit = roots.any((r) => r.git != null);
+    final moveTargets = moveTargetsOf();
     final pick = await showAppMenu<String>(
       context,
       globalPosition: at,
       items: [
         if (hasGit) ...[
-          AppMenuItem(value: 'sync', label: tr.sync, icon: Icons.sync),
-          AppMenuItem(
-            value: 'pull',
-            label: tr.pull,
-            icon: Icons.arrow_downward,
-          ),
-          AppMenuItem(value: 'push', label: tr.push, icon: Icons.arrow_upward),
-          AppMenuItem(
-            value: 'worktree',
-            label: tr.createWorktree,
-            icon: Icons.call_split,
-          ),
-          AppMenuItem(
-            value: 'copy-branch',
-            label: tr.copyBranch,
-            icon: Icons.content_copy,
-          ),
+          gitMenuItem(roots, 'sync', tr.sync, Icons.sync),
+          gitMenuItem(roots, 'pull', tr.pull, Icons.arrow_downward),
+          gitMenuItem(roots, 'push', tr.push, Icons.arrow_upward),
+          gitMenuItem(roots, 'worktree', tr.createWorktree, Icons.call_split),
+          gitMenuItem(roots, 'copy-branch', tr.copyBranch, Icons.content_copy),
         ],
         AppMenuItem(
           value: 'copy-id',
@@ -748,8 +808,8 @@ class _RemoteSlot extends StatelessWidget {
     );
     if (pick == null) return;
     // Copiar resolve aqui (dado já em mãos); o resto vai pra página.
-    if (pick == 'copy-branch') {
-      final b = branch;
+    if (pick.startsWith('copy-branch|')) {
+      final b = branchOfRoot(roots, pick.substring('copy-branch|'.length));
       if (b != null) await Clipboard.setData(ClipboardData(text: b));
       return;
     }
@@ -764,11 +824,12 @@ class _RemoteSlot extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = context.colors;
     final accent = Color(colorValue);
-    return GestureDetector(
-      // Botão-direito abre o menu no cursor — mesmo padrão do workspace local.
-      // Antes ele removia o pin direto, sem confirmação; hoje isso é o item
-      // "Close" do menu, que roteia pro mesmo removeRemoteWorkspace.
-      onSecondaryTapUp: (d) => _showMenu(context, d.globalPosition),
+    return ContextMenuGesture(
+      // Botão-direito (e toque longo no mobile) abre o menu no ponto do gesto
+      // — mesmo padrão do workspace local. Antes ele removia o pin direto, sem
+      // confirmação; hoje isso é o item "Close" do menu, que roteia pro mesmo
+      // removeRemoteWorkspace.
+      onMenu: (pos) => _showMenu(context, pos),
       child: HoverTap(
         color: selected ? colors.panel2 : Colors.transparent,
         borderRadius: BorderRadius.circular(7),
@@ -780,8 +841,8 @@ class _RemoteSlot extends StatelessWidget {
             Row(
               children: [
                 // Mesmo avatar do workspace local: imagem de fundo quando houver,
-                // senão a inicial sobre a cor. A afordância "remoto" fica no badge
-                // "SSH" à direita.
+                // senão a inicial sobre a cor. No desktop, a afordância
+                // "remoto" fica no badge "SSH" à direita.
                 WorkspaceAvatar(
                   imagePath: imagePath,
                   colorValue: colorValue,
@@ -806,37 +867,54 @@ class _RemoteSlot extends StatelessWidget {
                               : FontWeight.w400,
                         ),
                       ),
-                      // Mesmo badge do local: branch + contador de sujeira, quando
-                      // o git remoto já foi lido (lazy). Sem git → nada.
+                      // Mesmo badge do local: branch + contador de sujeira,
+                      // quando o git remoto já foi lido (lazy); multirepo mostra
+                      // o agregado "N roots"; pasta sem git não mostra nada.
                       if (git != null) ...[
                         const SizedBox(height: 4),
                         _AbsorbCardTap(child: _GitBadge(info: git!)),
+                      ] else if (rootsSummary.$1 > 1) ...[
+                        const SizedBox(height: 4),
+                        _MultiRootBadge(
+                          roots: rootsSummary.$1,
+                          dirtyRoots: rootsSummary.$2,
+                          rootList: rootsOf,
+                        ),
                       ],
                     ],
                   ),
                 ),
-                _AbsorbCardTap(
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 5,
-                      vertical: 1,
-                    ),
-                    decoration: BoxDecoration(
-                      color: accent.withValues(alpha: 0.15),
-                      borderRadius: BorderRadius.circular(4),
-                    ),
-                    child: Text(
-                      'SSH',
-                      style: context.typo.label.copyWith(
-                        fontSize: 9,
-                        color: accent,
-                        fontWeight: FontWeight.w600,
+                // O badge "SSH" distingue remoto de local — informação que só
+                // existe no desktop, onde os dois convivem. No mobile (plano
+                // 59) TODO workspace é remoto, então o badge não separa nada:
+                // seria ruído em cada linha de uma tela estreita.
+                if (!isMobilePlatform) ...[
+                  _AbsorbCardTap(
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 5,
+                        vertical: 1,
+                      ),
+                      decoration: BoxDecoration(
+                        color: accent.withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: Text(
+                        'SSH',
+                        style: context.typo.label.copyWith(
+                          fontSize: 9,
+                          color: accent,
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
                     ),
                   ),
-                ),
-                const SizedBox(width: 2),
-                if (hasWorktrees)
+                  const SizedBox(width: 2),
+                ],
+                // O chevron é afordância de mouse: no mobile ele vira um
+                // alvo de ~26px espremido numa linha estreita. Lá, quem alterna
+                // a lista é o **duplo toque** no card (ver [onToggleExpanded]).
+                if (hasWorktrees && !isMobilePlatform)
                   _WorktreeChevron(expanded: expanded, onTap: onToggleExpanded),
               ],
             ),
@@ -940,11 +1018,12 @@ class _ProjectItem extends StatelessWidget {
     );
     return Padding(
       padding: const EdgeInsets.only(bottom: 2),
-      // Botão-direito em qualquer ponto do card abre o menu no cursor. Fica por
-      // FORA do HoverTap porque ele só expõe o tap primário; os badges internos
-      // (_AbsorbCardTap) também só declaram onTap, então o secundário sobe até aqui.
-      child: GestureDetector(
-        onSecondaryTapUp: (d) => menu.show(context, d.globalPosition),
+      // Botão-direito (e toque longo no mobile) em qualquer ponto do card abre
+      // o menu no ponto do gesto. Fica por FORA do HoverTap porque ele só expõe
+      // o tap primário; os badges internos (_AbsorbCardTap) também só declaram
+      // onTap, então o secundário sobe até aqui.
+      child: ContextMenuGesture(
+        onMenu: (pos) => menu.show(context, pos),
         child: HoverTap(
           color: selected ? colors.panel2 : Colors.transparent,
           borderRadius: BorderRadius.circular(7),
@@ -1021,7 +1100,7 @@ class _ProjectItem extends StatelessWidget {
                     ),
                     const SizedBox(width: 4),
                   ],
-                  if (hasWorktrees)
+                  if (hasWorktrees && !isMobilePlatform)
                     _WorktreeChevron(
                       expanded: expanded,
                       onTap: onToggleExpanded,
@@ -1116,10 +1195,11 @@ class _WorktreeItem extends StatelessWidget {
           Expanded(
             child: Padding(
               padding: const EdgeInsets.only(bottom: 2),
-              // Botão-direito na linha abre o menu do fork no cursor. Envolve só
-              // o HoverTap: a linha de árvore fica fora do realce e do gesto.
-              child: GestureDetector(
-                onSecondaryTapUp: (d) => menu.show(context, d.globalPosition),
+              // Botão-direito (e toque longo no mobile) na linha abre o menu
+              // do fork. Envolve só o HoverTap: a linha de árvore fica fora do
+              // realce e do gesto.
+              child: ContextMenuGesture(
+                onMenu: (pos) => menu.show(context, pos),
                 child: HoverTap(
                   color: selected ? colors.panel2 : Colors.transparent,
                   borderRadius: BorderRadius.circular(7),
@@ -1650,34 +1730,6 @@ class _WorkspaceMenu {
   final List<RealmTarget> Function() moveTargetsOf;
   final void Function(String realmId) onMoveToRealm;
 
-  /// Item de ação git: single-root executa direto (`<ação>|<root>`); multi-root
-  /// abre submenu com uma entrada por root (roots sem git desabilitadas).
-  AppMenuItem<String> _gitItem(
-    List<RailRoot> roots,
-    String action,
-    String label,
-    IconData icon,
-  ) {
-    final gitRoots = roots.where((r) => r.git != null).toList();
-    if (roots.length <= 1) {
-      final path = roots.isEmpty ? '' : roots.first.path;
-      return AppMenuItem(value: '$action|$path', label: label, icon: icon);
-    }
-    return AppMenuItem(
-      value: action, // nunca devolvido — só os filhos
-      label: label,
-      icon: icon,
-      children: [
-        for (final r in gitRoots)
-          AppMenuItem(
-            value: '$action|${r.path}',
-            label: '${r.name}  ⎇ ${r.git?.branch}',
-            icon: Icons.folder_outlined,
-          ),
-      ],
-    );
-  }
-
   Future<void> show(BuildContext context, Offset at) async {
     // Resolvidos aqui, no clique — não a cada build da rail.
     final roots = rootsOf();
@@ -1688,25 +1740,25 @@ class _WorkspaceMenu {
       items: [
         // Ações de sincronização só quando há git (single ou multi-root).
         if (canCreateWorktree) ...[
-          _gitItem(
+          gitMenuItem(
             roots,
             'sync',
             context.t.cockpit.projectsRail.sync,
             Icons.sync,
           ),
-          _gitItem(
+          gitMenuItem(
             roots,
             'pull',
             context.t.cockpit.projectsRail.pull,
             Icons.arrow_downward,
           ),
-          _gitItem(
+          gitMenuItem(
             roots,
             'push',
             context.t.cockpit.projectsRail.push,
             Icons.arrow_upward,
           ),
-          _gitItem(
+          gitMenuItem(
             roots,
             'worktree',
             context.t.cockpit.projectsRail.createWorktree,
@@ -1739,7 +1791,7 @@ class _WorkspaceMenu {
         // Mesmo rótulo e mesmo ícone do "Copiar branch" que o menu de worktree
         // já tinha: é a mesma ação, só que na raiz.
         if (roots.any((r) => r.git != null))
-          _gitItem(
+          gitMenuItem(
             roots,
             'copy-branch',
             context.t.cockpit.projectsRail.copyBranch,

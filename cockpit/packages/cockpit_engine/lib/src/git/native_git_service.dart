@@ -10,17 +10,26 @@ class NativeGitService implements GitService {
 
   @override
   Future<GitStatus> status(String repoPath) async {
-    // --porcelain=v1 -b: 1ª linha "## branch...", demais "XY path".
+    // Mesmas flags do leitor local (`git_status_reader_impl`), para o Source
+    // Control remoto se comportar igual ao local:
+    // - `-uall`: lista os arquivos untracked UM A UM. Sem isto o git colapsa a
+    //   pasta nova numa entrada só (`?? .cockpit/`), e a árvore mostrava a
+    //   pasta como se fosse um arquivo.
+    // - `--ignored=matching`: as raízes ignoradas vêm como `!!`, para a árvore
+    //   saber o que não pintar.
     final result = await _git(repoPath, [
       'status',
       '--porcelain=v1',
       '-b',
       '-z',
+      '-uall',
+      '--ignored=matching',
     ]);
     final parts = result.split('\x00');
     var branch = '';
     final files = <GitFileStatus>[];
-    for (final entry in parts) {
+    for (var i = 0; i < parts.length; i++) {
+      final entry = parts[i];
       if (entry.isEmpty) continue;
       if (entry.startsWith('## ')) {
         // "## main...origin/main [ahead 1]" → "main"
@@ -28,9 +37,14 @@ class NativeGitService implements GitService {
         continue;
       }
       if (entry.length < 3) continue;
+      final staged = entry[0];
+      // Rename/copy no index: com `-z` o PRÓXIMO token é o caminho de origem,
+      // sem os dois chars de status. Sem pular, ele virava uma entrada com o
+      // nome cortado nos 3 primeiros caracteres.
+      if (staged == 'R' || staged == 'C') i++;
       files.add(
         GitFileStatus(
-          staged: entry[0],
+          staged: staged,
           worktree: entry[1],
           path: entry.substring(3),
         ),

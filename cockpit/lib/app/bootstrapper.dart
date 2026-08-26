@@ -14,6 +14,7 @@ import 'package:cockpit/app/core/data/lsp/lsp_process_registry.dart';
 import 'package:cockpit/app/core/data/repositories/json_settings_store.dart';
 import 'package:cockpit/app/core/utils/platform_kind.dart';
 import 'package:cockpit/app/core/data/setup/hive_migration.dart';
+import 'package:cockpit/app/core/data/setup/local_network_permission.dart';
 import 'package:cockpit/app/core/data/setup/json_state_store.dart';
 import 'package:cockpit/app/core/data/setup/storage_location.dart';
 import 'package:cockpit/app/core/data/theme_store.dart';
@@ -155,6 +156,13 @@ class _CockpitBootstrapperState extends State<CockpitBootstrapper> {
         // Mobile: sem shell local (e `Process.run` é proibido no iOS real, só
         // funciona no simulador que é macOS por baixo) → pula.
         if (!isMobilePlatform) await resolveLoginShell();
+
+        // iOS: provoca o diálogo de rede local agora, enquanto nada depende
+        // dele. A tentativa que provoca o pedido sempre falha (ele aparece
+        // depois dela), e era isso que fazia o cadastro de um host da LAN dar
+        // erro na primeira vez, só funcionando após reabrir o app. Não
+        // aguardamos: o boot não fica refém da resposta do usuário.
+        unawaited(LocalNetworkPermission.prime());
 
         // Mata filhos órfãos desta instância ou de instâncias já encerradas,
         // preservando agents/LSP/tasks de outros Cockpits ainda vivos.

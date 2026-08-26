@@ -17,6 +17,12 @@ class _RpcUnknown implements Exception {
 /// Sessões pertencem ao [TerminalService], não às conexões: um cliente que
 /// desconecta faz detach implícito e a sessão continua viva (reattach later).
 class RemoteServer {
+  /// Caminho da CLI `cockpit` **neste host**, resolvido no bootstrap. A pasta
+  /// dela entra no PATH de cada PTY, para que `cockpit …` funcione num
+  /// terminal remoto (os comandos são atendidos pelo cliente, do outro lado do
+  /// SSH). `null` = CLI não encontrada; o shell segue sem ela.
+  static String? cliPath;
+
   RemoteServer(
     this._terminals,
     this._files,
@@ -129,7 +135,10 @@ class RemoteServer {
     _listener!.listen(_accept);
     // Socket de status ao lado do socket principal. Falha ao bindar (ex.: path
     // longo demais) é não-fatal: o servidor segue sem turn-status.
-    _statusReceiver = TurnStatusReceiver(_broadcastTurnStatus);
+    _statusReceiver = TurnStatusReceiver(
+      _broadcastTurnStatus,
+      onCommand: _forwardCommandToClient,
+    );
     try {
       await _statusReceiver!.bind('$socketPath.status');
     } catch (_) {
@@ -139,6 +148,76 @@ class RemoteServer {
     _armOwnershipWatch();
     _armIdleTimer();
   }
+
+  /// Correlaciona os comandos de CLI em voo (rid → quem espera a resposta).
+  final Map<int, Completer<Map<String, Object?>>> _cliCalls = {};
+  int _nextCliRid = 0;
+
+  /// Teto de espera de um comando de CLI. O agente no host está bloqueado
+  /// nisto, então o timeout é curto o bastante para não pendurar um turno e
+  /// longo o bastante para uma query de banco atravessar o SSH.
+  static const Duration _cliTimeout = Duration(seconds: 30);
+
+  /// Encaminha um comando da CLI do host ao **cliente** e devolve a resposta.
+  ///
+  /// O host não executa nada: quem tem abas, workspaces e conexões de banco é
+  /// o Cockpit do outro lado. Vai pelo RPC do protocolo, na direção inversa da
+  /// habitual (normalmente é o cliente que pergunta).
+  Future<Map<String, Object?>> _forwardCommandToClient(
+    Map<String, Object?> request,
+  ) async {
+    // Sem cliente não há a quem perguntar — e o agente recebe um erro em vez
+    // de esperar o timeout inteiro.
+    final connection = _connections.isEmpty ? null : _connections.last;
+    if (connection == null) {
+      return <String, Object?>{
+        'ok': false,
+        'error': 'no Cockpit client attached to this host',
+      };
+    }
+    final rid = _nextCliRid++;
+    final completer = Completer<Map<String, Object?>>();
+    _cliCalls[rid] = completer;
+    connection._onRpcResponse = _completeCliCall;
+    connection._send(RpcRequest(rid: rid, method: 'cli.cmd', params: request));
+    try {
+      return await completer.future.timeout(_cliTimeout);
+    } on TimeoutException {
+      return <String, Object?>{
+        'ok': false,
+        'error':
+            'the Cockpit client did not answer in '
+            '${_cliTimeout.inSeconds}s',
+      };
+    } finally {
+      _cliCalls.remove(rid);
+    }
+  }
+
+  void _completeCliCall(RpcResponse response) {
+    final completer = _cliCalls.remove(response.rid);
+    if (completer == null || completer.isCompleted) return;
+    if (response.ok) {
+      final data = response.data;
+      completer.complete(<String, Object?>{
+        'ok': true,
+        if (data != null) 'data': data,
+      });
+    } else {
+      completer.complete(<String, Object?>{
+        'ok': false,
+        'error': response.detail ?? response.code ?? 'command failed',
+      });
+    }
+  }
+
+  /// Endereço do socket que recebe status do hook **e** comandos da CLI deste
+  /// host (`<socket>.status`). `null` se o bind falhou.
+  String? get statusSocketPath => _statusReceiver?.socketPath;
+
+  /// Token exigido nesse socket quando o transporte é TCP (Windows). `null` no
+  /// UDS, onde a permissão do arquivo já protege.
+  String? get statusToken => _statusReceiver?.token;
 
   /// Reenvia um status de turno (vindo do hook no host) pra todos os clientes
   /// conectados. O cliente roteia por `paneId` — típico 1 cliente por host.
@@ -224,6 +303,10 @@ class _Connection {
   }
 
   Future<void> _pending = Future.value();
+
+  /// Entregue pelo [RemoteServer]: recebe as [RpcResponse] deste cliente para
+  /// os comandos de CLI que o host encaminhou.
+  void Function(RpcResponse response)? _onRpcResponse;
 
   final Socket _socket;
   final TerminalService _terminals;
@@ -334,6 +417,14 @@ class _Connection {
                   for (final e in fromClient.entries)
                     if (!_statusEnvKeys.contains(e.key)) e.key: e.value,
                   ..._statusEnv,
+                  // Marca a sessão como remota. A CLI e o agente leem isto pra
+                  // saber que os comandos são atendidos pelo Cockpit do OUTRO
+                  // lado do SSH — e que nem todos atravessam.
+                  'COCKPIT_REMOTE': '1',
+                  // Deixa o binário `cockpit` do host alcançável no shell. O
+                  // PATH aqui é do HOST (ao contrário do cliente, que não pode
+                  // mandar o dele: destruiria o PATH desta máquina).
+                  ..._cliPathEnv(fromClient['PATH']),
                 };
           final info = await _terminals.open(
             PtySpawnSpec(
@@ -412,6 +503,11 @@ class _Connection {
         case RpcRequest():
           await _handleRpc(message);
 
+        // Resposta do CLIENTE a um comando da CLI que encaminhamos (direção
+        // inversa do RPC: normalmente é o cliente que pergunta).
+        case RpcResponse():
+          _onRpcResponse?.call(message);
+
         // Tipo desconhecido (cliente mais novo): ignora — forward-compat.
         case UnknownMessage():
           break;
@@ -423,7 +519,6 @@ class _Connection {
             PtyOutput() ||
             PtyExited() ||
             TurnStatus() ||
-            RpcResponse() ||
             RemoteError():
           _send(const RemoteError(code: 'bad_message'));
       }
@@ -434,6 +529,20 @@ class _Connection {
     } catch (e) {
       _send(RemoteError(code: 'internal', detail: '$e', rid: _ridOf(message)));
     }
+  }
+
+  /// Prefixa a pasta da CLI `cockpit` deste host no PATH da PTY, para que
+  /// `cockpit …` resolva num terminal remoto como resolve num local. Sem a CLI
+  /// instalada, devolve vazio (e o comando segue "not found", como hoje).
+  Map<String, String> _cliPathEnv(String? inherited) {
+    final cli = RemoteServer.cliPath;
+    if (cli == null || cli.isEmpty) return const <String, String>{};
+    final dir = File(cli).parent.path;
+    final sep = Platform.isWindows ? ';' : ':';
+    final base = (inherited == null || inherited.isEmpty)
+        ? (Platform.environment['PATH'] ?? '')
+        : inherited;
+    return <String, String>{'PATH': base.isEmpty ? dir : '$dir$sep$base'};
   }
 
   /// `rid` da requisição em tratamento, pra que o erro volte ao chamador certo
@@ -605,12 +714,23 @@ class _Connection {
 /// [hookEnv], injetado no env de cada PTY. O envelope do hook é
 /// `{paneId, st, ev, sid, tx, hn, tid?, tok?}` (ver cli/src/hook.rs).
 class TurnStatusReceiver {
-  TurnStatusReceiver(this.onStatus);
+  TurnStatusReceiver(this.onStatus, {this.onCommand});
 
   final void Function(TurnStatus status) onStatus;
 
+  /// Comando da CLI `cockpit` rodando NO HOST (`{"type":"cmd",…}`). O host não
+  /// executa nada: encaminha ao cliente, que é quem tem abas, workspaces e
+  /// conexões de banco, e devolve a resposta por esta mesma conexão.
+  ///
+  /// `null` = nenhum cliente conectado; a CLI recebe um erro em vez de pendurar.
+  Future<Map<String, Object?>> Function(Map<String, Object?> request)?
+  onCommand;
+
   LocalListener? _endpoint;
   String? socketPath;
+
+  /// Token exigido no envelope quando o transporte é TCP (ver [hookEnv]).
+  String? get token => _endpoint?.token;
 
   /// Env que leva o hook até aqui. No POSIX é o path do socket; no Windows,
   /// porta + token — as duas formas que o `cockpit hook` já sabe ler.
@@ -635,19 +755,21 @@ class TurnStatusReceiver {
   }
 
   void _accept(Socket socket) {
-    // Uma linha JSON por conexão; o hook fecha logo após escrever.
+    // Uma linha JSON por conexão. O hook (status) escreve e fecha; a CLI
+    // (comando) espera UMA linha de resposta antes de fechar — por isso o
+    // socket é passado adiante em vez de destruído no fim da linha.
     socket
         .cast<List<int>>()
         .transform(utf8.decoder)
         .transform(const LineSplitter())
         .listen(
-          _handleLine,
+          (line) => _handleLine(line, socket),
           onError: (Object _) => socket.destroy(),
           onDone: socket.destroy,
         );
   }
 
-  void _handleLine(String line) {
+  void _handleLine(String line, [Socket? socket]) {
     if (line.trim().isEmpty) return;
     Object? decoded;
     try {
@@ -661,6 +783,12 @@ class TurnStatusReceiver {
     // traz o token que foi injetado no env da PTY.
     final expected = _endpoint?.token;
     if (expected != null && json['tok'] != expected) return;
+    // Envelope da CLI interna (`type:"cmd"`) — mesmo socket do hook,
+    // discriminado pelo campo `type`, como no app cliente.
+    if (json['type'] == 'cmd') {
+      _handleCommand(json, socket);
+      return;
+    }
     final paneId = json['paneId'];
     final status = json['st'];
     if (paneId is! String || status is! String) return;
@@ -674,6 +802,36 @@ class TurnStatusReceiver {
         harness: json['hn'] as String?,
       ),
     );
+  }
+
+  /// Encaminha o comando ao cliente e escreve a resposta de volta no socket.
+  /// Erro vira `{ok:false,error:…}` — a CLI já sabe ler essa forma.
+  Future<void> _handleCommand(
+    Map<String, Object?> request,
+    Socket? socket,
+  ) async {
+    if (socket == null) return;
+    Map<String, Object?> reply;
+    final handler = onCommand;
+    if (handler == null) {
+      reply = <String, Object?>{
+        'ok': false,
+        'error': 'no Cockpit client attached to this host',
+      };
+    } else {
+      try {
+        reply = await handler(request);
+      } on Object catch (e) {
+        reply = <String, Object?>{'ok': false, 'error': '$e'};
+      }
+    }
+    try {
+      socket.write('${jsonEncode(reply)}\n');
+      await socket.flush();
+    } on Object {
+      // Cliente da CLI desistiu (Ctrl-C / timeout) — nada a fazer.
+    }
+    await socket.close();
   }
 
   Future<void> close() async {

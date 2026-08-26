@@ -62,4 +62,48 @@ void main() {
       ),
     );
   });
+
+  test('pasta nova é enumerada arquivo a arquivo (-uall)', () async {
+    // Sem `-uall` o git colapsa numa entrada só (`?? .cockpit/`) e o cliente
+    // desenhava a pasta como se fosse um arquivo no Source Control.
+    Directory('${repo.path}/.cockpit').createSync();
+    File('${repo.path}/.cockpit/tasks.json').writeAsStringSync('{}\n');
+    File('${repo.path}/.cockpit/databases.json').writeAsStringSync('{}\n');
+
+    final status = await git.status(repo.path);
+    final paths = status.files.map((f) => f.path).toSet();
+    expect(paths, contains('.cockpit/tasks.json'));
+    expect(paths, contains('.cockpit/databases.json'));
+    expect(
+      paths.any((p) => p.endsWith('/')),
+      isFalse,
+      reason: 'nenhuma entrada deve ser uma pasta colapsada',
+    );
+  });
+
+  test('rename não gera entrada fantasma com o nome cortado', () async {
+    File('${repo.path}/old.txt').writeAsStringSync('one\n');
+    await git.stage(repo.path, ['old.txt']);
+    await git.commit(repo.path, 'first');
+    File('${repo.path}/old.txt').renameSync('${repo.path}/new.txt');
+    await git.stage(repo.path, ['old.txt', 'new.txt']);
+
+    final status = await git.status(repo.path);
+    final paths = status.files.map((f) => f.path).toList();
+    // Com `-z` o caminho de ORIGEM vem num token próprio; sem pulá-lo, ele
+    // virava uma entrada com os 3 primeiros caracteres comidos ("txt").
+    expect(paths, ['new.txt']);
+    expect(status.files.single.staged, 'R');
+  });
+
+  test('pasta ignorada aparece como !! e não como mudança', () async {
+    File('${repo.path}/.gitignore').writeAsStringSync('build/\n');
+    Directory('${repo.path}/build').createSync();
+    File('${repo.path}/build/out.o').writeAsStringSync('x\n');
+
+    final status = await git.status(repo.path);
+    final ignored = status.files.where((f) => f.staged == '!').toList();
+    expect(ignored, isNotEmpty);
+    expect(ignored.first.path, startsWith('build'));
+  });
 }

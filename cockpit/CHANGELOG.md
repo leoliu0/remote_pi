@@ -24,6 +24,43 @@ As versões seguem o `version:` do `pubspec.yaml` (SSOT). O campo `notes` do
     linhas não-vazias — o começo da seção deve fazer sentido sozinho.
 -->
 
+## [1.28.12] - 2026-08-26
+
+**Still a beta for the upcoming 2.0.0.** Remote workspaces catch up with local
+ones: multi-repo folders work over SSH, and the `cockpit` CLI now answers in
+remote terminals. Plus a round of fixes for iPad and Android.
+
+### Added
+
+- **Multi-repo works on remote workspaces.** Point one at a folder holding
+  several repositories and you get what you already had locally: the tree split
+  per repo, the aggregate badge on the rail, worktrees listed for every repo,
+  and git actions targeting one repo at a time.
+- **`cockpit` works in a remote terminal.** An agent over SSH can query the
+  workspace's databases, read another tab, send text to it, open a file or a new
+  tab — all handled by the Cockpit on your machine. Commands whose argument
+  belongs to the other machine (`browse`, `http`) say so instead of doing the
+  wrong thing quietly.
+
+### Fixed
+
+- **A hidden folder with changes showed up as a file in Source Control.** A new
+  `.cockpit/` appeared as a single entry named `.cockpit` on remote workspaces;
+  its files are now listed one by one. Renames no longer leave a phantom entry
+  with a clipped name, and ignored folders are treated as ignored.
+- **Opening a text file on a remote workspace could spin forever.** The content
+  arrived but the tab kept showing the spinner until you switched tabs and came
+  back.
+- **iOS asked for local network permission at the worst moment.** Adding a host
+  on your network failed and showed the permission dialog at the same time,
+  working only after restarting the app. The dialog now comes up on launch.
+- **On iPad and Android**, the redundant "SSH" badge is gone (every workspace
+  there is remote), a long press opens the context menu on the workspace rail,
+  and the worktree chevron gave way to a double tap on the card.
+
+**Heads up:** update the server on your host to get the Source Control fixes
+and to have the CLI answer there.
+
 ## [1.28.11] - 2026-08-25
 
 **Still a beta for the upcoming 2.0.0.** `.http` files now open as a request
