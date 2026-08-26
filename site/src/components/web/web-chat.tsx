@@ -444,124 +444,157 @@ export function WebChat({
           </div>
         )}
 
-        {messages.map((m) => (
-          <div key={m.id} className="w-full">
-            {/* USER BUBBLE */}
-            {m.role === "user" && (
-              <div className="flex justify-end mb-2">
-                <div className="max-w-[85%] sm:max-w-[75%] rounded-2xl rounded-tr-sm bg-[#16202c] border border-[#4fc3f7]/25 px-4 py-3 text-white text-sm shadow-md">
-                  <div className="whitespace-pre-wrap font-[family-name:var(--ff-body)]">{m.text}</div>
-                  <div className="mt-1 text-[10px] text-[#4fc3f7]/70 text-right font-mono flex items-center justify-end gap-1.5">
-                    <span>{new Date(m.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
-                    {m.status === "sending" && <span className="text-[#888]">⏳</span>}
-                    {m.status === "sent" && <span className="text-[#5fd38a]">✓</span>}
-                  </div>
-                </div>
-              </div>
-            )}
+        {messages.map((m) => {
+          // Determine status color for tool card (Mobile Parity: ToolRequestCard)
+          const toolStatus = m.tool?.status || "done";
+          const toolColor =
+            toolStatus === "pending"
+              ? "#00D4FF"
+              : toolStatus === "done"
+              ? "#6CD28A"
+              : toolStatus === "denied"
+              ? "#6B6B6B"
+              : "#E5484D";
 
-            {/* ASSISTANT MESSAGE */}
-            {m.role === "assistant" && (
-              <div className="flex justify-start mb-2">
-                <div className="w-full max-w-[94%] sm:max-w-[90%] text-sm text-[#e0e0e0] leading-relaxed">
-                  <div className="bg-[#0e1117] border border-white/10 rounded-2xl px-4 py-3.5 shadow-sm">
-                    <div className="whitespace-pre-wrap font-[family-name:var(--ff-body)] text-sm">
-                      {m.text}
-                      {m.isStreaming && (
-                        <span className="inline-block w-2 h-4 ml-1 bg-[#4fc3f7] animate-pulse align-middle" />
-                      )}
+          const statusLabel =
+            toolStatus === "pending"
+              ? "RUNNING"
+              : toolStatus === "done"
+              ? "DONE"
+              : toolStatus === "denied"
+              ? "DENIED"
+              : "FAILED";
+
+          return (
+            <div key={m.id} className="w-full">
+              {/* USER BUBBLE (Mobile Parity: #1A1A1A pill) */}
+              {m.role === "user" && (
+                <div className="flex justify-end mb-2.5">
+                  <div className="max-w-[85%] sm:max-w-[75%] rounded-2xl rounded-tr-sm bg-[#1A1A1A] border border-[#262626] px-4 py-2.5 text-white text-sm shadow-xs">
+                    <div className="whitespace-pre-wrap font-[family-name:var(--ff-body)]">{m.text}</div>
+                    <div className="mt-1 text-[10px] text-[#8A8A8A] text-right font-mono flex items-center justify-end gap-1.5">
+                      <span>{new Date(m.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+                      {m.status === "sending" && <span className="text-[#6B6B6B]">⏳</span>}
+                      {m.status === "sent" && <span className="text-[#6CD28A]">✓</span>}
                     </div>
                   </div>
                 </div>
-              </div>
-            )}
+              )}
 
-            {/* TOOL CALL CARD */}
-            {m.role === "tool" && m.tool && (
-              <div className="my-2 max-w-[94%] sm:max-w-[90%]">
-                <div className="rounded-xl border border-white/15 bg-[#0b0d13] overflow-hidden shadow-sm">
-                  {/* Tool Header */}
-                  <div className="px-3.5 py-2.5 bg-white/[0.04] border-b border-white/10 flex items-center justify-between">
-                    <div className="flex items-center gap-2 font-mono text-xs text-[#4fc3f7]">
-                      <span className="w-2 h-2 rounded-full bg-[#4fc3f7]" />
-                      <span className="font-semibold uppercase">{m.tool.tool}</span>
-                      <span className="text-[#888] truncate max-w-[180px] sm:max-w-[340px]">{m.tool.command}</span>
+              {/* ASSISTANT MESSAGE */}
+              {m.role === "assistant" && (
+                <div className="flex justify-start mb-2.5">
+                  <div className="w-full max-w-[95%] sm:max-w-[90%] text-sm text-[#F0F0F0] leading-relaxed">
+                    <div className="bg-[#0A0A0A] border border-[#1A1A1A] rounded-2xl p-4 shadow-xs">
+                      <div className="whitespace-pre-wrap font-[family-name:var(--ff-body)] text-sm leading-relaxed">
+                        {m.text}
+                        {m.isStreaming && (
+                          <span className="inline-block w-2 h-4 ml-1 bg-[#00D4FF] animate-pulse align-middle" />
+                        )}
+                      </div>
                     </div>
+                  </div>
+                </div>
+              )}
 
-                    <div className="flex items-center gap-2">
-                      {m.tool.status === "pending" && (
-                        <div className="flex items-center gap-1.5">
-                          <button
-                            type="button"
-                            onClick={() => handleToolDecision(m.tool!.id, "allow")}
-                            className="px-2.5 py-1 bg-[#5fd38a] hover:bg-[#4bc275] text-[#04222e] text-xs font-semibold rounded cursor-pointer transition-colors"
-                          >
-                            Approve
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleToolDecision(m.tool!.id, "deny")}
-                            className="px-2.5 py-1 bg-red-500/20 hover:bg-red-500/30 text-red-400 text-xs font-semibold rounded border border-red-500/40 cursor-pointer transition-colors"
-                          >
-                            Deny
-                          </button>
-                        </div>
-                      )}
-                      {m.tool.status === "done" && (
-                        <span className="text-[11px] font-mono text-[#5fd38a] flex items-center gap-1">
-                          ✓ Done
+              {/* TOOL CALL CARD (Mobile Parity: ToolRequestCard with Status Border & Glow) */}
+              {m.role === "tool" && m.tool && (
+                <div className="my-2 max-w-[95%] sm:max-w-[90%]">
+                  <div
+                    className="rounded-xl bg-[#0A0A0A] overflow-hidden transition-all"
+                    style={{
+                      border: `1px solid ${toolColor}`,
+                      boxShadow: `0 0 16px ${toolColor}1F`,
+                    }}
+                  >
+                    {/* Tool Header */}
+                    <div className="px-3.5 py-2 bg-white/[0.02] border-b border-[#1A1A1A] flex items-center justify-between">
+                      <div className="flex items-center gap-2 font-mono text-xs font-bold" style={{ color: toolColor }}>
+                        <span>&gt;_</span>
+                        <span className="tracking-wide uppercase">{m.tool.tool}</span>
+                        {m.tool.command && (
+                          <span className="text-[#8A8A8A] font-normal font-mono truncate max-w-[180px] sm:max-w-[360px]">
+                            {m.tool.command}
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        {toolStatus === "pending" && (
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => handleToolDecision(m.tool!.id, "allow")}
+                              className="px-2 py-0.5 bg-[#6CD28A] hover:bg-[#5bc078] text-[#000000] text-xs font-semibold rounded font-mono cursor-pointer transition-colors"
+                            >
+                              Approve
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleToolDecision(m.tool!.id, "deny")}
+                              className="px-2 py-0.5 bg-red-500/20 hover:bg-red-500/30 text-[#E5484D] text-xs font-semibold rounded border border-[#E5484D]/40 font-mono cursor-pointer transition-colors"
+                            >
+                              Deny
+                            </button>
+                          </div>
+                        )}
+
+                        <span className="text-[11px] font-mono font-bold tracking-wider" style={{ color: toolColor }}>
+                          {statusLabel}
                         </span>
-                      )}
-                      {m.tool.status === "denied" && (
-                        <span className="text-[11px] font-mono text-red-400">✗ Denied</span>
-                      )}
-                      {m.tool.status === "error" && (
-                        <span className="text-[11px] font-mono text-red-400">✗ Error</span>
-                      )}
+                      </div>
                     </div>
+
+                    {/* Tool Command / Args Box */}
+                    {m.tool.args && Object.keys(m.tool.args).length > 0 && !m.tool.command && (
+                      <div className="p-2.5 bg-[#050505] font-mono text-xs text-[#8A8A8A] border-b border-[#1A1A1A] overflow-x-auto">
+                        <pre className="text-white/80">{JSON.stringify(m.tool.args, null, 2)}</pre>
+                      </div>
+                    )}
+
+                    {/* Tool Diff / Output View */}
+                    {m.tool.diff && m.tool.diff.hunks && (
+                      <div className="p-3 bg-[#050505] font-mono text-xs overflow-x-auto space-y-0.5 border-t border-[#1A1A1A]">
+                        {m.tool.diff.hunks.map((line, i) => (
+                          <div
+                            key={i}
+                            className={`px-2 py-0.5 rounded ${
+                              line.startsWith("+")
+                                ? "bg-[#6CD28A]/15 text-[#6CD28A] font-semibold"
+                                : line.startsWith("-")
+                                ? "bg-[#E5484D]/15 text-[#E5484D]"
+                                : "text-[#8A8A8A]"
+                            }`}
+                          >
+                            {line}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Tool Output Result */}
+                    {m.tool.result !== undefined && m.tool.result !== null && (
+                      <div className="p-3 bg-[#050505] font-mono text-xs text-[#8A8A8A] whitespace-pre-wrap max-h-56 overflow-y-auto border-t border-[#1A1A1A]">
+                        {typeof m.tool.result === "string" ? m.tool.result : JSON.stringify(m.tool.result, null, 2)}
+                      </div>
+                    )}
                   </div>
-
-                  {/* Tool Diff / Output View */}
-                  {m.tool.diff && m.tool.diff.hunks && (
-                    <div className="p-3 bg-black/70 font-mono text-xs overflow-x-auto space-y-0.5">
-                      {m.tool.diff.hunks.map((line, i) => (
-                        <div
-                          key={i}
-                          className={`px-2 py-0.5 rounded ${
-                            line.startsWith("+")
-                              ? "bg-emerald-500/15 text-emerald-300 font-semibold"
-                              : line.startsWith("-")
-                              ? "bg-red-500/15 text-red-300"
-                              : "text-[#888]"
-                          }`}
-                        >
-                          {line}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-
-                  {m.tool.output && (
-                    <div className="p-3 bg-black/60 font-mono text-xs text-[#a3a3a3] whitespace-pre-wrap max-h-48 overflow-y-auto border-t border-white/5">
-                      {m.tool.output}
-                    </div>
-                  )}
                 </div>
-              </div>
-            )}
+              )}
 
-            {/* COMPACTION MESSAGE */}
-            {m.role === "compaction" && (
-              <div className="my-3 flex justify-center">
-                <div className="px-3.5 py-1.5 rounded-full bg-white/[0.04] border border-white/10 text-xs font-mono text-[#888] flex items-center gap-2">
-                  <span>📦</span>
-                  <span>{m.text}</span>
-                  {m.tokensBefore && <span className="text-[#555]">({m.tokensBefore.toLocaleString()} tokens)</span>}
+              {/* COMPACTION MESSAGE (Mobile Parity: Pill with ModelBadge tokens) */}
+              {m.role === "compaction" && (
+                <div className="my-3 flex justify-center">
+                  <div className="px-3 py-1 rounded-full bg-[#161616] border border-[#1F1F1F] text-xs font-mono text-[#8A8A8A] flex items-center gap-1.5">
+                    <span>📦</span>
+                    <span>{m.text}</span>
+                    {m.tokensBefore && <span className="text-[#6B6B6B]">({m.tokensBefore.toLocaleString()} tokens)</span>}
+                  </div>
                 </div>
-              </div>
-            )}
-          </div>
-        ))}
+              )}
+            </div>
+          );
+        })}
 
         {isWorking && (
           <div className="flex items-center justify-between text-xs font-mono text-[#4fc3f7] py-2 px-3 rounded-xl bg-[#4fc3f7]/10 border border-[#4fc3f7]/20 w-fit animate-pulse">

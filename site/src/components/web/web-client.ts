@@ -28,6 +28,7 @@ export interface ToolCallData {
   args?: Record<string, unknown> | null;
   command?: string;
   output?: string;
+  result?: unknown;
   status: "pending" | "allowed" | "denied" | "done" | "error";
   error?: string;
   diff?: {
