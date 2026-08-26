@@ -9,6 +9,7 @@ import {
   ToolCallData,
   RemotePiRelayClient,
 } from "./web-client";
+import { MarkdownRenderer } from "./markdown-renderer";
 
 interface WebChatProps {
   session: PairedSession;
@@ -554,11 +555,11 @@ export function WebChat({
 
           return (
             <div key={m.id} className="w-full">
-              {/* USER BUBBLE (Mobile Parity: #1A1A1A pill) */}
+              {/* USER BUBBLE (Mobile Parity: Capped width, #1A1A1A pill) */}
               {m.role === "user" && (
-                <div className="flex justify-end mb-2.5">
-                  <div className="max-w-[85%] sm:max-w-[75%] rounded-2xl rounded-tr-sm bg-[#1A1A1A] border border-[#262626] px-4 py-2.5 text-white text-sm shadow-xs">
-                    <div className="whitespace-pre-wrap font-[family-name:var(--ff-body)]">{m.text}</div>
+                <div className="flex justify-end mb-3">
+                  <div className="max-w-[340px] sm:max-w-[420px] rounded-2xl rounded-tr-sm bg-[#1A1A1A] border border-[#262626] px-4 py-2.5 text-white text-sm shadow-xs select-text">
+                    <div className="whitespace-pre-wrap font-mono text-sm leading-relaxed">{m.text}</div>
                     <div className="mt-1 text-[10px] text-[#8A8A8A] text-right font-mono flex items-center justify-end gap-1.5">
                       <span>{new Date(m.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
                       {m.status === "sending" && <span className="text-[#6B6B6B]">⏳</span>}
@@ -568,19 +569,10 @@ export function WebChat({
                 </div>
               )}
 
-              {/* ASSISTANT MESSAGE */}
+              {/* ASSISTANT MESSAGE (Mobile Parity: Full-width Native Markdown) */}
               {m.role === "assistant" && (
-                <div className="flex justify-start mb-2.5">
-                  <div className="w-full max-w-[95%] sm:max-w-[90%] text-sm text-[#F0F0F0] leading-relaxed">
-                    <div className="bg-[#0A0A0A] border border-[#1A1A1A] rounded-2xl p-4 shadow-xs">
-                      <div className="whitespace-pre-wrap font-[family-name:var(--ff-body)] text-sm leading-relaxed">
-                        {m.text}
-                        {m.isStreaming && (
-                          <span className="inline-block w-2 h-4 ml-1 bg-[#00D4FF] animate-pulse align-middle" />
-                        )}
-                      </div>
-                    </div>
-                  </div>
+                <div className="w-full my-2 text-sm leading-relaxed select-text">
+                  <MarkdownRenderer content={m.text} isStreaming={m.isStreaming} />
                 </div>
               )}
 
