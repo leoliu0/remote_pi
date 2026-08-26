@@ -168,7 +168,18 @@ export function getSavedSessions(): PairedSession[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY_SESSIONS);
     if (!raw) return [];
-    return JSON.parse(raw);
+    const list: PairedSession[] = JSON.parse(raw);
+    const cleaned = list.filter(
+      (s) =>
+        s.id !== "demo_session_1" &&
+        !s.id?.startsWith("demo_") &&
+        !s.name?.toLowerCase().includes("demo") &&
+        !s.device?.toLowerCase().includes("simulated")
+    );
+    if (cleaned.length !== list.length) {
+      localStorage.setItem(STORAGE_KEY_SESSIONS, JSON.stringify(cleaned));
+    }
+    return cleaned;
   } catch {
     return [];
   }
