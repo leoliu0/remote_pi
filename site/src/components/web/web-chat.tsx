@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useLayoutEffect, useRef } from "react";
 import {
   WebChatMessage,
   PairedSession,
@@ -61,8 +61,16 @@ export function WebChat({
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
 
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const isInitialLoadRef = useRef(true);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const clientRef = useRef<RemotePiRelayClient | null>(null);
+  // Synchronously position at the bottom before browser paints
+  useLayoutEffect(() => {
+    if (isInitialLoadRef.current && messages.length > 0 && scrollContainerRef.current) {
+      scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight;
+      isInitialLoadRef.current = false;
+    }
+  }, [messages]);
   const activeStreamIdRef = useRef<string | null>(null);
 
   // Initialize Real WebSocket Relay Client & Load Session History
@@ -91,7 +99,11 @@ export function WebChat({
       .then((data) => {
         if (data && data.ok && Array.isArray(data.messages) && data.messages.length > 0) {
           setMessages(data.messages);
-          setTimeout(() => scrollToBottom(false), 50);
+          requestAnimationFrame(() => {
+            if (scrollContainerRef.current) {
+              scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight;
+            }
+          });
         }
       })
       .catch(() => {});
@@ -116,10 +128,13 @@ export function WebChat({
     client.onSessionHistory = (histMsgs) => {
       if (histMsgs.length > 0) {
         setMessages(histMsgs);
-        setTimeout(() => scrollToBottom(false), 50);
+        requestAnimationFrame(() => {
+          if (scrollContainerRef.current) {
+            scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight;
+          }
+        });
       }
     };
-
     client.onMessage = (msg) => {
       setMessages((prev) => {
         // If message with same id exists, update it; otherwise append
@@ -258,10 +273,14 @@ export function WebChat({
 
   const scrollToBottom = (smooth = true) => {
     if (!scrollContainerRef.current) return;
-    scrollContainerRef.current.scrollTo({
-      top: scrollContainerRef.current.scrollHeight,
-      behavior: smooth ? "smooth" : "auto",
-    });
+    if (!smooth) {
+      scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight;
+    } else {
+      scrollContainerRef.current.scrollTo({
+        top: scrollContainerRef.current.scrollHeight,
+        behavior: "smooth",
+      });
+    }
     setUnreadCount(0);
     setShowScrollBottom(false);
   };
@@ -476,9 +495,14 @@ export function WebChat({
 
       {/* 2. CHAT TIMELINE / MESSAGE LIST */}
       <div
-        ref={scrollContainerRef}
+        ref={(el) => {
+          (scrollContainerRef as any).current = el;
+          if (el && isInitialLoadRef.current && messages.length > 0) {
+            el.scrollTop = el.scrollHeight;
+          }
+        }}
         onScroll={handleScroll}
-        className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4 relative scroll-smooth"
+        className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4 relative"
       >
         {(() => {
           const visibleMessages = messages.filter((m) => {
