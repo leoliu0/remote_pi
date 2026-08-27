@@ -4839,42 +4839,76 @@ export function _routeClientMessageFrom(
       break;
     }
     case "model_set":
-      void handleModelSet(
-        _pi,
-        (_lastEventCtx ?? _lastCtx) as ActionCtx | null,
-        ensureModelRegistry((_lastEventCtx ?? _lastCtx) as ActionCtx | null),
-        sender,
-        msg,
-        _persistModelDefault,
-        (friendlyName) => {
-          _setCurrentModel(friendlyName);
-        },
-      );
+      try {
+        void handleModelSet(
+          _pi,
+          (_lastEventCtx ?? _lastCtx) as ActionCtx | null,
+          ensureModelRegistry((_lastEventCtx ?? _lastCtx) as ActionCtx | null),
+          sender,
+          msg,
+          _persistModelDefault,
+          (friendlyName) => {
+            _setCurrentModel(friendlyName);
+          },
+        ).catch((err) => {
+          sender.send({
+            type: "action_error",
+            in_reply_to: msg.id,
+            action: "model_set",
+            error: err instanceof Error ? err.message : String(err),
+          });
+        });
+      } catch (err: any) {
+        sender.send({
+          type: "action_error",
+          in_reply_to: msg.id,
+          action: "model_set",
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
       break;
     case "thinking_set":
-      handleThinkingSet(_pi, sender, msg, (lvl) => {
-        _currentThinking = lvl;
-        if (_myRoomMeta) _myRoomMeta = { ..._myRoomMeta, thinking: lvl };
-        if (_relay && _myRoomId) {
-          _relay.sendControl({
-            type: "room_meta_update",
-            room_id: _myRoomId,
-            meta: { thinking: lvl },
-          });
-        }
-      });
+      try {
+        handleThinkingSet(_pi, sender, msg, (lvl) => {
+          _currentThinking = lvl;
+          if (_myRoomMeta) _myRoomMeta = { ..._myRoomMeta, thinking: lvl };
+          if (_relay && _myRoomId) {
+            _relay.sendControl({
+              type: "room_meta_update",
+              room_id: _myRoomId,
+              meta: { thinking: lvl },
+            });
+          }
+        });
+      } catch (err: any) {
+        sender.send({
+          type: "action_error",
+          in_reply_to: msg.id,
+          action: "thinking_set",
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
       break;
     case "list_models":
-      handleListModels(
-        ((_lastEventCtx ?? _lastCtx) as ActionCtx | null),
-        ensureModelRegistry((_lastEventCtx ?? _lastCtx) as ActionCtx | null),
-        sender,
-        msg,
-      );
+      try {
+        handleListModels(
+          ((_lastEventCtx ?? _lastCtx) as ActionCtx | null),
+          ensureModelRegistry((_lastEventCtx ?? _lastCtx) as ActionCtx | null),
+          sender,
+          msg,
+          _currentModelName(),
+        );
+      } catch (err: any) {
+        sender.send({
+          type: "error",
+          in_reply_to: msg.id,
+          code: "internal_error",
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
       break;
   }
 }
-
 /**
  * Backward-compatible shim for legacy callers + tests that didn't track
  * a specific sender channel. Routes to the most recently attached owner,

@@ -26,8 +26,8 @@ import type {
   ServerMessage,
   WireModel,
   ActionName,
+  ThinkingLevel,
 } from "../protocol/types.js";
-
 /**
  * Structural subset of the SDK's `Model<Api>` interface (defined in
  * `@earendil-works/pi-ai`, which is a transitive dep — not re-exported by
@@ -114,15 +114,12 @@ export interface ActionModelRegistry {
  *  and the `current` echo, so both stay in lockstep. */
 export function wireFromModel(model: Model<any>): WireModel {
   return {
-    id: model.id,
-    name: model.name,
-    provider: model.provider,
-    reasoning: model.reasoning,
-    context_window: model.contextWindow,
-    // Plan/30: vision = model accepts image input. `Model.input` is
-    // `("text" | "image")[]` at runtime (confirmed against pi-ai). `?.` guards
-    // a fake/partial model in tests → treated as text-only.
-    vision: model.input?.includes("image") ?? false,
+    id: model?.id || "unknown",
+    name: model?.name || model?.id || "unknown",
+    provider: model?.provider || "unknown",
+    reasoning: Boolean(model?.reasoning),
+    context_window: typeof model?.contextWindow === "number" ? model.contextWindow : 128000,
+    vision: Boolean(model?.input && Array.isArray(model.input) && model.input.includes("image")),
   };
 }
 
@@ -240,8 +237,8 @@ export function handleThinkingSet(
 }
 
 export async function handleModelSet(
-  pi: ActionPi,
-  ctx: ActionCtx | null,
+  pi: ActionPi | null | undefined,
+  ctx: ActionCtx | null | undefined,
   reg: ActionModelRegistry,
   sender: ActionReplySender,
   msg: ModelSetMsg,
@@ -249,11 +246,13 @@ export async function handleModelSet(
   onModelChanged?: (name: string) => void,
 ): Promise<void> {
   await runAsync(sender, msg, "model_set", async () => {
-    // Prefer Pi's LIVE session registry when available so the app sees models
-    // registered dynamically by extensions via `pi.registerProvider(...)`.
-    // Fall back to remote-pi's own disk-backed registry when no ctx exists.
+    if (!pi || typeof pi.setModel !== "function") {
+      throw new Error("Pi agent runtime is not ready to change models");
+    }
     const liveReg = ctx?.modelRegistry ?? reg;
-    liveReg.refresh();
+    try {
+      liveReg.refresh();
+    } catch {}
     let model = liveReg.find(msg.provider, msg.model_id);
     if (!model) {
       const available = liveReg.getAvailable();
@@ -278,11 +277,20 @@ export async function handleModelSet(
     if (!model) {
       throw new Error(`model "${msg.provider}/${msg.model_id}" not in registry`);
     }
-    const success = await pi.setModel(model);
+    let success = false;
+    try {
+      success = await pi.setModel(model);
+    } catch (err: any) {
+      throw new Error(`Failed to set model: ${err?.message || String(err)}`);
+    }
     if (!success) throw new Error("no auth configured for this model");
     const friendlyName = model.name ?? model.id;
-    onPersist?.(model.provider, model.id);
-    onModelChanged?.(friendlyName);
+    try {
+      onPersist?.(model.provider, model.id);
+    } catch {}
+    try {
+      onModelChanged?.(friendlyName);
+    } catch {}
   });
 }
 
@@ -291,22 +299,32 @@ export function handleListModels(
   reg: ActionModelRegistry,
   sender: ActionReplySender,
   msg: ListModelsMsg,
+  currentModelName?: string,
 ): void {
-  // refresh() can throw if `models.json` is malformed — wrap in try so the
-  // app gets an explicit error reply instead of a silent drop.
   try {
-    // Prefer Pi's LIVE session registry when available so the app sees models
-    // registered dynamically by extensions via `pi.registerProvider(...)`.
-    // Fall back to remote-pi's own disk-backed registry when no ctx exists.
     const liveReg = ctx?.modelRegistry ?? reg;
     liveReg.refresh();
-    const models = liveReg.getAvailable().map(wireFromModel);
-    const current = ctx?.getModel?.();
+    let models: WireModel[] = [];
+    try {
+      models = (liveReg.getAvailable() ?? []).map(wireFromModel);
+    } catch {}
+    let current: SdkModelLike | undefined;
+    try {
+      current = ctx?.getModel?.();
+    } catch {}
+    let currentWire: WireModel | undefined = current ? wireFromModel(current) : undefined;
+    if (!currentWire && currentModelName && models.length > 0) {
+      currentWire = models.find(
+        (m) =>
+          m.name.toLowerCase() === currentModelName.toLowerCase() ||
+          m.id.toLowerCase() === currentModelName.toLowerCase()
+      );
+    }
     sender.send({
       type: "models_list",
       in_reply_to: msg.id,
       models,
-      current: current ? wireFromModel(current) : undefined,
+      current: currentWire,
     });
   } catch (e) {
     sender.send({
