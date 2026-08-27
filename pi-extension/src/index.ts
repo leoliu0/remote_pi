@@ -2442,16 +2442,15 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     if (ctx && (ctx as { sessionManager?: unknown }).sessionManager) {
       _hydrateMessageBufferFromSession((ctx as { sessionManager?: unknown }).sessionManager);
     }
-    // Late model hydration: if the model was still unknown at connect (resolved
-    // lazily by the SDK), grab it on the first turn and fan it out — so a daemon
-    // whose model only materialises at turn 1 still reports it to the app.
-    if (!_currentModel) {
-      try {
-        const m = (ctx as Partial<ExtensionContext> & { getModel?: () => { name?: string; id?: string } | undefined }).getModel?.();
-        const name = m?.name ?? m?.id;
-        if (name) _setCurrentModel(name);
-      } catch { /* defensive — never block a turn on a model lookup */ }
-    }
+    // Model hydration: grab the active model on each turn and fan it out
+    try {
+      const m = (ctx as Partial<ExtensionContext> & { getModel?: () => { name?: string; id?: string } | undefined }).getModel?.()
+        ?? (ctx as Partial<ExtensionContext> & { model?: { name?: string; id?: string } }).model;
+      const name = m?.name ?? m?.id;
+      if (name && name !== _currentModel) {
+        _setCurrentModel(name);
+      }
+    } catch { /* defensive — never block a turn on a model lookup */ }
     // Plan/32 Part B: publish working=true as room_meta (raw, no debounce —
     // the debounce lives in the app). Same shape as the model/thinking updates.
     if (_myRoomMeta) _myRoomMeta = { ..._myRoomMeta, working: true };

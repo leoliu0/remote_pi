@@ -46,7 +46,7 @@ class _ModelPickerBodyState extends State<_ModelPickerBody> {
   @override
   void initState() {
     super.initState();
-    _future = _load(forceRefresh: false);
+    _future = _load(forceRefresh: true);
   }
 
   Future<ModelsCatalogue> _load({required bool forceRefresh}) {

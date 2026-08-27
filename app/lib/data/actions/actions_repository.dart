@@ -304,7 +304,26 @@ class ActionsRepository extends Repository implements IActionsRepository {
     // Re-evaluate the session key — the user may have switched rooms
     // mid-flight. We only cache against the key the *response* belongs
     // to, which is the live one when it resolves.
-    _modelsCache[_sessionKey()] = result;
+    final liveKey = _sessionKey();
+    _modelsCache[liveKey] = result;
+
+    // Plan/28: If the Pi returned its active model, update our room meta immediately
+    if (result.current != null) {
+      final currentName = result.current!.name;
+      _lastKnownModelName[liveKey] = currentName;
+      final nextMeta = ActiveRoomMeta(
+        peerEpk: _conn.activePeer?.remoteEpk,
+        roomId: _conn.activeRoomId,
+        model: currentName,
+        thinking: _activeRoomMeta.thinking,
+      );
+      if (nextMeta != _activeRoomMeta) {
+        _activeRoomMeta = nextMeta;
+        if (!_activeRoomMetaController.isClosed) {
+          _activeRoomMetaController.add(nextMeta);
+        }
+      }
+    }
     return result;
   }
 

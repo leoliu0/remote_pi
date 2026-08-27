@@ -26,14 +26,15 @@ class QuickActionsViewModel extends ViewModel<QuickActionsState> {
   bool _disposed = false;
 
   QuickActionsViewModel(this._repo) : super(const QuickActionsIdle()) {
-    // Plan/28 Wave D — seed from the repo's current snapshot before
-    // anything is shown so the first build already has the right
-    // highlight (instead of a flash of "null" while the stream
-    // delivers its first event).
+    // Seed from the repo's current snapshot before anything is shown
     _adoptMeta(_repo.activeRoomMeta);
     _metaSub = _repo.activeRoomMetaStream.listen(_adoptMeta);
+    // Query the agent immediately for the live model catalogue & current active model
+    unawaited(
+      loadModels(forceRefresh: true)
+          .catchError((Object _) => const ModelsCatalogue(models: [])),
+    );
   }
-
   /// Snackbar feed: one string per failure. The page listens with a
   /// `StreamSubscription` so a failed action can show a toast without
   /// blocking the sheet itself.
