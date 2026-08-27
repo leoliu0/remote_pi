@@ -1511,6 +1511,9 @@ class _Translations$settings$page$appearance$es extends Translations$settings$pa
 	@override String get fontPickerUse => 'Usar';
 	@override String get fontPickerDefault => 'Predeterminada';
 	@override String get fontMissing => 'No se encontró en esta máquina — usando el respaldo.';
+	@override String get sectionLayout => 'Diseño';
+	@override String get swapPanelsTitle => 'Invertir paneles';
+	@override String get swapPanelsDesc => 'Coloca los workspaces a la derecha y archivos, búsqueda, git y base de datos a la izquierda.';
 }
 
 // Path: settings.page.notifications
@@ -2480,6 +2483,9 @@ extension on TranslationsEs {
 			'settings.page.appearance.fontPickerUse' => 'Usar',
 			'settings.page.appearance.fontPickerDefault' => 'Predeterminada',
 			'settings.page.appearance.fontMissing' => 'No se encontró en esta máquina — usando el respaldo.',
+			'settings.page.appearance.sectionLayout' => 'Diseño',
+			'settings.page.appearance.swapPanelsTitle' => 'Invertir paneles',
+			'settings.page.appearance.swapPanelsDesc' => 'Coloca los workspaces a la derecha y archivos, búsqueda, git y base de datos a la izquierda.',
 			'settings.page.notifications.sectionTitle' => 'Notificaciones',
 			'settings.page.notifications.enableTitle' => 'Activar notificaciones',
 			'settings.page.notifications.enableDesc' => 'Avisarme cuando un agente termine un turno y la ventana no esté enfocada.',

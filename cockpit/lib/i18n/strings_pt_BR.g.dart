@@ -1511,6 +1511,9 @@ class _Translations$settings$page$appearance$pt_BR extends Translations$settings
 	@override String get fontPickerUse => 'Usar';
 	@override String get fontPickerDefault => 'Padrão';
 	@override String get fontMissing => 'Não encontrada nesta máquina — usando o fallback.';
+	@override String get sectionLayout => 'Layout';
+	@override String get swapPanelsTitle => 'Inverter panes';
+	@override String get swapPanelsDesc => 'Coloca os workspaces à direita e arquivos, busca, git e banco à esquerda.';
 }
 
 // Path: settings.page.notifications
@@ -2480,6 +2483,9 @@ extension on TranslationsPtBr {
 			'settings.page.appearance.fontPickerUse' => 'Usar',
 			'settings.page.appearance.fontPickerDefault' => 'Padrão',
 			'settings.page.appearance.fontMissing' => 'Não encontrada nesta máquina — usando o fallback.',
+			'settings.page.appearance.sectionLayout' => 'Layout',
+			'settings.page.appearance.swapPanelsTitle' => 'Inverter panes',
+			'settings.page.appearance.swapPanelsDesc' => 'Coloca os workspaces à direita e arquivos, busca, git e banco à esquerda.',
 			'settings.page.notifications.sectionTitle' => 'Notificações',
 			'settings.page.notifications.enableTitle' => 'Ativar notificações',
 			'settings.page.notifications.enableDesc' => 'Avisar quando um agente terminar uma resposta e a janela não estiver em foco.',

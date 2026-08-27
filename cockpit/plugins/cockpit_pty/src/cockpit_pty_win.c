@@ -451,6 +451,24 @@ typedef struct PtyHandle
 
     HANDLE hMutex;
 
+    // Job Object que contém o shell e TODA a sua descendência.
+    //
+    // No Windows não há sinal nem process group: `TerminateProcess` mata só o
+    // processo alvo, e os filhos do shell (mais o conhost do ConPTY) viravam
+    // órfãos em "Processos em segundo plano" — issue #163, relatada com
+    // PowerShell 7.
+    //
+    // Criado com JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, o que resolve dois casos
+    // de uma vez: `pty_kill` encerra a árvore inteira, e se o processo dono
+    // morrer (inclusive por crash, sem chance de rodar código de limpeza) o
+    // Windows fecha o job e mata todo mundo sozinho.
+    //
+    // O handle só é fechado quando o processo dono morre (o plugin não tem
+    // `pty_destroy`): fechá-lo antes mataria a árvore, que é exatamente o
+    // efeito do KILL_ON_JOB_CLOSE. Custo: um handle de kernel por terminal
+    // aberto, devolvido ao SO na saída do processo.
+    HANDLE hJob;
+
     WriteQueue *writeQueue;
 
 } PtyHandle;
@@ -657,6 +675,26 @@ FFI_PLUGIN_EXPORT PtyHandle *pty_create(PtyOptions *options)
         return NULL;
     }
 
+    // Job Object: prende o shell e quem ele criar (ver o campo hJob). Falhar
+    // aqui não impede o terminal de funcionar — degrada para o comportamento
+    // antigo (só o shell morre no kill), então seguimos com hJob = NULL.
+    HANDLE hJob = CreateJobObjectW(NULL, NULL);
+    if (hJob != NULL)
+    {
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits = {0};
+        limits.BasicLimitInformation.LimitFlags =
+            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        if (!SetInformationJobObject(hJob,
+                                     JobObjectExtendedLimitInformation,
+                                     &limits,
+                                     sizeof(limits)) ||
+            !AssignProcessToJobObject(hJob, processInfo.hProcess))
+        {
+            CloseHandle(hJob);
+            hJob = NULL;
+        }
+    }
+
     // CreatePseudoConsole duplicated inputReadSide / outputWriteSide into conhost,
     // so the parent must release its own copies now. Keeping outputWriteSide open
     // would prevent the read loop from ever seeing EOF when the child exits (the
@@ -694,6 +732,7 @@ FFI_PLUGIN_EXPORT PtyHandle *pty_create(PtyOptions *options)
     pty->dwProcessId = processInfo.dwProcessId;
     pty->ackRead = options->ackRead;
     pty->hMutex = mutex;
+    pty->hJob = hJob;
     pty->writeQueue = start_write_thread(inputWriteSide);
 
     return pty;
@@ -776,6 +815,34 @@ FFI_PLUGIN_EXPORT int pty_resize(PtyHandle *handle, int rows, int cols)
     size.Y = rows;
 
     return ResizePseudoConsole(handle->hPty, size);
+}
+
+/// Encerra o shell e TUDO o que ele criou.
+///
+/// `TerminateJobObject` alcança a árvore inteira; sem ele, o Dart caía em
+/// `Process.killPid`, que no Windows vira `TerminateProcess` e deixa os filhos
+/// para trás. Devolve 0 em caso de sucesso.
+///
+/// Sem job (a criação falhou), mata ao menos o processo do shell — o mesmo que
+/// acontecia antes, e melhor do que não fazer nada.
+FFI_PLUGIN_EXPORT int pty_kill(PtyHandle *handle)
+{
+    if (handle == NULL)
+    {
+        return -1;
+    }
+    if (handle->hJob != NULL)
+    {
+        return TerminateJobObject(handle->hJob, 1) ? 0 : -1;
+    }
+    HANDLE process = OpenProcess(PROCESS_TERMINATE, FALSE, handle->dwProcessId);
+    if (process == NULL)
+    {
+        return -1;
+    }
+    BOOL ok = TerminateProcess(process, 1);
+    CloseHandle(process);
+    return ok ? 0 : -1;
 }
 
 FFI_PLUGIN_EXPORT int pty_getpid(PtyHandle *handle)

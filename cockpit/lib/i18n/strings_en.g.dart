@@ -3106,6 +3106,15 @@ class Translations$settings$page$appearance$en {
 
 	/// en: 'Not found on this machine — falling back.'
 	String get fontMissing => 'Not found on this machine — falling back.';
+
+	/// en: 'Layout'
+	String get sectionLayout => 'Layout';
+
+	/// en: 'Swap side panels'
+	String get swapPanelsTitle => 'Swap side panels';
+
+	/// en: 'Puts workspaces on the right and files, search, git and database on the left.'
+	String get swapPanelsDesc => 'Puts workspaces on the right and files, search, git and database on the left.';
 }
 
 // Path: settings.page.notifications
@@ -4379,6 +4388,9 @@ extension on Translations {
 			'settings.page.appearance.fontPickerUse' => 'Use',
 			'settings.page.appearance.fontPickerDefault' => 'Default',
 			'settings.page.appearance.fontMissing' => 'Not found on this machine — falling back.',
+			'settings.page.appearance.sectionLayout' => 'Layout',
+			'settings.page.appearance.swapPanelsTitle' => 'Swap side panels',
+			'settings.page.appearance.swapPanelsDesc' => 'Puts workspaces on the right and files, search, git and database on the left.',
 			'settings.page.notifications.sectionTitle' => 'Notifications',
 			'settings.page.notifications.enableTitle' => 'Enable notifications',
 			'settings.page.notifications.enableDesc' => 'Alert me when an agent finishes a turn and the window is not focused.',

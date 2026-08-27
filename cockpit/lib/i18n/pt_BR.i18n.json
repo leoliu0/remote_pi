@@ -864,7 +864,10 @@
         "fontPickerCustomHint": "Nome da família",
         "fontPickerUse": "Usar",
         "fontPickerDefault": "Padrão",
-        "fontMissing": "Não encontrada nesta máquina — usando o fallback."
+        "fontMissing": "Não encontrada nesta máquina — usando o fallback.",
+        "sectionLayout": "Layout",
+        "swapPanelsTitle": "Inverter panes",
+        "swapPanelsDesc": "Coloca os workspaces à direita e arquivos, busca, git e banco à esquerda."
       },
       "notifications": {
         "sectionTitle": "Notificações",

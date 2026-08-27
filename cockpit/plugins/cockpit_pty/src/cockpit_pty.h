@@ -45,6 +45,13 @@ FFI_PLUGIN_EXPORT void pty_ack_read(PtyHandle *handle);
 
 FFI_PLUGIN_EXPORT int pty_resize(PtyHandle *handle, int rows, int cols);
 
+/// Encerra o shell e todos os processos que ele criou. 0 = sucesso.
+///
+/// Windows usa Job Object (`TerminateJobObject`); POSIX sinaliza o process
+/// group. Existe porque `Process.killPid` do Dart, no Windows, vira
+/// `TerminateProcess` e deixa a descendência órfã (issue #163).
+FFI_PLUGIN_EXPORT int pty_kill(PtyHandle *handle);
+
 FFI_PLUGIN_EXPORT int pty_getpid(PtyHandle *handle);
 
 FFI_PLUGIN_EXPORT char *pty_error(void);

@@ -864,7 +864,10 @@
         "fontPickerCustomHint": "Nombre de la familia",
         "fontPickerUse": "Usar",
         "fontPickerDefault": "Predeterminada",
-        "fontMissing": "No se encontró en esta máquina — usando el respaldo."
+        "fontMissing": "No se encontró en esta máquina — usando el respaldo.",
+        "sectionLayout": "Diseño",
+        "swapPanelsTitle": "Invertir paneles",
+        "swapPanelsDesc": "Coloca los workspaces a la derecha y archivos, búsqueda, git y base de datos a la izquierda."
       },
       "notifications": {
         "sectionTitle": "Notificaciones",

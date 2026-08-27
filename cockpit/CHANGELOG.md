@@ -24,6 +24,32 @@ As versões seguem o `version:` do `pubspec.yaml` (SSOT). O campo `notes` do
     linhas não-vazias — o começo da seção deve fazer sentido sozinho.
 -->
 
+## [1.28.16] - 2026-08-27
+
+**Still a beta for the upcoming 2.0.0.** A big responsiveness fix for remote
+sessions on iPad and Android, plus two additions on the desktop side.
+
+### Fixed
+
+- **Remote sessions no longer freeze on iPad and Android.** Connecting to a
+  host would get slower and slower until the app stopped responding
+  altogether — file tree, terminal, tasks, everything. Cockpit was issuing far
+  more requests to the host than it needed: worktree listings piled up on every
+  reconnection attempt, workspace roots were discovered twice on every boot,
+  and the folder scan fired dozens of listings at once through a single SSH
+  channel. On a Mac this was invisible; on mobile, where the SSH encryption
+  shares the thread that draws the screen, it was enough to lock up the app.
+- Windows terminals no longer leave orphaned PowerShell processes behind when a
+  tab is closed. Closing a tab now terminates the whole process tree it
+  started, instead of only the shell itself.
+
+### Added
+
+- **Close the focused tab with ⌘W** (Ctrl+W on Windows and Linux). Tabs with
+  unsaved changes still ask before closing.
+- **Swap side panels.** A new option under Appearance → Layout moves the
+  workspaces rail to the right and files/search/git/database to the left.
+
 ## [1.28.15] - 2026-08-26
 
 **Still a beta for the upcoming 2.0.0.** Windows machines can now be used as

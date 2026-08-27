@@ -864,7 +864,10 @@
         "fontPickerCustomHint": "Family name",
         "fontPickerUse": "Use",
         "fontPickerDefault": "Default",
-        "fontMissing": "Not found on this machine — falling back."
+        "fontMissing": "Not found on this machine — falling back.",
+        "sectionLayout": "Layout",
+        "swapPanelsTitle": "Swap side panels",
+        "swapPanelsDesc": "Puts workspaces on the right and files, search, git and database on the left."
       },
       "notifications": {
         "sectionTitle": "Notifications",

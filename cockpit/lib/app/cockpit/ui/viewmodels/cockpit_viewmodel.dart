@@ -2212,6 +2212,22 @@ class CockpitViewModel extends ChangeNotifier {
   /// Pane focada do projeto.
   String? focusedPaneId(String projectId) => _focused[projectId];
 
+  /// A aba em foco com o que é preciso para agir sobre ela: pane, id e a
+  /// sessão. Usado pelo ⌘W (que precisa saber se há edição não salva antes de
+  /// fechar); [focusedTabId] continua servindo a quem só quer o id.
+  ///
+  /// `null` quando não há projeto/pane/aba, e também quando a aba é o
+  /// placeholder de pane vazia — que não é fechável.
+  (String paneId, String tabId, PaneItem item)? focusedTab() {
+    final paneId = _focusedLeaf()?.$1;
+    final tabId = focusedTabId;
+    if (paneId == null || tabId == null) return null;
+    final item = _sessions[tabId];
+    if (item == null) return null;
+    if (item is AgentSession && item.status == AgentStatus.empty) return null;
+    return (paneId, tabId, item);
+  }
+
   /// Id da **aba em foco**: a aba ativa da pane focada, no projeto selecionado.
   /// É o que a CLI resolve quando recebe `--focused`, pra uma ferramenta externa
   /// (ex.: ditado por voz) poder digitar onde o usuário está olhando sem
@@ -5003,15 +5019,10 @@ class CockpitViewModel extends ChangeNotifier {
   }
 
   /// Chaves de scrollback a preservar no GC do boot: o `id` de cada sessão
-  /// `terminal` e o `taskId` de cada `task_output` presentes em QUALQUER layout
-  /// salvo. (O store de scrollback é compartilhado — logs de terminal sob o
-  /// `projectId` real, logs de task sob `__tasks__/<taskId>` —, mas o prune casa
-  /// por nome de arquivo, então o keep-set é a união das duas chaves.) Lê os
-  /// descritores `sessions` dos docs já carregados em [_savedLayouts].
-  Set<String> _persistedTerminalIds() => _terminalIdsIn(_savedLayouts.values);
-
-  /// Ids de terminal (e de output de task) citados por [docs] — o conjunto que
-  /// o GC do scrollback preserva.
+  /// `terminal` e o `taskId` de cada `task_output` citados por [docs]. O store
+  /// de scrollback é compartilhado — logs de terminal sob o `projectId` real,
+  /// logs de task sob `__tasks__/<taskId>` —, mas o prune casa por nome de
+  /// arquivo, então o keep-set é a união das duas chaves.
   Set<String> _terminalIdsIn(Iterable<Map<String, dynamic>?> docs) {
     final ids = <String>{};
     for (final doc in docs) {

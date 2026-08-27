@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:cockpit/app/cockpit/ui/actions/agent_actions.dart';
 import 'package:cockpit/app/cockpit/ui/actions/remote_workspace_actions.dart';
+import 'package:cockpit/app/cockpit/ui/actions/tab_actions.dart';
 import 'package:cockpit/app/cockpit/ui/actions/workspace_actions.dart';
 import 'package:cockpit/app/cockpit/ui/actions/worktree_actions.dart';
 import 'package:cockpit/app/core/app_intents.dart';
@@ -516,7 +517,15 @@ class _CockpitPageState extends State<CockpitPage> {
         _focusContentSearch,
     const SingleActivator(LogicalKeyboardKey.keyF, control: true, shift: true):
         _focusContentSearch,
+    // ⌘W / Ctrl+W fecha a ABA (não a janela): é o que a aba de um editor
+    // significa em qualquer IDE. Passa pela mesma confirmação do X do título,
+    // então arquivo não salvo continua perguntando antes de sumir.
+    const SingleActivator(LogicalKeyboardKey.keyW, meta: true): _closeActiveTab,
+    const SingleActivator(LogicalKeyboardKey.keyW, control: true):
+        _closeActiveTab,
   };
+
+  void _closeActiveTab() => unawaited(closeActiveTab(context));
 
   /// ⌘`/Ctrl+` próximo realm; com Shift, anterior. Handler **global** no
   /// [HardwareKeyboard] (registrado no initState), não um `CallbackShortcuts`:
@@ -566,6 +575,12 @@ class _CockpitPageState extends State<CockpitPage> {
         title: vm.selectedDisplayTitle,
         terminalActive: vm.activeTabIsTerminal,
       ),
+    );
+    // Posição dos painéis é preferência do usuário (Configurações → Aparência),
+    // não estado do shell: vem do SettingsController, e `select` faz o page
+    // reconstruir só quando ela muda.
+    final swapped = context.select<SettingsController, bool>(
+      (s) => s.settings.swapSidePanels,
     );
     final colors = context.colors;
 
@@ -624,11 +639,16 @@ class _CockpitPageState extends State<CockpitPage> {
                     railOpen: railVisibleEff,
                     treeOpen: treeVisibleEff,
                     onDismiss: _dismissDrawers,
+                    swapped: swapped,
                     rail: _RailPanel(
                       width: _railWidth,
+                      handleOnLeft: swapped,
                       onDismiss: _dismissDrawers,
+                      // Invertido, arrastar para a ESQUERDA é que alarga — o
+                      // painel cresce sempre em direção ao centro.
                       onResize: (dx) => setState(() {
-                        _railWidth = (_railWidth + dx).clamp(
+                        final delta = swapped ? -dx : dx;
+                        _railWidth = (_railWidth + delta).clamp(
                           _railMin,
                           _railMax,
                         );
@@ -636,13 +656,15 @@ class _CockpitPageState extends State<CockpitPage> {
                     ),
                     center: _CenterPanel(centerKey: _centerKey),
                     tree: _TreePanel(
+                      handleOnLeft: !swapped,
                       treeWidth: _treeWidth,
                       tasksHeight: _tasksHeight,
                       sourceControlViewMode: _sourceControlViewMode,
                       searchFocusSignal: _searchFocusSignal,
                       onDismiss: _dismissDrawers,
                       onResizeTree: (dx) => setState(() {
-                        _treeWidth = (_treeWidth - dx).clamp(
+                        final delta = swapped ? dx : -dx;
+                        _treeWidth = (_treeWidth + delta).clamp(
                           _treeMin,
                           _treeMax,
                         );
@@ -689,11 +711,16 @@ class _RailPanel extends StatelessWidget {
     required this.width,
     required this.onDismiss,
     required this.onResize,
+    this.handleOnLeft = false,
   });
 
   final double width;
   final VoidCallback onDismiss;
   final ValueChanged<double> onResize;
+
+  /// `true` quando o painel está à DIREITA (modo "Inverter panes"): a alça
+  /// muda de borda junto.
+  final bool handleOnLeft;
 
   @override
   Widget build(BuildContext context) {
@@ -766,9 +793,12 @@ class _RailPanel extends StatelessWidget {
           onRemoteWorkspaceAction: (wsId, action) =>
               handleRemoteWorkspaceAction(context, wsId, action),
         ),
-        // Alça de arraste na borda direita (direita = alarga).
+        // Alça de arraste na borda VOLTADA PARA O CENTRO: borda direita quando o
+        // painel está à esquerda, e vice-versa com "Inverter panes" — do outro
+        // lado ela cairia na moldura da janela.
         Positioned(
-          right: 0,
+          left: handleOnLeft ? 0 : null,
+          right: handleOnLeft ? null : 0,
           top: 0,
           bottom: 0,
           child: _ResizeHandle(onDelta: onResize),
@@ -981,7 +1011,12 @@ class _TreePanel extends StatelessWidget {
     required this.onResizeTree,
     required this.onTasksResize,
     required this.onTasksResizeEnd,
+    this.handleOnLeft = true,
   });
+
+  /// `true` quando o painel está à direita (o padrão); vira `false` com
+  /// "Inverter panes", e a alça acompanha.
+  final bool handleOnLeft;
 
   final double treeWidth;
   final double tasksHeight;
@@ -1127,10 +1162,10 @@ class _TreePanel extends StatelessWidget {
                 ),
           footer: const _LspStatusBar(),
         ),
-        // Alça de arraste sobre a borda esquerda do painel
-        // (esquerda = alarga; direita = estreita).
+        // Alça na borda voltada para o centro (ver [_RailPanel]).
         Positioned(
-          left: 0,
+          left: handleOnLeft ? 0 : null,
+          right: handleOnLeft ? null : 0,
           top: 0,
           bottom: 0,
           child: _ResizeHandle(onDelta: onResizeTree),
@@ -1150,6 +1185,7 @@ class _PanelScaffold extends StatelessWidget {
     required this.narrow,
     required this.railOpen,
     required this.treeOpen,
+    required this.swapped,
     required this.rail,
     required this.center,
     required this.tree,
@@ -1164,14 +1200,27 @@ class _PanelScaffold extends StatelessWidget {
   final Widget tree;
   final VoidCallback onDismiss;
 
+  /// "Inverter panes" (Configurações → Aparência): workspaces à direita e
+  /// arquivos/busca/git/database à esquerda. Só a POSIÇÃO muda — cada painel
+  /// mantém largura, visibilidade e atalhos.
+  final bool swapped;
+
   @override
   Widget build(BuildContext context) {
+    // Painel de cada lado. Trocar aqui (e não na ordem dos filhos do Row)
+    // mantém a alça de redimensionar coerente: ela pertence ao painel, e o
+    // painel é que muda de lado.
+    final leftPanel = swapped ? tree : rail;
+    final rightPanel = swapped ? rail : tree;
+    final leftOpen = swapped ? treeOpen : railOpen;
+    final rightOpen = swapped ? railOpen : treeOpen;
+
     if (!narrow) {
       return Row(
         children: [
-          if (railOpen) rail,
+          if (leftOpen) leftPanel,
           Expanded(child: center),
-          if (treeOpen) tree,
+          if (rightOpen) rightPanel,
         ],
       );
     }
@@ -1187,8 +1236,9 @@ class _PanelScaffold extends StatelessWidget {
             ),
           ),
         // top/bottom = 0 estica a pane em altura total; a largura vem da própria.
-        if (railOpen) Positioned(left: 0, top: 0, bottom: 0, child: rail),
-        if (treeOpen) Positioned(right: 0, top: 0, bottom: 0, child: tree),
+        if (leftOpen) Positioned(left: 0, top: 0, bottom: 0, child: leftPanel),
+        if (rightOpen)
+          Positioned(right: 0, top: 0, bottom: 0, child: rightPanel),
       ],
     );
   }
