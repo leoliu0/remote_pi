@@ -5,6 +5,9 @@ import 'package:crypto/crypto.dart' show sha256;
 
 import 'package:cockpit/app/cockpit/data/remote/dartssh_host_connection.dart';
 import 'package:cockpit/app/cockpit/data/remote/ssh_channel_duplex.dart';
+import 'package:cockpit/app/cockpit/data/remote/host_shell/host_shell.dart';
+import 'package:cockpit/app/cockpit/data/remote/host_shell/posix_host_shell.dart';
+import 'package:cockpit/app/cockpit/data/remote/host_shell/windows_host_shell.dart';
 import 'package:cockpit/app/cockpit/data/remote/ssh_known_hosts.dart';
 import 'package:cockpit/app/cockpit/data/remote/ssh_tunnel.dart';
 import 'package:cockpit/app/cockpit/domain/contracts/ssh_tunnel.dart'
@@ -38,12 +41,15 @@ enum RemoteHostErrorKind {
   /// verification failed` e não havia caminho nenhum pela GUI.
   hostKeyUnknown,
 
-  /// O host é Windows. O servidor remoto só existe para POSIX hoje: todo o
-  /// bootstrap fala `uname`, `$HOME/.cockpit/...`, `nohup`, `ln -sf` e socket
-  /// UNIX. Sem este erro, a falha aparecia como um `FormatException` de
-  /// decodificação (o cmd responde na codepage local, não em UTF-8) — que não
-  /// dizia nada ao usuário.
-  windowsHostUnsupported,
+  /// Host Windows sem Cockpit instalado. Lá a instalação do servidor é cópia
+  /// LOCAL do `cockpit-server-bundle` que o app deixa (decisão D2 do plano
+  /// 61) — nenhum binário viaja pelo SSH, e por isso um cliente macOS instala
+  /// num host Windows. Sem o app no host, não há o que copiar.
+  hostBundleMissing,
+
+  /// Não foi possível identificar o sistema do host: nem `uname` nem o probe
+  /// de PowerShell responderam. Normalmente shell restrito ou conta sem shell.
+  hostUnknownOs,
 
   /// O host apresenta chave diferente da que está no `known_hosts`. Não existe
   /// aceite inline: ou é troca legítima de servidor (o usuário edita o
@@ -204,10 +210,52 @@ class RemoteHostConnector {
     // nada, então um destino novo morria em "Host key verification failed" sem
     // caminho pela GUI. Aqui o humano vê o fingerprint e decide.
     await _ensureHostKeyTrusted();
+
+    // Dialeto do host (plano 61). O probe substitui o `printf %s "$HOME"` que
+    // o `SshTunnel.open` fazia por conta própria, então o caminho POSIX não
+    // paga round-trip novo — só mudou quem pergunta.
+    final shell = await _hostShell();
+
+    // Servidor já de pé? No POSIX o endpoint é determinístico e a ausência é
+    // descoberta pelo túnel (comportamento de antes); no Windows é o arquivo
+    // de rendezvous que responde, e sem ele nem adianta abrir forward.
+    var endpoint = await shell.readEndpoint();
+    if (endpoint != null) {
+      final service = await _connectVia(shell, endpoint);
+      if (service != null) return service;
+    }
+
+    // Servidor ausente/parado/desatualizado no host: bootstrap pelo SSH.
+    _setPhase(RemoteHostPhase.installingServer);
+    await _installAndStartServer(shell);
+    endpoint = await shell.awaitEndpoint();
+    if (endpoint == null) {
+      _setPhase(RemoteHostPhase.failed);
+      final log = await shell.tailBootLog();
+      throw RemoteHostException(
+        RemoteHostErrorKind.serverInstallFailed,
+        log.isEmpty ? 'server did not start on the host' : log,
+      );
+    }
+    final service = await _connectVia(shell, endpoint, attempts: 20);
+    if (service != null) return service;
+    _setPhase(RemoteHostPhase.failed);
+    throw const RemoteHostException(RemoteHostErrorKind.serverInstallFailed);
+  }
+
+  /// Abre o túnel para [endpoint] e completa o handshake. `null` = não havia
+  /// servidor atendendo (ou ele estava desatualizado), e o chamador deve
+  /// partir para o bootstrap.
+  Future<RemoteTerminalService?> _connectVia(
+    HostShell shell,
+    RemoteEndpoint endpoint, {
+    int attempts = 1,
+  }) async {
     final SshTunnel tunnel;
     try {
       tunnel = await SshTunnel.open(
         target: host.sshTarget,
+        remote: endpoint,
         port: host.port,
         password: _password,
         identityFile: host.effectiveIdentityFile,
@@ -226,36 +274,63 @@ class RemoteHostConnector {
     unawaited(tunnel.closed.then((_) => _onTunnelClosed()));
 
     _setPhase(RemoteHostPhase.connecting);
-    var connection = await _tryProtocol(tunnel);
+    var connection = await _tryProtocol(
+      tunnel,
+      token: endpoint.token,
+      attempts: attempts,
+    );
     // Servidor VELHO respondendo: sem esta checagem o cliente conectava nele e
     // pronto — o bootstrap só rodava quando ninguém atendia, então um host
     // instalado uma vez ficava congelado para sempre naquela versão. Uma vez
     // por host por sessão (a comparação custa um SSH).
     if (connection != null && !_serverFreshnessChecked) {
       _serverFreshnessChecked = true;
-      if (await _remoteServerIsStale()) {
+      if (await _remoteServerIsStale(shell)) {
         _staleServer = true;
         await connection.close();
         connection = null;
       }
     }
     if (connection == null) {
-      // Servidor ausente/parado/desatualizado no host: bootstrap pelo SSH.
-      _setPhase(RemoteHostPhase.installingServer);
-      await _installAndStartServer();
-      connection = await _tryProtocol(tunnel, attempts: 20);
-      if (connection == null) {
-        _setPhase(RemoteHostPhase.failed);
-        throw const RemoteHostException(
-          RemoteHostErrorKind.serverInstallFailed,
-        );
-      }
+      await tunnel.close();
+      _tunnel = null;
+      return null;
     }
     _connection = connection;
     _service = RemoteTerminalService(connection);
     _bindTurnStatus();
     _setPhase(RemoteHostPhase.connected);
     return _service!;
+  }
+
+  /// Dialeto do host, resolvido uma vez por conector — o sistema de uma máquina
+  /// não muda entre reconexões, e o probe custa um SSH.
+  HostShell? _shell;
+
+  Future<HostShell> _hostShell() async {
+    final cached = _shell;
+    if (cached != null) return cached;
+    Future<(int, String, String)> exec(
+      String command, {
+      List<int>? stdinBytes,
+    }) => SshTunnel.capture(
+      host.sshTarget,
+      command,
+      stdinBytes: stdinBytes,
+      port: host.port,
+      password: _password,
+      identityFile: host.effectiveIdentityFile,
+    );
+
+    final probe = await probeHost(exec);
+    if (probe == null) {
+      _setPhase(RemoteHostPhase.failed);
+      throw const RemoteHostException(RemoteHostErrorKind.hostUnknownOs);
+    }
+    return _shell = switch (probe.family) {
+      HostOsFamily.posix => PosixHostShell(probe: probe, exec: exec),
+      HostOsFamily.windows => WindowsHostShell(probe: probe, exec: exec),
+    };
   }
 
   /// Abertura no mobile: conecta via dartssh2, resolve `$HOME` do host e
@@ -324,19 +399,54 @@ class RemoteHostConnector {
 
     _setPhase(RemoteHostPhase.connecting);
     try {
-      // `printf`/`$HOME` são POSIX: num host Windows isto falha (ou devolve
-      // lixo) e o forward do socket UNIX nunca ia funcionar de qualquer jeito.
-      final home = (await conn.run(r'printf %s "$HOME"')).trim();
-      if (home.isEmpty || !home.startsWith('/')) {
+      // Mesmo dialeto do desktop (plano 61), sobre o canal do dartssh2: o
+      // mobile não instala servidor (decisão D do plano 58), mas precisa saber
+      // ONDE ele escuta — e isso difere por família (socket UNIX vs porta+token).
+      // `runDetailed`, e não `run`: o `run` do dartssh2 mescla stderr no stdout
+      // e esconde o exit code, o que fazia o probe ler o erro do `cmd.exe` como
+      // se fosse a resposta de um POSIX. Ver o comentário em [runDetailed].
+      Future<(int, String, String)> exec(
+        String command, {
+        List<int>? stdinBytes,
+      }) => conn.runDetailed(command);
+
+      final probe = await probeHost(exec);
+      if (probe == null) {
+        throw const RemoteHostException(RemoteHostErrorKind.hostUnknownOs);
+      }
+      final shell = switch (probe.family) {
+        HostOsFamily.posix => PosixHostShell(probe: probe, exec: exec),
+        HostOsFamily.windows => WindowsHostShell(probe: probe, exec: exec),
+      };
+      final remote = await shell.readEndpoint();
+      if (remote == null) {
         throw const RemoteHostException(
-          RemoteHostErrorKind.windowsHostUnsupported,
+          RemoteHostErrorKind.serverInstallFailed,
         );
       }
-      final remoteSocket = '$home/.cockpit/cockpit-server.sock';
-      final channel = await conn.forwardUnix(remoteSocket);
+      // Socket UNIX num host POSIX; porta de loopback num host Windows — o
+      // `forwardLocal` do dartssh2 cobre os dois, o `forwardLocalUnix` não.
+      // O rendezvous anuncia onde o servidor ESTAVA, não que ele ainda está:
+      // um servidor remoto que saiu por ociosidade deixa o arquivo pra trás,
+      // e no Windows ele é arquivo comum — não some com o processo. O desktop
+      // se recupera sozinho (falhou, faz bootstrap); o mobile não instala
+      // servidor (decisão D do plano 58), então aqui a única saída é dizer com
+      // todas as letras que não há ninguém atendendo, em vez de deixar vazar um
+      // `SSHChannelOpenError(2: open failed)` cru, que não diz nada a quem lê.
+      final channel =
+          await switch (remote) {
+            UnixSocketEndpoint(:final path) => conn.forwardUnix(path),
+            TcpEndpoint(:final port) => conn.forwardTcp(port),
+          }.onError<Object>((e, _) {
+            throw RemoteHostException(
+              RemoteHostErrorKind.serverInstallFailed,
+              'o host anunciou um servidor que não responde mais (rendezvous obsoleto): \$e',
+            );
+          });
       final connection = await RemoteConnection.connectOn(
         SshChannelDuplex(channel),
         clientName: 'cockpit-ipad',
+        token: remote.token,
       );
       _connection = connection;
       _service = RemoteTerminalService(connection);
@@ -361,6 +471,7 @@ class RemoteHostConnector {
 
   Future<RemoteConnection?> _tryProtocol(
     SshTunnel tunnel, {
+    String? token,
     int attempts = 1,
   }) async {
     for (var i = 0; i < attempts; i++) {
@@ -368,10 +479,11 @@ class RemoteHostConnector {
         await Future<void>.delayed(Duration(milliseconds: 100 + i * 50));
       }
       try {
-        // PONTA LOCAL de um `ssh -L`, não um endpoint anunciado pelo servidor:
-        // não há arquivo de rendezvous nem token a resolver aqui, e o servidor
-        // do outro lado é remoto (nada de `local: true`). Socket UNIX no POSIX;
-        // no Windows, a porta de loopback do forward — ver [SshTunnel.localPort].
+        // PONTA LOCAL de um `ssh -L`: o rendezvous não existe deste lado, então
+        // o token não se resolve aqui — ele vem do endpoint REMOTO, lido pelo
+        // dialeto do host. Host POSIX não tem token (o socket UNIX já nasce
+        // protegido pelas permissões do `~/.cockpit`); host Windows tem, e o
+        // servidor de lá recusa o `Hello` sem ele.
         final port = tunnel.localPort;
         return await RemoteConnection.connectOn(
           port != null
@@ -380,6 +492,7 @@ class RemoteHostConnector {
                 )
               : await SocketRemoteDuplex.connectUnix(tunnel.localSocketPath),
           clientName: 'cockpit-gui-ssh',
+          token: token,
         );
       } on TerminalException catch (e) {
         // Handshake respondeu com erro = servidor existe mas incompatível.
@@ -395,24 +508,14 @@ class RemoteHostConnector {
     return null;
   }
 
-  /// "Install server": sobe binário + dylib pelo canal SSH (stdin → arquivo,
-  /// sem depender de scp/rsync no host) e inicia o servidor remoto no socket
-  /// padrão.
+  /// Bootstrap "Install server": garante binário no host e sobe o servidor.
   ///
   /// `--exit-on-idle 120` + `--idle-keeps-sessions`: o servidor encerra sozinho
   /// ~2min depois que ninguém mais o usa (sem órfão no host), MAS nunca enquanto
   /// houver sessão viva. Sem a segunda flag, dois minutos de desconexão matavam
   /// o que estivesse rodando lá — um agente aberto, um build, um vim — que é o
-  /// oposto da promessa de retomar de onde parou. Persistência 24/7 gerida por
-  /// launchd/systemd fica pra Wave 3.
-  ///
-  /// Servidor antigo no host ignora a flag desconhecida (o parser dele busca
-  /// por índice), então a instalação segue funcionando; só não ganha o
-  /// comportamento novo até ser reinstalado.
+  /// oposto da promessa de retomar de onde parou.
   static const _remoteIdleSeconds = 120;
-
-  /// Caminho do servidor no host (sempre o mesmo layout, qualquer plataforma).
-  static const _remoteServerBin = r'$HOME/.cockpit/server/bin/cockpit-server';
 
   /// `true` quando o binário do host **existe mas é diferente** do que este
   /// cliente instalaria: o processo velho precisa morrer para o novo valer.
@@ -424,275 +527,107 @@ class RemoteHostConnector {
   bool _serverFreshnessChecked = false;
 
   /// Compara o `cockpit-server` do host com o que este cliente enviaria.
-  /// Falha de qualquer lado (sem `sha256sum`/`shasum`, sem binário local)
-  /// responde `false`: na dúvida, não mexe num servidor que está funcionando.
-  Future<bool> _remoteServerIsStale() async {
-    final local = localServerBinaryResolver(arch: _lastRemoteArch ?? 'x64');
-    if (local == null || !File(local).existsSync()) return false;
-    final localDigest = sha256.convert(await File(local).readAsBytes());
-    // `sha256sum` (Linux) e `shasum -a 256` (macOS) — o primeiro que existir.
-    final (code, out, _) = await SshTunnel.capture(
-      host.sshTarget,
-      '(sha256sum $_remoteServerBin 2>/dev/null || '
-      'shasum -a 256 $_remoteServerBin 2>/dev/null) | cut -d" " -f1',
-      port: host.port,
-      password: _password,
-      identityFile: host.effectiveIdentityFile,
-    );
-    final remoteDigest = out.trim();
-    if (code != 0 || remoteDigest.isEmpty) return false;
-    return remoteDigest != '$localDigest';
+  ///
+  /// Só vale quando o cliente é a FONTE da instalação: num host Windows quem
+  /// instala é o próprio host, a partir do bundle do app de lá (D2), então o
+  /// binário local desta máquina não é referência de nada — comparar acusaria
+  /// "desatualizado" em todo boot e derrubaria o servidor remoto sem motivo.
+  Future<bool> _remoteServerIsStale(HostShell shell) async {
+    if (shell.installsFromHostBundle) return false;
+    final local = localServerBinaryResolver(arch: shell.probe.arch);
+    if (local == null) return false;
+    final remoteHash = await shell.serverSha256();
+    if (remoteHash == null) return false;
+    try {
+      final localHash = sha256.convert(await File(local).readAsBytes());
+      return localHash.toString() != remoteHash;
+    } on FileSystemException {
+      return false;
+    }
   }
 
-  /// `true` quando o host responde como Windows. Só é chamado depois de o
-  /// `uname` falhar — `%OS%` é expandido pelo cmd e não existe em shell POSIX,
-  /// então a resposta `Windows_NT` é conclusiva.
-  Future<bool> _looksLikeWindowsHost() async {
-    final (code, out, _) = await SshTunnel.capture(
-      host.sshTarget,
-      'echo %OS%',
-      port: host.port,
-      password: _password,
-      identityFile: host.effectiveIdentityFile,
-    );
-    return code == 0 && out.trim().toLowerCase().contains('windows');
-  }
-
-  /// Arquitetura do host descoberta pelo `uname` desta conexão — o resolver do
-  /// binário local precisa dela antes da comparação de hash.
-  String? _lastRemoteArch;
-
-  /// Nome do SO **deste** cliente no vocabulário do `uname`.
   static String get _localOsName => Platform.isMacOS
       ? 'darwin'
       : Platform.isLinux
       ? 'linux'
       : 'windows';
 
-  Future<void> _installAndStartServer() async {
-    // Plataforma do HOST decide tudo: qual fatia enviar e o nome da lib do
-    // PTY. `uname -sm` → "Darwin arm64", "Linux x86_64", ...
-    final (unameCode, uname, unameErr) = await SshTunnel.capture(
-      host.sshTarget,
-      'uname -sm',
-      port: host.port,
-      password: _password,
-      identityFile: host.effectiveIdentityFile,
-    );
-    if (unameCode != 0) {
-      if (await _looksLikeWindowsHost()) {
-        throw const RemoteHostException(
-          RemoteHostErrorKind.windowsHostUnsupported,
-        );
-      }
-      throw RemoteHostException(
-        RemoteHostErrorKind.serverInstallFailed,
-        unameErr.isEmpty ? 'uname failed' : unameErr,
-      );
-    }
-    final parts = uname.split(RegExp(r'\s+'));
-    final remoteOs = parts.isEmpty ? '' : parts.first.toLowerCase();
-    final remoteMachine = parts.length > 1 ? parts[1].toLowerCase() : '';
-    final remoteArch =
-        remoteMachine.contains('arm') || remoteMachine == 'aarch64'
-        ? 'arm64'
-        : 'x64';
-    _lastRemoteArch = remoteArch;
+  Future<void> _installAndStartServer(HostShell shell) async {
+    var installed = await shell.serverInstalled();
+    if (installed && _staleServer) installed = false;
 
-    // Servidor JÁ instalado no host: só falta subir. Isto é o que permite um
-    // cliente Windows reusar o servidor de um Mac (o binário está lá desde a
-    // instalação feita por outro cliente) — empurrar um exe de Windows pra um
-    // Mac nunca funcionaria, mas iniciar o que já existe funciona igual.
-    final (probeCode, probeOut, _) = await SshTunnel.capture(
-      host.sshTarget,
-      'test -x $_remoteServerBin && echo yes || echo no',
-      port: host.port,
-      password: _password,
-      identityFile: host.effectiveIdentityFile,
-    );
-    var alreadyInstalled = probeCode == 0 && probeOut.endsWith('yes');
-    // ...mas "instalado" não quer dizer "atualizado". O binário do host ficava
-    // congelado na versão que o instalou pela PRIMEIRA vez: quem já usava
-    // remoto nunca via nada que o servidor passasse a fazer depois (o `-uall`
-    // do status, o receptor de comandos da CLI). Compara pelo conteúdo — o
-    // servidor não carrega versão própria (anuncia '0.1.0' fixo), e o hash
-    // funciona com qualquer servidor já instalado lá fora.
-    if (alreadyInstalled &&
-        remoteOs == _localOsName &&
-        await _remoteServerIsStale()) {
-      alreadyInstalled = false;
-      _staleServer = true;
-    }
-    // Cross-OS não tem como funcionar: o bundle local só traz binário desta
-    // plataforma. Antes o Mach-O do macOS era empurrado pra qualquer host e o
-    // servidor morria no `nohup` sem deixar rastro.
-    final localOs = _localOsName;
-    // Instalar exige binário DESTA plataforma pro host; iniciar, não.
-    if (!alreadyInstalled && remoteOs != localOs) {
-      throw RemoteHostException(
-        RemoteHostErrorKind.serverInstallFailed,
-        'host runs $remoteOs; this build only ships a $localOs cockpit-server',
-      );
-    }
-
-    final binary = alreadyInstalled
-        ? null
-        : localServerBinaryResolver(arch: remoteArch);
-    if (!alreadyInstalled && binary == null) {
-      throw RemoteHostException(
-        RemoteHostErrorKind.serverInstallFailed,
-        'local cockpit-server binary not found for $remoteOs/$remoteArch',
-      );
-    }
-    // Bundle: <root>/bin/cockpit-server + <root>/lib/*.dylib (anaki + pty). O
-    // exe resolve as dylibs em @executable_path/../lib, então preservamos o
-    // layout no host (~/.cockpit/server/{bin,lib}).
-    final bundleRoot = binary == null ? null : File(binary).parent.parent.path;
-    final ptyLib = remoteOs == 'darwin'
-        ? 'libcockpit_pty.dylib'
-        : 'libcockpit_pty.so';
-
-    Future<void> push(String local, String remote) async {
-      final bytes = await File(local).readAsBytes();
-      final (code, stderrText) = await SshTunnel.run(
-        host.sshTarget,
-        'mkdir -p ~/.cockpit/server/bin ~/.cockpit/server/lib && '
-        'cat > $remote && chmod +x $remote',
-        stdinBytes: bytes,
-        port: host.port,
-        password: _password,
-        identityFile: host.effectiveIdentityFile,
-      );
-      if (code != 0) {
-        throw RemoteHostException(
-          RemoteHostErrorKind.serverInstallFailed,
-          stderrText,
-        );
-      }
-    }
-
-    // Servidor desatualizado: o processo VELHO ainda está no ar (ele sobrevive
-    // à desconexão por causa do `--idle-keeps-sessions`) e continuaria
-    // atendendo mesmo depois de trocarmos o arquivo. Derruba antes de
-    // sobrescrever — custa as sessões de PTY abertas naquele host, e é por
-    // isso que só acontece quando o binário realmente mudou.
-    if (_staleServer) {
-      await SshTunnel.run(
-        host.sshTarget,
-        'pkill -f "$_remoteServerBin" || true',
-        port: host.port,
-        password: _password,
-        identityFile: host.effectiveIdentityFile,
-      );
-      _staleServer = false;
-    }
-
-    // Instalação (só quando o host ainda não tem o servidor, ou tem um
-    // desatualizado). Com ele já lá e igual, pula direto pro start — é o que
-    // deixa um cliente de OUTRO sistema (Windows falando com um Mac) reusar o
-    // que outro cliente instalou.
-    if (bundleRoot != null && binary != null) {
-      final libDir = Directory('$bundleRoot/lib');
-      // Nome SEM sufixo de arquitetura no host: lá o bundle é de uma
-      // arquitetura só, e é assim que o servidor se acha (_besideServer).
-      await push(binary, '~/.cockpit/server/bin/cockpit-server');
-      if (libDir.existsSync()) {
-        for (final f in libDir.listSync().whereType<File>()) {
-          if (!f.path.endsWith('.dylib') && !f.path.endsWith('.so')) continue;
-          await push(
-            f.path,
-            '~/.cockpit/server/lib/${f.uri.pathSegments.last}',
+    if (!installed) {
+      if (shell.installsFromHostBundle) {
+        // Windows (D2): instalação é cópia LOCAL do bundle do Cockpit
+        // instalado no host — nenhum byte de binário viaja pelo SSH, e é o que
+        // permite um cliente macOS instalar num host Windows.
+        if (!await shell.installFromHost()) {
+          _setPhase(RemoteHostPhase.failed);
+          throw const RemoteHostException(
+            RemoteHostErrorKind.hostBundleMissing,
+          );
+        }
+      } else {
+        // POSIX: o bundle vem DESTE cliente, então precisa ser da plataforma
+        // do host. Antes o Mach-O do macOS era empurrado pra qualquer host e o
+        // servidor morria no `nohup` sem deixar rastro.
+        if (shell.probe.os != _localOsName) {
+          _setPhase(RemoteHostPhase.failed);
+          throw RemoteHostException(
+            RemoteHostErrorKind.serverInstallFailed,
+            'host runs ${shell.probe.os}; '
+            'this build only ships a $_localOsName cockpit-server',
+          );
+        }
+        final binary = localServerBinaryResolver(arch: shell.probe.arch);
+        if (binary == null) {
+          _setPhase(RemoteHostPhase.failed);
+          throw RemoteHostException(
+            RemoteHostErrorKind.serverInstallFailed,
+            'local cockpit-server binary not found for '
+            '${shell.probe.os}/${shell.probe.arch}',
+          );
+        }
+        // Servidor desatualizado: o processo VELHO ainda está no ar (sobrevive
+        // à desconexão por causa do `--idle-keeps-sessions`) e continuaria
+        // atendendo mesmo depois de trocarmos o arquivo. Derruba antes de
+        // sobrescrever — custa as sessões de PTY abertas naquele host, e é por
+        // isso que só acontece quando o binário realmente mudou.
+        if (_staleServer) {
+          await shell.killServer();
+          _staleServer = false;
+        }
+        try {
+          await shell.installFromClient(
+            ClientBundle(
+              root: File(binary).parent.parent.path,
+              serverBinary: binary,
+            ),
+          );
+        } on HostShellException catch (e) {
+          _setPhase(RemoteHostPhase.failed);
+          throw RemoteHostException(
+            RemoteHostErrorKind.serverInstallFailed,
+            e.detail,
           );
         }
       }
-      // A lib do PTY nem sempre mora em lib/: no bundle do Linux ela é copiada
-      // AO LADO do exe (CMakeLists, 2º candidato do openPtyDylib). Sem esta
-      // busca extra, um cliente Linux instalava um servidor sem PTY algum — e
-      // o servidor resolve a lib no ARRANQUE, então ele nem subia no host.
-      if (!File('$bundleRoot/lib/$ptyLib').existsSync()) {
-        final besideExe = File('$bundleRoot/bin/$ptyLib');
-        if (besideExe.existsSync()) {
-          await push(besideExe.path, '~/.cockpit/server/lib/$ptyLib');
-        }
-      }
-      // CLI `cockpit` ao lado do server (plano 60, Wave G): o server a acha
-      // via _besideServer, instala o hook do agente no ~/.claude do host e põe
-      // a pasta dela no PATH das PTYs — é o que faz `cockpit …` responder num
-      // terminal remoto. Vai junto em toda (re)instalação, senão o binário da
-      // CLI ficaria mais velho que o servidor que o invoca. Só se estiver no
-      // bundle local (build_server.sh a embarca).
-      final cliLocal = File('$bundleRoot/bin/cockpit');
-      if (cliLocal.existsSync()) {
-        await push(cliLocal.path, '~/.cockpit/server/bin/cockpit');
-        // Alias curto, igual ao do cliente: um symlink ao lado do binário (o
-        // host é POSIX — o bootstrap remoto só instala em darwin/linux). Falha
-        // aqui não interrompe nada; o `cockpit` continua valendo.
-        await SshTunnel.run(
-          host.sshTarget,
-          'ln -sf cockpit ~/.cockpit/server/bin/ck',
-          port: host.port,
-          password: _password,
-          identityFile: host.effectiveIdentityFile,
-        );
-      }
+    }
+    if (_staleServer) {
+      await shell.killServer();
+      _staleServer = false;
     }
 
-    const logPath = r'$HOME/.cockpit/server-boot.log';
-    final (code, stderrText) = await SshTunnel.run(
-      host.sshTarget,
-      // nohup + redirects: o servidor sobrevive ao fim desta sessão ssh. O pty
-      // vem do ../lib do bundle; o anaki resolve por rpath. A saída vai pra um
-      // LOG, não pro /dev/null: um servidor que morre no arranque (binário da
-      // arquitetura errada, dylib faltando) precisa deixar rastro — sem isso o
-      // `echo started` saía 0 e a falha chegava na UI como silêncio.
-      'COCKPIT_PTY_DYLIB=\$HOME/.cockpit/server/lib/$ptyLib '
-      'nohup $_remoteServerBin '
-      '--socket \$HOME/.cockpit/cockpit-server.sock '
-      '--exit-on-idle $_remoteIdleSeconds '
-      '--idle-keeps-sessions '
-      '>$logPath 2>&1 & echo started',
-      port: host.port,
-      password: _password,
-      identityFile: host.effectiveIdentityFile,
-    );
-    if (code != 0) {
+    try {
+      await shell.startServer(idleSeconds: _remoteIdleSeconds);
+    } on HostShellException catch (e) {
+      _setPhase(RemoteHostPhase.failed);
       throw RemoteHostException(
         RemoteHostErrorKind.serverInstallFailed,
-        stderrText,
+        e.detail,
       );
     }
-    await _assertServerAlive(logPath);
   }
-
-  /// Confirma que o servidor recém-iniciado está de pé no host, e falha com o
-  /// log dele quando não está. O `nohup ... &` sempre sai 0 — sem esta
-  /// checagem, um binário inválido virava "conexão que não completa".
-  Future<void> _assertServerAlive(String logPath) async {
-    for (var attempt = 0; attempt < 10; attempt++) {
-      await Future<void>.delayed(Duration(milliseconds: 150 + attempt * 100));
-      final (code, out, _) = await SshTunnel.capture(
-        host.sshTarget,
-        'test -S $_remoteSocketPath && echo up || echo down',
-        port: host.port,
-        password: _password,
-        identityFile: host.effectiveIdentityFile,
-      );
-      if (code == 0 && out.endsWith('up')) return;
-    }
-    final (_, log, _) = await SshTunnel.capture(
-      host.sshTarget,
-      'tail -c 2000 $logPath 2>/dev/null || true',
-      port: host.port,
-      password: _password,
-      identityFile: host.effectiveIdentityFile,
-    );
-    throw RemoteHostException(
-      RemoteHostErrorKind.serverInstallFailed,
-      log.isEmpty ? 'server did not start on the host' : log,
-    );
-  }
-
-  static const _remoteSocketPath = r'$HOME/.cockpit/cockpit-server.sock';
 
   // --- Reconexão automática -------------------------------------------------
   //

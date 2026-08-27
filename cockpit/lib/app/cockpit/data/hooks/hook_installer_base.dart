@@ -140,7 +140,7 @@ abstract class HookInstallerBase implements HookInstaller {
       if (Platform.isWindows) {
         final dest = File(alias);
         if (await _sameContent(target, dest)) return;
-        await target.copy(alias);
+        await _copyOver(target, alias);
         return;
       }
       final link = Link(alias);
@@ -181,7 +181,7 @@ abstract class HookInstallerBase implements HookInstaller {
     if (bundled != null && await bundled.exists()) {
       if (!await _sameContent(bundled, dest)) {
         await destDir.create(recursive: true);
-        await bundled.copy(dest.path);
+        await _copyOver(bundled, dest.path);
         await _chmodExec(dest.path);
       }
       return hookPath(dest.path);
@@ -190,6 +190,42 @@ abstract class HookInstallerBase implements HookInstaller {
     // Dev / sem bundle: usa cópia pré-existente (colocada manualmente).
     if (await dest.exists()) return hookPath(dest.path);
     return null;
+  }
+
+  /// Copia [src] por cima de [destPath], sobrescrevendo o que estiver lá.
+  ///
+  /// `File.copy` **não** sobrescreve no Windows: o destino existente faz o
+  /// `CopyFile` do Win32 falhar com `ERROR_ALREADY_EXISTS` (errno 183), e a
+  /// instalação do hook morria em `PathExistsException` já na segunda execução
+  /// do app — a primeira criava o arquivo, todas as seguintes batiam nele. No
+  /// POSIX o `copy` sobrescreve sozinho, então o bug só aparecia no Windows.
+  ///
+  /// Remover antes resolve, com um porém: um `.exe` **em uso** não pode ser
+  /// apagado no Windows, mas pode ser **renomeado**. Então, se o delete falhar,
+  /// empurramos o velho para um `.old` ao lado e copiamos por cima — é assim que
+  /// atualizador de binário no Windows funciona. O `.old` é descartável e a
+  /// próxima passada o remove.
+  Future<void> _copyOver(File src, String destPath) async {
+    final dest = File(destPath);
+    try {
+      if (await dest.exists()) await dest.delete();
+    } on FileSystemException {
+      /* provavelmente em uso — o `exists` abaixo decide o que fazer */
+    }
+    // Recheca em vez de renomear direto do `catch`: no Windows o delete de um
+    // arquivo aberto com FILE_SHARE_DELETE pode lançar E ainda assim levar o
+    // arquivo embora. Renomear às cegas nesse caso dava
+    // `PathNotFoundException` — trocando um erro por outro.
+    if (await dest.exists()) {
+      final stale = File('$destPath.old');
+      try {
+        if (await stale.exists()) await stale.delete();
+      } on FileSystemException {
+        /* sobra de uma troca anterior ainda presa; o rename abaixo decide */
+      }
+      await dest.rename(stale.path);
+    }
+    await src.copy(destPath);
   }
 
   /// `true` quando [dest] já é byte-a-byte igual a [src]. O tamanho é só o

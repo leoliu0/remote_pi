@@ -145,9 +145,20 @@ class _CockpitPageState extends State<CockpitPage> {
     final updateVm = context.read<UpdateViewModel>();
     updateVm.attachSettings(context.read<SettingsController>());
     // Self-update (Sparkle/WinSparkle) é desktop-only; no mobile a loja atualiza.
-    // Evita também o notify-durante-build do setLastUpdateCheckTime no boot iOS.
+    //
+    // Pós-frame, e não direto no initState: `check()` é `async`, mas o corpo até
+    // o 1º `await` roda SÍNCRONO — e ele chega no
+    // `setLastUpdateCheckTime`, que notifica o `SettingsController`. Esse
+    // controller é app-scoped (`ModularApp.provide`, acima do `ShadcnApp`), então
+    // o `_VMInherited<SettingsController>` tentava se marcar dirty no meio do
+    // build da própria CockpitPage → "setState() or markNeedsBuild() called
+    // during build". No Windows isso derrubava o app no boot. Adiar um frame
+    // tira o notify da fase de build sem mudar nada do comportamento.
     if (Platform.isMacOS || Platform.isWindows || Platform.isLinux) {
-      updateVm.check();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        unawaited(updateVm.check());
+      });
     }
     // Publica o estado do workspace no menu File (New Agent / New Terminal): só
     // habilitam quando há workspace ativo. Re-sincroniza a cada mudança da VM.

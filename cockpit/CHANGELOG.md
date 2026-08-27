@@ -24,6 +24,38 @@ As versões seguem o `version:` do `pubspec.yaml` (SSOT). O campo `notes` do
     linhas não-vazias — o começo da seção deve fazer sentido sozinho.
 -->
 
+## [1.28.15] - 2026-08-26
+
+**Still a beta for the upcoming 2.0.0.** Windows machines can now be used as
+remote hosts, and several remote-terminal fixes land alongside it.
+
+### Added
+
+- **Windows as a remote host.** You can connect to a Windows machine over SSH,
+  install the server there and open remote terminals and workspaces, from any
+  client — including macOS and iPad. Previously Windows hosts were refused.
+
+### Fixed
+
+- Remote terminals on a Windows host opened forever empty: the host tried to
+  start `/bin/sh` instead of its own login shell. It now falls back to
+  PowerShell (or `cmd` on Windows ARM). Requires updating Cockpit **on the
+  host** as well.
+- Connecting from iPad or Android to a Windows host failed with an obscure
+  `open failed` error, because the host was mistakenly detected as Linux/macOS.
+- When a host advertises a server that is no longer running, the error now says
+  so instead of showing a raw SSH channel failure.
+- Picking a folder on a Windows host produced mixed separators
+  (`C:\Users\you/folder`), and the "go up" button jumped straight to the root
+  instead of the parent folder.
+- A pinned remote workspace on a Windows host showed the full path instead of
+  the folder name.
+- Terminal font metrics on Linux are aligned again (thanks, @pretodev).
+- Builds could silently package an outdated remote server; the packaged server
+  now rebuilds when the engine changes.
+- Diagnostics were completely silent on clients without a log file (iPad); they
+  are now always mirrored to the console.
+
 ## [1.28.14] - 2026-08-26
 
 **Still a beta for the upcoming 2.0.0.** The `cockpit` CLI now has a short

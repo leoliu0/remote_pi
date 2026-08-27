@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:cockpit/app/cockpit/data/remote/mobile_ssh_key_store.dart';
 import 'package:cockpit/app/cockpit/data/remote/remote_host_connector.dart';
+import 'package:cockpit/app/core/utils/remote_path.dart';
 import 'package:cockpit/app/cockpit/data/remote/remote_host_password_store.dart';
 import 'package:cockpit/app/cockpit/data/remote/remote_host_terminal_gateway.dart';
 import 'package:cockpit/app/cockpit/domain/contracts/remote_hosts_store.dart';
@@ -233,13 +234,10 @@ class RemoteHostsController extends ChangeNotifier {
     notifyListeners();
   }
 
-  static String _basename(String path) {
-    final trimmed = path.endsWith('/') && path.length > 1
-        ? path.substring(0, path.length - 1)
-        : path;
-    final idx = trimmed.lastIndexOf('/');
-    return idx < 0 ? trimmed : trimmed.substring(idx + 1);
-  }
+  /// Nome do pin a partir do caminho do HOST — que pode ser Windows.
+  /// Procurar só por `/` fazia `C:\\Users\\jacob\\projeto` virar o nome inteiro
+  /// do workspace, em vez de `projeto`.
+  static String _basename(String path) => remotePathBasename(path);
 
   /// Edita nome, endpoint (host/porta) e/ou auth de um host (mesmo id). Qualquer
   /// mudança de endpoint/auth derruba a conexão viva (recriada no próximo uso).
