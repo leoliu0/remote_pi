@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart' show visibleForTesting;
@@ -15,6 +16,38 @@ import 'package:cockpit/app/core/domain/result.dart';
 /// (`<cli> hook`) e o mesmo envelope JSON pelo stdin.
 abstract class HookInstallerBase implements HookInstaller {
   const HookInstallerBase();
+
+  /// Serializa, POR CAMINHO DE DESTINO, quem escreve um binário.
+  ///
+  /// O `bootstrapper` dispara os instaladores de Claude e Codex em paralelo
+  /// (`unawaited`, sem esperar um pelo outro), mas os dois materializam **o
+  /// mesmo** `~/.cockpit/bin-<flavor>/cockpit.exe`. Sem isto, ambos veem o
+  /// destino ausente, pulam o delete de [_copyOver] e chamam `File.copy`
+  /// concorrentemente: um vence e o outro morre com `PathExistsException`
+  /// (errno 183) — que é como o bug se manifestava no Windows, inclusive com a
+  /// pasta recém-criada. No POSIX a corrida existia igual, só era silenciosa
+  /// porque lá `copy` sobrescreve.
+  ///
+  /// Estático de propósito: as instâncias são `const` e distintas por harness,
+  /// então o lock precisa viver no tipo, não no objeto.
+  static final Map<String, Future<void>> _writeLocks = {};
+
+  static Future<T> _serialized<T>(String key, Future<T> Function() body) async {
+    final previous = _writeLocks[key];
+    final done = Completer<void>();
+    _writeLocks[key] = done.future;
+    if (previous != null) {
+      // Falha do anterior não contamina o próximo: cada tentativa é
+      // independente e best-effort.
+      await previous.catchError((_) {});
+    }
+    try {
+      return await body();
+    } finally {
+      done.complete();
+      if (identical(_writeLocks[key], done.future)) _writeLocks.remove(key);
+    }
+  }
 
   @override
   Future<Result<void, String>> ensureInstalled() async {
@@ -137,24 +170,28 @@ abstract class HookInstallerBase implements HookInstaller {
     final alias = '$dirPath/$aliasName';
     try {
       if (!await target.exists()) return;
-      if (Platform.isWindows) {
-        final dest = File(alias);
-        if (await _sameContent(target, dest)) return;
-        await _copyOver(target, alias);
-        return;
-      }
-      final link = Link(alias);
-      // Já aponta para o lugar certo? Não mexe. Aponta para outra coisa (ou
-      // sobrou um arquivo solto de uma versão anterior): refaz.
-      if (await link.exists()) {
-        if (await link.target() == cliName) return;
-        await link.delete();
-      } else if (await File(alias).exists()) {
-        await File(alias).delete();
-      }
-      // Alvo RELATIVO: a pasta pode ser movida junto com o `$HOME` (backup,
-      // usuário renomeado) sem o link virar ponteiro morto.
-      await link.create(cliName);
+      // Mesmo destino para os dois harnesses (ver [_serialized]): sem o lock,
+      // Claude e Codex criam o alias em paralelo e um dos dois falha.
+      await _serialized(alias, () async {
+        if (Platform.isWindows) {
+          final dest = File(alias);
+          if (await _sameContent(target, dest)) return;
+          await _copyOver(target, alias);
+          return;
+        }
+        final link = Link(alias);
+        // Já aponta para o lugar certo? Não mexe. Aponta para outra coisa (ou
+        // sobrou um arquivo solto de uma versão anterior): refaz.
+        if (await link.exists()) {
+          if (await link.target() == cliName) return;
+          await link.delete();
+        } else if (await File(alias).exists()) {
+          await File(alias).delete();
+        }
+        // Alvo RELATIVO: a pasta pode ser movida junto com o `$HOME` (backup,
+        // usuário renomeado) sem o link virar ponteiro morto.
+        await link.create(cliName);
+      });
     } on Object {
       /* best-effort */
     }
@@ -179,11 +216,15 @@ abstract class HookInstallerBase implements HookInstaller {
 
     final bundled = _bundledHelper(bundledName);
     if (bundled != null && await bundled.exists()) {
-      if (!await _sameContent(bundled, dest)) {
+      // A checagem de conteúdo entra DENTRO do lock junto da cópia: fora dele
+      // ela é só um palpite, e dois instaladores concorrentes decidiriam
+      // "desatualizado" ao mesmo tempo e copiariam em cima um do outro.
+      await _serialized(dest.path, () async {
+        if (await _sameContent(bundled, dest)) return;
         await destDir.create(recursive: true);
         await _copyOver(bundled, dest.path);
         await _chmodExec(dest.path);
-      }
+      });
       return hookPath(dest.path);
     }
 

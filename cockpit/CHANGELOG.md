@@ -24,6 +24,28 @@ As versões seguem o `version:` do `pubspec.yaml` (SSOT). O campo `notes` do
     linhas não-vazias — o começo da seção deve fazer sentido sozinho.
 -->
 
+## [1.28.17] - 2026-08-27
+
+**Still a beta for the upcoming 2.0.0.** Three Windows fixes, all reproduced and
+verified on a real Windows 10 machine.
+
+### Fixed
+
+- **Cockpit no longer opens to a blank screen on Windows.** A workspace with no
+  saved layout would build its pane tree without telling the interface, so
+  everything below the title bar stayed empty until you clicked something -
+  typically opening the workspaces rail, which made the whole screen appear at
+  once. Most visible on a fresh install, where no workspace has a saved layout
+  yet.
+- **The internal CLI now installs reliably.** Every boot logged a failure while
+  copying `cockpit.exe` into place, because the Claude and Codex hook installers
+  raced each other writing the same file.
+- **Closing a tab really does kill the whole process tree now.** The fix shipped
+  in 1.28.16 did not take effect: it corrected a code path that terminals no
+  longer use, and the Job Object it relied on turned out not to contain the
+  shell's children. A `ping -t` started in a tab survived the tab being closed;
+  now it does not.
+
 ## [1.28.16] - 2026-08-27
 
 **Still a beta for the upcoming 2.0.0.** A big responsiveness fix for remote

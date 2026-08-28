@@ -5107,6 +5107,18 @@ class CockpitViewModel extends ChangeNotifier {
     final doc = _savedLayouts[id];
     if (doc == null) {
       _initTree(id); // síncrono — pane vazia padrão
+      // NOTIFICAR É OBRIGATÓRIO AQUI, e não só no caminho de restore abaixo.
+      // `_initTree` muta `_trees`/`_focused` em silêncio, e no boot este método
+      // roda dentro de um `addPostFrameCallback` — ou seja, DEPOIS do frame que
+      // renderizou com `tree == null`. Sem o notify, o `_multiplexer` fica
+      // preso naquele frame (devolve `SizedBox.shrink()`) e o workspace inteiro
+      // aparece em branco abaixo da topbar, indefinidamente.
+      //
+      // O bug parecia intermitente porque qualquer notify assíncrono posterior
+      // (git.refresh, worktrees, probe de IDEs, sidecar) mascarava a falta
+      // deste — uma corrida. Quando nenhum chegava, a tela ficava cinza até o
+      // usuário clicar em algo, e era isso que "consertava" ao abrir o rail.
+      notifyListeners();
       return;
     }
     _restoring = true;

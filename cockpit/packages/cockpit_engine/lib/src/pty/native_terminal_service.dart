@@ -287,7 +287,24 @@ class NativeTerminalService implements TerminalService {
     final session = _session(sessionId);
     _sessions.remove(sessionId);
     if (session.info.isAlive) {
-      Process.killPid(session.info.pid, ProcessSignal.sigkill);
+      // `pty_kill` PRIMEIRO, e não `Process.killPid`: no Windows o kill do Dart
+      // vira `TerminateProcess`, que encerra só o shell e deixa os filhos dele
+      // (e o conhost do ConPTY) órfãos em "Processos em segundo plano" — issue
+      // #163. O nativo alcança a árvore inteira (Job Object no Windows, process
+      // group no POSIX).
+      //
+      // O nativo já existia desde a correção da #163, mas ESTE caminho nunca o
+      // chamava: a correção mexeu no `Pty.kill()` do plugin Flutter, e desde
+      // que o PTY passou a nascer no sidecar (plano 58) quem encerra sessão é
+      // este serviço. Resultado: no Windows o bug seguia vivo com o fix no
+      // repositório — verificado em máquina real, com um `ping -t` sobrevivendo
+      // ao fechamento da aba.
+      final killTree = _bindings.kill;
+      if (killTree == null || killTree(session.handle) != 0) {
+        // Dylib velha (sem o símbolo) ou falha do nativo: o comportamento
+        // antigo ainda é melhor do que não matar nada.
+        Process.killPid(session.info.pid, ProcessSignal.sigkill);
+      }
     }
     session.stdoutPort.close();
     session.exitPort.close();

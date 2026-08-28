@@ -47,9 +47,13 @@ FFI_PLUGIN_EXPORT int pty_resize(PtyHandle *handle, int rows, int cols);
 
 /// Encerra o shell e todos os processos que ele criou. 0 = sucesso.
 ///
-/// Windows usa Job Object (`TerminateJobObject`); POSIX sinaliza o process
-/// group. Existe porque `Process.killPid` do Dart, no Windows, vira
-/// `TerminateProcess` e deixa a descendência órfã (issue #163).
+/// POSIX sinaliza o process group (o `forkpty` faz do shell um líder de
+/// sessão). Windows termina o Job Object **e** varre a árvore de descendentes:
+/// medido no Windows 10 com PowerShell 7, os filhos do shell não herdavam o
+/// job, então só a varredura fecha a issue #163.
+///
+/// Existe porque `Process.killPid` do Dart, no Windows, vira `TerminateProcess`
+/// e encerra apenas o processo alvo.
 FFI_PLUGIN_EXPORT int pty_kill(PtyHandle *handle);
 
 FFI_PLUGIN_EXPORT int pty_getpid(PtyHandle *handle);

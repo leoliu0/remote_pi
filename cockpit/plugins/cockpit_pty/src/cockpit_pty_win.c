@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <Windows.h>
+#include <TlHelp32.h>
 
 #include "cockpit_pty.h"
 
@@ -469,6 +470,7 @@ typedef struct PtyHandle
     // aberto, devolvido ao SO na saída do processo.
     HANDLE hJob;
 
+
     WriteQueue *writeQueue;
 
 } PtyHandle;
@@ -675,9 +677,13 @@ FFI_PLUGIN_EXPORT PtyHandle *pty_create(PtyOptions *options)
         return NULL;
     }
 
-    // Job Object: prende o shell e quem ele criar (ver o campo hJob). Falhar
-    // aqui não impede o terminal de funcionar — degrada para o comportamento
-    // antigo (só o shell morre no kill), então seguimos com hJob = NULL.
+    // Job Object: garante que o shell morra junto com o dono (o
+    // KILL_ON_JOB_CLOSE cobre até crash, sem chance de rodar limpeza).
+    //
+    // NÃO é o mecanismo que alcança a descendência: medido no Windows 10 com
+    // PowerShell 7, o job ficava com `assigned=1` mesmo com um filho vivo — os
+    // filhos do shell não estavam herdando o job. Quem encerra a árvore é a
+    // varredura explícita em `pty_kill`. Falhar aqui não impede nada.
     HANDLE hJob = CreateJobObjectW(NULL, NULL);
     if (hJob != NULL)
     {
@@ -817,31 +823,136 @@ FFI_PLUGIN_EXPORT int pty_resize(PtyHandle *handle, int rows, int cols)
     return ResizePseudoConsole(handle->hPty, size);
 }
 
+/// Preenche [out] com os descendentes de [root] (filhos, netos, ...), em
+/// largura, e devolve quantos foram encontrados. O próprio [root] fica de fora:
+/// quem o encerra é o chamador.
+///
+/// Um único snapshot serve para toda a varredura — o mapa pai→filho é
+/// percorrido em memória, então a árvore fica consistente mesmo que processos
+/// nasçam ou morram durante a operação.
+static DWORD collect_descendants(DWORD root, DWORD *out, DWORD capacity)
+{
+    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snapshot == INVALID_HANDLE_VALUE)
+    {
+        return 0;
+    }
+
+    // Tabela plana (pid, ppid) do snapshot; 4096 cobre com folga qualquer
+    // máquina real, e estourar só significa varrer menos, nunca corromper.
+    static const DWORD kMaxProcesses = 4096;
+    DWORD *pids = (DWORD *)malloc(kMaxProcesses * sizeof(DWORD));
+    DWORD *parents = (DWORD *)malloc(kMaxProcesses * sizeof(DWORD));
+    if (pids == NULL || parents == NULL)
+    {
+        free(pids);
+        free(parents);
+        CloseHandle(snapshot);
+        return 0;
+    }
+
+    DWORD total = 0;
+    PROCESSENTRY32W entry;
+    entry.dwSize = sizeof(entry);
+    if (Process32FirstW(snapshot, &entry))
+    {
+        do
+        {
+            if (total >= kMaxProcesses)
+            {
+                break;
+            }
+            pids[total] = entry.th32ProcessID;
+            parents[total] = entry.th32ParentProcessID;
+            total++;
+        } while (Process32NextW(snapshot, &entry));
+    }
+    CloseHandle(snapshot);
+
+    // BFS com `out` servindo de fila: `head` é quem está sendo expandido,
+    // `found` é o fim. Descartar pid 0 e o próprio root impede ciclo — no
+    // Windows o ppid é reciclável e uma entrada degenerada poderia apontar de
+    // volta para dentro da árvore.
+    DWORD found = 0;
+    DWORD head = 0;
+    DWORD parent = root;
+    for (;;)
+    {
+        for (DWORD i = 0; i < total && found < capacity; i++)
+        {
+            if (parents[i] == parent && pids[i] != 0 && pids[i] != root)
+            {
+                out[found++] = pids[i];
+            }
+        }
+        if (head >= found || found >= capacity)
+        {
+            break;
+        }
+        parent = out[head++];
+    }
+
+    free(pids);
+    free(parents);
+    return found;
+}
+
 /// Encerra o shell e TUDO o que ele criou.
 ///
-/// `TerminateJobObject` alcança a árvore inteira; sem ele, o Dart caía em
-/// `Process.killPid`, que no Windows vira `TerminateProcess` e deixa os filhos
-/// para trás. Devolve 0 em caso de sucesso.
+/// Duas camadas, ambas necessárias: `TerminateJobObject` (o shell e o que o
+/// Windows tiver de fato colocado no job) **e** a varredura explícita da árvore
+/// de descendentes — ver o comentário no corpo sobre por que o job sozinho não
+/// resolveu a issue #163 nesta plataforma.
 ///
-/// Sem job (a criação falhou), mata ao menos o processo do shell — o mesmo que
-/// acontecia antes, e melhor do que não fazer nada.
+/// Devolve 0 em caso de sucesso. Sem job (a criação falhou), encerra ao menos o
+/// shell, que é o comportamento antigo.
 FFI_PLUGIN_EXPORT int pty_kill(PtyHandle *handle)
 {
     if (handle == NULL)
     {
         return -1;
     }
+    // A ÁRVORE É ENUMERADA ANTES de qualquer kill. Depois de o shell morrer, o
+    // vínculo pai→filho é inútil: o campo ppid do órfão segue apontando para um
+    // pid morto, que o Windows pode reciclar — matar por ele arriscaria acertar
+    // um processo alheio.
+    DWORD descendants[256];
+    DWORD found = collect_descendants(handle->dwProcessId, descendants, 256);
+
+    BOOL ok;
     if (handle->hJob != NULL)
     {
-        return TerminateJobObject(handle->hJob, 1) ? 0 : -1;
+        ok = TerminateJobObject(handle->hJob, 1);
     }
-    HANDLE process = OpenProcess(PROCESS_TERMINATE, FALSE, handle->dwProcessId);
-    if (process == NULL)
+    else
     {
-        return -1;
+        HANDLE process =
+            OpenProcess(PROCESS_TERMINATE, FALSE, handle->dwProcessId);
+        if (process == NULL)
+        {
+            return -1;
+        }
+        ok = TerminateProcess(process, 1);
+        CloseHandle(process);
     }
-    BOOL ok = TerminateProcess(process, 1);
-    CloseHandle(process);
+
+    // Varredura da árvore, SEMPRE — não é plano B do job.
+    //
+    // O job sozinho não basta: medido no Windows 10 com PowerShell 7, o job
+    // criado em `pty_create` continha apenas o shell (`assigned=1`) mesmo com um
+    // filho vivo, e o `TerminateJobObject` devolvia sucesso deixando o
+    // descendente órfão — o sintoma exato da issue #163, que a correção anterior
+    // não eliminou. A herança automática de job não se confirmou aqui, então
+    // encerrar quem já era descendente é o que fecha o caso de verdade.
+    for (DWORD i = 0; i < found; i++)
+    {
+        HANDLE child = OpenProcess(PROCESS_TERMINATE, FALSE, descendants[i]);
+        if (child != NULL)
+        {
+            TerminateProcess(child, 1);
+            CloseHandle(child);
+        }
+    }
     return ok ? 0 : -1;
 }
 
