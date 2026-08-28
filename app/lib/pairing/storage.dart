@@ -269,7 +269,7 @@ class PairingStorage extends ChangeNotifier {
   Future<List<PeerRecord>> listPeers() async {
     try {
       final all = await _store.readAll().timeout(
-        const Duration(seconds: 1),
+        const Duration(seconds: 4),
         onTimeout: () => <String, String>{},
       );
       final prefix = '$_kPeersService:';

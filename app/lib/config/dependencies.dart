@@ -55,7 +55,7 @@ Future<void> setupDependencies() async {
   final prefs = Preferences();
   try {
     await prefs.load().timeout(
-      const Duration(seconds: 1),
+      const Duration(seconds: 4),
       onTimeout: () {},
     );
   } catch (_) {}

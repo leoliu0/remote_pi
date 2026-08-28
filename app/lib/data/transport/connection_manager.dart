@@ -398,8 +398,12 @@ class ConnectionManager extends Service {
     subscribeToPeers(peers.map((p) => p.remoteEpk).toList());
     PeerRecord target;
     if (preferredEpk != null) {
+      final clean = preferredEpk.split(':').first;
       target = peers.firstWhere(
-        (p) => p.remoteEpk == preferredEpk,
+        (p) =>
+            p.remoteEpk == preferredEpk ||
+            p.remoteEpk == clean ||
+            toStandardB64(p.remoteEpk) == toStandardB64(clean),
         orElse: () => peers.first,
       );
     } else {
@@ -427,7 +431,12 @@ class ConnectionManager extends Service {
 
     final target = preferredEpk != null
         ? peers.firstWhere(
-            (p) => p.remoteEpk == preferredEpk,
+            (p) {
+              final clean = preferredEpk.split(':').first;
+              return p.remoteEpk == preferredEpk ||
+                  p.remoteEpk == clean ||
+                  toStandardB64(p.remoteEpk) == toStandardB64(clean);
+            },
             orElse: () => _activePeer ?? peers.first,
           )
         : (_activePeer ?? peers.first);

@@ -153,15 +153,17 @@ class Preferences extends ChangeNotifier {
       Map<String, String> all = {};
       try {
         all = await _store.readAll().timeout(
-          const Duration(seconds: 1),
+          const Duration(seconds: 4),
           onTimeout: () => <String, String>{},
         );
       } catch (_) {}
 
-      final raw =
-          all[_kHideToolCallsKey] ?? await _store.read(key: _kHideToolCallsKey);
-      final rawDisplay = all[_kToolCallDisplayKey] ??
-          await _store.read(key: _kToolCallDisplayKey);
+      final raw = all.containsKey(_kHideToolCallsKey)
+          ? all[_kHideToolCallsKey]
+          : await _store.read(key: _kHideToolCallsKey);
+      final rawDisplay = all.containsKey(_kToolCallDisplayKey)
+          ? all[_kToolCallDisplayKey]
+          : await _store.read(key: _kToolCallDisplayKey);
       final toolDisplay = rawDisplay != null
           ? ToolCallDisplay.fromName(rawDisplay)
           : (raw == 'true' ? ToolCallDisplay.hidden : ToolCallDisplay.brief);
@@ -169,44 +171,50 @@ class Preferences extends ChangeNotifier {
         _toolCallDisplay = toolDisplay;
         changed = true;
       }
-      final selected = all[_kSelectedPeerEpkKey] ??
-          await _store.read(key: _kSelectedPeerEpkKey);
+      final selected = all.containsKey(_kSelectedPeerEpkKey)
+          ? all[_kSelectedPeerEpkKey]
+          : await _store.read(key: _kSelectedPeerEpkKey);
       final cleaned =
           (selected != null && selected.isNotEmpty) ? selected : null;
       if (cleaned != _selectedPeerEpk) {
         _selectedPeerEpk = cleaned;
         changed = true;
       }
-      final relay =
-          all[_kRelayUrlKey] ?? await _store.read(key: _kRelayUrlKey);
+      final relay = all.containsKey(_kRelayUrlKey)
+          ? all[_kRelayUrlKey]
+          : await _store.read(key: _kRelayUrlKey);
       final relayCleaned = (relay != null && relay.isNotEmpty) ? relay : null;
       if (relayCleaned != _relayUrl) {
         _relayUrl = relayCleaned;
         changed = true;
       }
-      final onboarded = all[_kOnboardingCompletedKey] ??
-          await _store.read(key: _kOnboardingCompletedKey);
+      final onboarded = all.containsKey(_kOnboardingCompletedKey)
+          ? all[_kOnboardingCompletedKey]
+          : await _store.read(key: _kOnboardingCompletedKey);
       final onboardedBool = onboarded == 'true';
       if (onboardedBool != _onboardingCompleted) {
         _onboardingCompleted = onboardedBool;
         changed = true;
       }
-      final theme =
-          all[_kThemeModeKey] ?? await _store.read(key: _kThemeModeKey);
+      final theme = all.containsKey(_kThemeModeKey)
+          ? all[_kThemeModeKey]
+          : await _store.read(key: _kThemeModeKey);
       final themeMode = _themeModeFromString(theme);
       if (themeMode != _themeMode) {
         _themeMode = themeMode;
         changed = true;
       }
-      final scaleRaw =
-          all[_kFontScaleKey] ?? await _store.read(key: _kFontScaleKey);
+      final scaleRaw = all.containsKey(_kFontScaleKey)
+          ? all[_kFontScaleKey]
+          : await _store.read(key: _kFontScaleKey);
       final scale = AppFontScale.fromName(scaleRaw);
       if (scale != _fontScale) {
         _fontScale = scale;
         changed = true;
       }
-      final fontFamRaw =
-          all[_kFontFamilyKey] ?? await _store.read(key: _kFontFamilyKey);
+      final fontFamRaw = all.containsKey(_kFontFamilyKey)
+          ? all[_kFontFamilyKey]
+          : await _store.read(key: _kFontFamilyKey);
       final fontFam = AppFontFamily.fromName(fontFamRaw);
       if (fontFam != _fontFamily) {
         _fontFamily = fontFam;

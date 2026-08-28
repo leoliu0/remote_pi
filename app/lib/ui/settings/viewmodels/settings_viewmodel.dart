@@ -73,13 +73,11 @@ class SettingsViewModel extends ViewModel<SettingsState> {
     final reason = relayUrlValidationMessage(normalized);
     if (reason != null) return reason;
     await _prefs.setRelayUrl(normalized);
-    await _conn.reconnect(preferredEpk: _prefs.selectedPeerEpk);
     return null;
   }
 
   Future<void> resetRelayUrl() async {
     await _prefs.setRelayUrl(null);
-    await _conn.reconnect(preferredEpk: _prefs.selectedPeerEpk);
   }
 
   /// Revoke pairing locally. Drops the peer from the relay's presence
