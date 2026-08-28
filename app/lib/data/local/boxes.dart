@@ -27,8 +27,14 @@ class LocalBoxes {
   /// `runApp` and before any read-repo is constructed.
   static Future<void> init() async {
     if (_initialized) return;
-    await Hive.initFlutter(_kNamespace);
-    await _openCommon();
+    try {
+      await Hive.initFlutter(_kNamespace);
+      await _openCommon();
+    } catch (_) {
+      try {
+        await _openCommon();
+      } catch (_) {}
+    }
     _initialized = true;
   }
 

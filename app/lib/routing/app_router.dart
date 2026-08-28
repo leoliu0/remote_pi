@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:app/config/dependencies.dart';
 import 'package:app/data/mesh/mesh_sync_service.dart';
 import 'package:app/data/preferences/preferences.dart';
@@ -59,65 +60,62 @@ class _BootState extends ChangeNotifier {
     MeshSyncService meshSync, {
     void Function()? installWatcherAfterBoot,
   }) async {
-    await prefs.load();
+    try {
+      await prefs.load();
 
-    // Plan 23 — block bootstrap until the platform's key-sync surface
-    // (iCloud Keychain / Block Store) is usable AND we have an
-    // Owner-key (loaded or freshly generated). If sync is off, the
-    // router redirects to /sync-required and the user retries from
-    // there once they flip the toggle in Settings.
-    final ownerResult = await ownerBridge.boot();
-    if (ownerResult is SyncUnavailableResult) {
-      _syncAvailable = false;
+      OwnerIdentityBootResult? ownerResult;
+      try {
+        ownerResult = await ownerBridge.boot().timeout(
+          const Duration(seconds: 4),
+          onTimeout: () => const SyncUnavailableResult(),
+        );
+      } catch (_) {}
+
+      if (ownerResult is SyncUnavailableResult) {
+        _syncAvailable = false;
+        _ready = true;
+        notifyListeners();
+        return;
+      }
+      _syncAvailable = true;
+      _identityWasGenerated =
+          ownerResult is IdentityReady && ownerResult.generated;
+
+      try {
+        installWatcherAfterBoot?.call();
+      } catch (_) {}
+
+      try {
+        await meshSync.pullOnDemand().timeout(
+          const Duration(seconds: 3),
+          onTimeout: () => false,
+        );
+      } catch (_) {}
+
+      final peers = await storage.listPeers();
+      _hasPeer = peers.isNotEmpty;
+      if (_hasPeer && !prefs.onboardingCompleted) {
+        await prefs.setOnboardingCompleted(true);
+      }
+      _onboarded = prefs.onboardingCompleted;
+    } catch (_) {
+      // Never block the app boot on unexpected initialization errors
+    } finally {
       _ready = true;
       notifyListeners();
-      return;
     }
-    _syncAvailable = true;
-    _identityWasGenerated =
-        ownerResult is IdentityReady && ownerResult.generated;
 
-    // Install the platform-sync watcher *after* boot completes so its
-    // initial-emit race (see OwnerIdentityBridge.startWatching) can't
-    // ever observe a null _current. The bridge has its own defence
-    // for the null case; this is the belt to its suspenders.
-    installWatcherAfterBoot?.call();
-
-    // Plan 24 — pull mesh_versions from the relay BEFORE listing peers
-    // so a reinstall on a new device materialises the same membership
-    // the user had on the old one. Failure (offline, relay down, 4xx)
-    // is logged inside the service and we fall back gracefully on the
-    // local cache.
-    await meshSync.pullOnDemand();
-
-    final peers = await storage.listPeers();
-    _hasPeer = peers.isNotEmpty;
-    // Plan 14: a user who already has a peer is implicitly onboarded —
-    // they paired in an earlier app version that predates the
-    // onboarding flow. Auto-flip the flag so they don't re-run it.
-    if (_hasPeer && !prefs.onboardingCompleted) {
-      await prefs.setOnboardingCompleted(true);
-    }
-    _onboarded = prefs.onboardingCompleted;
-    _ready = true;
-    notifyListeners();
-    // Plano 13: `Preferences.selectedPeerEpk` is the authoritative
-    // pointer to the peer the user wants connected. On a fresh install
-    // it's null — default to `peers.first` so subsequent boot()s have a
-    // stable target and the user lands on a deterministic chat.
-    if (_hasPeer) {
-      var selected = prefs.selectedPeerEpk;
-      if (selected == null) {
-        selected = peers.first.remoteEpk;
-        await prefs.setSelectedPeerEpk(selected);
-      } else if (!peers.any((p) => p.remoteEpk == selected)) {
-        // Selected peer was revoked / no longer in storage — fall back.
-        selected = peers.first.remoteEpk;
-        await prefs.setSelectedPeerEpk(selected);
+    try {
+      final peers = await storage.listPeers();
+      if (peers.isNotEmpty) {
+        var selected = prefs.selectedPeerEpk;
+        if (selected == null || !peers.any((p) => p.remoteEpk == selected)) {
+          selected = peers.first.remoteEpk;
+          await prefs.setSelectedPeerEpk(selected);
+        }
+        unawaited(conn.boot(preferredEpk: selected));
       }
-      // ignore: unawaited_futures
-      conn.boot(preferredEpk: selected);
-    }
+    } catch (_) {}
   }
 
   /// Plan 23 — invoked by the OwnerIdentityBridge watch listener when
