@@ -2203,11 +2203,11 @@ class Translations$cockpit$remoteHost$en {
 	/// en: 'No subfolders'
 	String get emptyFolder => 'No subfolders';
 
-	/// en: 'New local workspace'
-	String get newLocal => 'New local workspace';
+	/// en: 'Local'
+	String get newLocal => 'Local';
 
-	/// en: 'New remote workspace'
-	String get newRemote => 'New remote workspace';
+	/// en: 'Remote'
+	String get newRemote => 'Remote';
 
 	/// en: 'Choose a host'
 	String get chooseHost => 'Choose a host';
@@ -4216,8 +4216,8 @@ extension on Translations {
 			'cockpit.remoteHost.pickFolderTitle' => ({required Object host}) => 'Open folder on ${host}',
 			'cockpit.remoteHost.openHere' => 'Open here',
 			'cockpit.remoteHost.emptyFolder' => 'No subfolders',
-			'cockpit.remoteHost.newLocal' => 'New local workspace',
-			'cockpit.remoteHost.newRemote' => 'New remote workspace',
+			'cockpit.remoteHost.newLocal' => 'Local',
+			'cockpit.remoteHost.newRemote' => 'Remote',
 			'cockpit.remoteHost.chooseHost' => 'Choose a host',
 			'cockpit.remoteHost.newHostEntry' => 'New host…',
 			'cockpit.remoteHost.editHost' => 'Edit host',

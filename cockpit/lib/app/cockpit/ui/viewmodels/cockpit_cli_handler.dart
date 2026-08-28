@@ -211,6 +211,57 @@ class CockpitCliHandler {
           Failure(:final error) => CockpitCommandResult.fail(error),
         };
 
+      // `cockpit close-tab [<label|tab-id>]` — fecha uma aba (a contraparte do
+      // `new-tab`). Sem alvo, fecha a PRÓPRIA aba emissora.
+      //
+      // Mesma semântica do "x" da UI (`closeTab`): a última aba de uma folha
+      // remove a folha; a última folha do workspace vira uma aba vazia.
+      case 'close-tab':
+        final target = (c.args['target'] ?? '').toString();
+        final PaneItem? s;
+        if (target.isNotEmpty) {
+          final resolved = _resolvePaneTarget(target);
+          if (resolved case Failure(:final error)) {
+            return CockpitCommandResult.fail(error);
+          }
+          s = (resolved as Success<PaneItem, String>).value;
+        } else {
+          final id = c.tabId;
+          if (id == null || id.isEmpty) {
+            return const CockpitCommandResult.fail(
+              'missing target (pass <label|tab-id> or run inside a Cockpit '
+              'terminal)',
+            );
+          }
+          s = _vm.session(id);
+          if (s == null) {
+            return CockpitCommandResult.fail('tab "$id" does not exist');
+          }
+        }
+        // `closeTab` opera sobre o workspace ATIVO (lê `_activeTree`), então
+        // fechar aba de outro workspace exige trazê-lo pra frente antes —
+        // mesma regra do `open`/`new-tab`.
+        if (s.projectId != _vm.selectedProjectId) {
+          _vm.selectProject(s.projectId);
+        }
+        final leaf = _vm.leafOfTab(s.projectId, s.id);
+        if (leaf == null) {
+          return CockpitCommandResult.fail(
+            'tab "${s.id}" is not in any pane (already closed?)',
+          );
+        }
+        // O fechamento roda DEPOIS da resposta (`afterResponse`): fechar a
+        // própria aba emissora mata o PTY — e com ele o shell e o processo
+        // `cockpit` que espera o `ok` neste socket. Fechando aqui, o sucesso
+        // viraria erro de transporte na tela. Tudo que pode falhar (resolver
+        // alvo, achar a folha) já foi validado acima, então nada de erro se
+        // perde no adiamento.
+        final closingLeaf = leaf;
+        final closingId = s.id;
+        return CockpitCommandResult.ok({
+          'tabId': s.id,
+        }, () => _vm.closeTab(closingLeaf, closingId));
+
       // `cockpit orchestrate <file.ckp>` — aplica um layout de panes no
       // workspace ativo. A CLI já resolveu o path pro absoluto. Merge
       // idempotente (tab de mesmo nome = pulada); devolve {created, skipped}.
