@@ -54,6 +54,9 @@ android {
                 keyPassword = keystoreProperties.getProperty("keyPassword")
                 storeFile = rootProject.file(keystoreProperties.getProperty("storeFile"))
                 storePassword = keystoreProperties.getProperty("storePassword")
+                // PKCS12 file with a legacy .jks name — AGP would infer JKS
+                // from the extension and fail with "Tag number over 30".
+                storeType = keystoreProperties.getProperty("storeType") ?: "PKCS12"
             }
         }
     }
