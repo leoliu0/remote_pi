@@ -252,7 +252,7 @@ void main() {
         final vm = SettingsViewModel(_FakeStorage([]), prefs, _conn());
         await Future<void>.delayed(Duration.zero);
 
-        final err = await vm.saveRelayUrl('not-a-url');
+        final err = await vm.saveRelayUrl('ftp://not-a-url');
         expect(err, isNotNull);
         expect(prefs.relayUrl, isNull);
 
@@ -260,44 +260,68 @@ void main() {
       },
     );
 
-    test('saveRelayUrl rejects ws:// / wss:// with the scheme-specific hint',
-        () async {
-      final prefs = Preferences(_FakeSecureStorage());
-      final vm = SettingsViewModel(_FakeStorage([]), prefs, _conn());
-      await Future<void>.delayed(Duration.zero);
+    test(
+      'saveRelayUrl normalizes ws(s):// to http(s):// before persisting',
+      () async {
+        final prefs = Preferences(_FakeSecureStorage());
+        final vm = SettingsViewModel(_FakeStorage([]), prefs, _conn());
+        await Future<void>.delayed(Duration.zero);
 
-      final err = await vm.saveRelayUrl('wss://relay.example');
-      expect(err, isNotNull);
-      expect(err, contains('ws://'));
-      expect(err, contains('http://'));
-      expect(prefs.relayUrl, isNull);
+        final wssErr = await vm.saveRelayUrl('wss://relay.example');
+        expect(wssErr, isNull);
+        expect(prefs.relayUrl, 'https://relay.example');
 
-      vm.dispose();
-    });
+        final wsErr = await vm.saveRelayUrl('ws://localhost:8787');
+        expect(wsErr, isNull);
+        expect(prefs.relayUrl, 'http://localhost:8787');
+
+        vm.dispose();
+      },
+    );
 
     test(
-      'saveRelayUrl with empty / null is rejected (URL is now required) and '
-      'does NOT clear the existing override',
+      'saveRelayUrl auto-prefixes http:// when the scheme is missing',
+      () async {
+        final prefs = Preferences(_FakeSecureStorage());
+        final vm = SettingsViewModel(_FakeStorage([]), prefs, _conn());
+        await Future<void>.delayed(Duration.zero);
+
+        final err = await vm.saveRelayUrl('192.168.1.10:8787/');
+        expect(err, isNull);
+        expect(prefs.relayUrl, 'http://192.168.1.10:8787');
+
+        vm.dispose();
+      },
+    );
+
+    test(
+      'saveRelayUrl with empty / blank / null resets to the default '
+      'relay and clears the existing override',
       () async {
         final prefs = Preferences(_FakeSecureStorage());
         await prefs.setRelayUrl('https://x.example');
         final vm = SettingsViewModel(_FakeStorage([]), prefs, _conn());
         await Future<void>.delayed(Duration.zero);
 
-        // Empty → error, override untouched.
+        // Empty → override cleared, back on the default endpoint.
         final emptyErr = await vm.saveRelayUrl('');
-        expect(emptyErr, isNotNull);
-        expect(prefs.relayUrl, 'https://x.example');
+        expect(emptyErr, isNull);
+        expect(prefs.relayUrl, isNull);
+        expect(vm.effectiveRelayUrl, kDefaultRelayUrl);
+
+        await prefs.setRelayUrl('https://x.example');
 
         // Whitespace-only → same (trimmed to empty).
         final blankErr = await vm.saveRelayUrl('   ');
-        expect(blankErr, isNotNull);
-        expect(prefs.relayUrl, 'https://x.example');
+        expect(blankErr, isNull);
+        expect(prefs.relayUrl, isNull);
+
+        await prefs.setRelayUrl('https://x.example');
 
         // null → same.
         final nullErr = await vm.saveRelayUrl(null);
-        expect(nullErr, isNotNull);
-        expect(prefs.relayUrl, 'https://x.example');
+        expect(nullErr, isNull);
+        expect(prefs.relayUrl, isNull);
 
         vm.dispose();
       },

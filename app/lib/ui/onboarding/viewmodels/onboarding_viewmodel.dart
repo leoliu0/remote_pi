@@ -36,7 +36,7 @@ class OnboardingViewModel extends ViewModel<OnboardingState> {
         // Persist relay (null = use default community).
         final urlToSave = s.relayChoice == RelayChoice.custom &&
                 s.customRelayUrl.isNotEmpty
-            ? s.customRelayUrl
+            ? normalizeRelayUrl(s.customRelayUrl)
             : null;
         // ignore: unawaited_futures
         _prefs.setRelayUrl(urlToSave);

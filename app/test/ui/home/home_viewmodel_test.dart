@@ -418,5 +418,77 @@ void main() {
 
       vm.dispose();
     });
+
+    test(
+      'empty RoomsSnapshot after live rooms keeps the cached row and '
+      'empties the Online tab without dropping the session',
+      () async {
+        final ch = _ControllableChannel();
+        final storage = _FakeStorage([_peerA]);
+        final conn = ConnectionManager(
+          factory: (_, _) async => ch,
+          storage: storage,
+          emitDebounce: Duration.zero,
+        );
+        final prefs = Preferences(_FakeSecureStorage());
+        final vm = HomeViewModel(storage, prefs, conn);
+        await conn.connectTo(_peerA);
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+
+        ch.pushControl(
+          const RoomAnnounced(peer: 'epk_A', roomId: 'r1', startedAt: 1),
+        );
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+        expect(vm.counts, (all: 1, online: 1, offline: 0));
+        expect(vm.visibleItems.map((i) => i.room.roomId), ['r1']);
+
+        ch.pushControl(const RoomsSnapshot(peer: 'epk_A', rooms: []));
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+
+        expect(vm.counts, (all: 1, online: 0, offline: 1));
+        expect((vm.state as HomeList).filter, HomeFilter.online);
+        expect(vm.visibleItems, isEmpty);
+
+        vm.dispose();
+        await conn.disconnect();
+        conn.dispose();
+      },
+    );
+
+    test(
+      'dropping the relay WS does not empty the Online tab',
+      () async {
+        final ch = _ControllableChannel();
+        final storage = _FakeStorage([_peerA]);
+        final conn = ConnectionManager(
+          factory: (_, _) async => ch,
+          storage: storage,
+          emitDebounce: Duration.zero,
+        );
+        final prefs = Preferences(_FakeSecureStorage());
+        final vm = HomeViewModel(storage, prefs, conn);
+        await conn.connectTo(_peerA);
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+
+        ch.pushControl(
+          const RoomAnnounced(peer: 'epk_A', roomId: 'r1', startedAt: 1),
+        );
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+        expect(vm.visibleItems.map((i) => i.room.roomId), ['r1']);
+        expect(vm.isRoomLive('epk_A', 'r1'), isTrue);
+
+        await conn.disconnect();
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+
+        expect(vm.isRelayConnected, isFalse);
+        expect(vm.isRoomLive('epk_A', 'r1'), isFalse);
+        expect(vm.counts.online, 1);
+        expect(vm.visibleItems.map((i) => i.room.roomId), ['r1']);
+        expect(vm.onlineListPending, isFalse);
+
+        vm.dispose();
+        conn.dispose();
+      },
+    );
   });
 }

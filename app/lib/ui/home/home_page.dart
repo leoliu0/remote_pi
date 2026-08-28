@@ -265,10 +265,22 @@ class HomePage extends StatelessWidget {
     HomeViewModel vm,
     HomeList state,
   ) {
+    final colors = context.colors;
     final counts = vm.counts;
+    final pendingOnline = vm.onlineListPending;
     // Globally empty (paired Pi, no rooms at all): keep the original lonely
-    // state and DON'T show the tabs — there's nothing to filter.
+    // state and DON'T show the tabs — there's nothing to filter. While the
+    // first rooms snapshot is still in flight, show a spinner so Online
+    // cannot flash "No sessions online".
     if (counts.all == 0) {
+      if (pendingOnline) {
+        return SliverFillRemaining(
+          hasScrollBody: false,
+          child: Center(
+            child: CircularProgressIndicator(color: colors.accent),
+          ),
+        );
+      }
       return const SliverFillRemaining(
         hasScrollBody: false,
         child: _LonelyEmptyState(),
@@ -287,6 +299,19 @@ class HomePage extends StatelessWidget {
 
     final visible = vm.visibleItems;
     if (visible.isEmpty) {
+      if (pendingOnline) {
+        return SliverMainAxisGroup(
+          slivers: [
+            tabs,
+            SliverFillRemaining(
+              hasScrollBody: false,
+              child: Center(
+                child: CircularProgressIndicator(color: colors.accent),
+              ),
+            ),
+          ],
+        );
+      }
       // Items exist, but none match this tab → per-tab empty state beneath
       // the tabs (which stay visible so the user can switch back).
       return SliverMainAxisGroup(

@@ -95,7 +95,7 @@ void main() {
         final s = await _setup();
         s.vm.next(); // → relay
         s.vm.setRelayChoice(RelayChoice.custom);
-        s.vm.setCustomRelayUrl('not-a-url');
+        s.vm.setCustomRelayUrl('ftp://not-a-url');
         s.vm.next(); // should not advance
         final state = s.vm.state as OnboardingInProgress;
         expect(state.step, OnboardingStep.relay);
@@ -117,6 +117,19 @@ void main() {
         // the VM. Give the microtask a tick.
         await Future<void>.delayed(Duration.zero);
         expect(s.prefs.relayUrl, 'https://my-relay.example');
+      },
+    );
+    test(
+      'next() on relay step normalizes ws(s):// and scheme-less URLs '
+      'before persisting',
+      () async {
+        final s = await _setup();
+        s.vm.next(); // → relay
+        s.vm.setRelayChoice(RelayChoice.custom);
+        s.vm.setCustomRelayUrl('wss://relay.example/');
+        s.vm.next();
+        await Future<void>.delayed(Duration.zero);
+        expect(s.prefs.relayUrl, 'https://relay.example');
       },
     );
 
@@ -154,8 +167,7 @@ void main() {
     );
 
     test(
-      'setCustomRelayUrl flags ws:// and wss:// with the scheme-specific '
-      'hint about internal conversion',
+      'setCustomRelayUrl accepts ws:// and wss:// — converted internally',
       () async {
         final s = await _setup();
         s.vm.next();
@@ -164,15 +176,12 @@ void main() {
         s.vm.setCustomRelayUrl('ws://localhost');
         final err1 =
             (s.vm.state as OnboardingInProgress).customRelayError;
-        expect(err1, isNotNull);
-        expect(err1, contains('ws://'));
-        expect(err1, contains('http://'));
+        expect(err1, isNull);
 
         s.vm.setCustomRelayUrl('wss://relay.example');
         final err2 =
             (s.vm.state as OnboardingInProgress).customRelayError;
-        expect(err2, isNotNull);
-        expect(err2, contains('ws://'));
+        expect(err2, isNull);
       },
     );
 

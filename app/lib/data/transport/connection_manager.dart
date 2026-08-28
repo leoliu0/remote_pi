@@ -120,6 +120,7 @@ class ConnectionManager extends Service {
   final _roomsController =
       StreamController<Map<String, List<RoomInfo>>>.broadcast();
   bool _roomsRestored = false;
+  bool _liveRoomsKnown = false;
   ConnectionStatus _status = const StatusNoPeer();
   PeerRecord? _activePeer;
   // Plan 17 — active room on the destination Pi. 'main' is the implicit
@@ -224,6 +225,15 @@ class ConnectionManager extends Service {
       _roomsController.stream;
 
   Map<String, List<RoomInfo>> get roomsSnapshot => _roomsSnapshot();
+
+  /// Hydrate cached rooms from disk. Home waits on this before leaving
+  /// [HomeLoading] so the Online tab cannot flash empty ahead of cache.
+  Future<void> ensureCachedRoomsRestored() => _restoreCachedRooms();
+
+  /// True after the relay has delivered at least one rooms snapshot or
+  /// room_announced for a subscribed peer. Distinguishes "no live rooms"
+  /// from "we have not heard yet".
+  bool get liveRoomsKnown => _liveRoomsKnown;
 
   /// Rooms for a single peer (or empty list if none known yet). Accepts
   /// url-safe or standard base64.
@@ -690,6 +700,7 @@ class ConnectionManager extends Service {
         list.add(next);
         _roomsByPeer[key] = list;
         (_liveRoomIds[key] ??= <String>{}).add(roomId);
+        _liveRoomsKnown = true;
         roomsDirty = true;
         // Persist the new view so cold restart shows the same tiles.
         // ignore: unawaited_futures
@@ -759,8 +770,8 @@ class ConnectionManager extends Service {
         );
         roomsDirty = true;
         // ignore: unawaited_futures
-        _persistRoomsForPeer(key);
       case RoomsSnapshot(:final peer, :final rooms):
+        _liveRoomsKnown = true;
         final key = toStandardB64(peer);
         // Merge snapshot into cache: add unknown rooms, refresh
         // metadata (preserving local rename + previous model when
@@ -880,22 +891,20 @@ class ConnectionManager extends Service {
   );
 
   /// Returns `true` if `roomId` is currently announced live for the
-  /// peer (the relay's last `room_announced` / `rooms` push included
-  /// it). Cached rooms not in the live set return `false`. Used by
-  /// the chat AppBar to render the online dot.
-  ///
-  /// Plan-18 follow-up: gated by `_status is StatusOnline`. When the
-  /// WS to the relay drops (retrying / offline), we have no fresh
-  /// signal that any room is reachable, so EVERY room is reported
-  /// offline regardless of the cached `_liveRoomIds`. Home tiles +
-  /// chat AppBar flip to grey immediately. On reconnect, the relay
-  /// re-pushes the rooms snapshot which repopulates the live set
-  /// and tiles go green again.
+  /// peer. Gated by `_status is StatusOnline` so Home tiles and the
+  /// chat AppBar go grey immediately when the WS drops.
   bool isRoomLive(String epk, String roomId) {
     if (_status is! StatusOnline) return false;
+    return isRoomInLiveSet(epk, roomId);
+  }
+
+  /// Last relay live-set membership, ignoring WS status. Home's Online
+  /// filter uses this so a reconnect cannot empty the tab.
+  bool isRoomInLiveSet(String epk, String roomId) {
     final live = _liveRoomIds[toStandardB64(epk)];
     return live != null && live.contains(roomId);
   }
+
 
   /// Plan/32 — `true` when the relay's last room-meta broadcast for
   /// `(epk, roomId)` carried `working: true` (an in-flight agent turn).

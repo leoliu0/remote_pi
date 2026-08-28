@@ -78,6 +78,8 @@ class HomeViewModel extends ViewModel<HomeState> {
       emit(const HomeNoPeer());
       return;
     }
+    await _conn.ensureCachedRoomsRestored();
+    if (_disposed) return;
     // Make sure the relay is pushing updates for everyone we know about;
     // the call is idempotent so this is safe even mid-session. The same
     // subscribe also covers rooms (plan 17 — replay block in
@@ -138,13 +140,22 @@ class HomeViewModel extends ViewModel<HomeState> {
     emit(s.copyWith(filter: filter));
   }
 
-  /// `true` when `(epk, roomId)` is live on the relay AND the relay itself
-  /// is reachable. The single source of truth for the Online/Offline split.
-  /// [ConnectionManager.isRoomLive] is already gated on `StatusOnline`, so
-  /// the `_relayConnected &&` is belt-and-suspenders that also documents
-  /// intent: "online" requires a live relay.
+  /// `true` when `(epk, roomId)` is in the relay's last live set.
+  /// Deliberately not gated on WS status: dropping the socket must not
+  /// empty the Online tab (amber reconnecting dots stay on the tiles).
   bool _online(HomeItem it) =>
-      _relayConnected && _conn.isRoomLive(it.peer.remoteEpk, it.room.roomId);
+      _conn.isRoomInLiveSet(it.peer.remoteEpk, it.room.roomId);
+
+  /// Spinner instead of "No sessions online" until the relay has
+  /// delivered a rooms snapshot (or we time out in the page via this flag).
+  bool get onlineListPending {
+    final s = state;
+    if (s is HomeLoading) return true;
+    if (s is! HomeList) return false;
+    if (s.filter != HomeFilter.online) return false;
+    if (visibleItems.isNotEmpty) return false;
+    return !_conn.liveRoomsKnown;
+  }
 
   /// Plan-38 Fase 3 — the items the current [HomeList.filter] keeps. A pure
   /// view over `state.items()`; returns `const []` outside a list state.

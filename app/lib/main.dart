@@ -110,6 +110,20 @@ class _RemotePiAppState extends State<RemotePiApp> with WidgetsBindingObserver {
           themeMode: prefs.themeMode,
           routerConfig: _router,
           debugShowCheckedModeBanner: false,
+          builder: (context, child) {
+            if (child == null) return const SizedBox.shrink();
+            return Builder(
+              builder: (innerContext) {
+                final media = MediaQuery.of(innerContext);
+                return MediaQuery(
+                  data: media.copyWith(
+                    textScaler: TextScaler.linear(prefs.fontScale.factor),
+                  ),
+                  child: child,
+                );
+              },
+            );
+          },
         ),
       ),
     );

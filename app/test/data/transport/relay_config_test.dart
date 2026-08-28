@@ -57,15 +57,20 @@ void main() {
       expect(isValidRelayUrl('https://relay-rp1.jacobmoura.work'), isTrue);
     });
 
-    test('rejects ws:// and wss:// — those are conversions only', () {
-      expect(isValidRelayUrl('ws://localhost'), isFalse);
-      expect(isValidRelayUrl('wss://relay.example.com'), isFalse);
+    test('accepts ws:// and wss:// — converted to http(s) on save', () {
+      expect(isValidRelayUrl('ws://localhost'), isTrue);
+      expect(isValidRelayUrl('wss://relay.example.com'), isTrue);
+    });
+
+    test('accepts scheme-less hosts by auto-prefixing http://', () {
+      expect(isValidRelayUrl('relay.example.com'), isTrue);
+      expect(isValidRelayUrl('192.168.1.10:8787'), isTrue);
     });
 
     test('rejects empty, unsupported schemes, missing host', () {
       expect(isValidRelayUrl(''), isFalse);
       expect(isValidRelayUrl('ftp://example.com'), isFalse);
-      expect(isValidRelayUrl('foo'), isFalse);
+      expect(isValidRelayUrl('http:///'), isFalse);
       expect(isValidRelayUrl('https://'), isFalse,
           reason: 'no host segment');
       expect(isValidRelayUrl('http://'), isFalse,
@@ -79,19 +84,16 @@ void main() {
       expect(relayUrlValidationMessage('http://localhost:3000'), isNull);
     });
 
-    test('returns ws-specific hint for ws:// and wss://', () {
-      final ws = relayUrlValidationMessage('ws://localhost');
-      expect(ws, kRelayUrlInvalidScheme);
-      expect(ws, contains('http://'));
-      expect(ws, contains('ws://'));
-
-      final wss = relayUrlValidationMessage('wss://relay.example.com');
-      expect(wss, kRelayUrlInvalidScheme);
+    test('returns null for ws(s):// and scheme-less input (normalized)', () {
+      expect(relayUrlValidationMessage('ws://localhost'), isNull);
+      expect(relayUrlValidationMessage('wss://relay.example.com'), isNull);
+      expect(relayUrlValidationMessage('relay.example.com'), isNull);
     });
 
     test('returns generic message for empty / malformed input', () {
       expect(relayUrlValidationMessage(''), kRelayUrlInvalidGeneric);
-      expect(relayUrlValidationMessage('foo'), kRelayUrlInvalidGeneric);
+      expect(relayUrlValidationMessage('http:///'),
+          kRelayUrlInvalidGeneric);
       expect(relayUrlValidationMessage('ftp://x.com'), kRelayUrlInvalidGeneric);
       expect(relayUrlValidationMessage('https://'), kRelayUrlInvalidGeneric);
     });

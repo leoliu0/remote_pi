@@ -138,6 +138,7 @@ class _RelaySectionState extends State<_RelaySection> {
     if (!mounted) return;
     setState(() => _error = err);
     if (err == null) {
+      _ctrl.text = vm.effectiveRelayUrl;
       messenger.showSnackBar(
         const SnackBar(
           content: Text(
@@ -201,8 +202,10 @@ class _RelaySectionState extends State<_RelaySection> {
               const SizedBox(height: 10),
               Align(
                 alignment: Alignment.centerLeft,
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
+                child: Wrap(
+                  spacing: 12,
+                  runSpacing: 8,
+                  crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
                     FilledButton(
                       onPressed: _save,

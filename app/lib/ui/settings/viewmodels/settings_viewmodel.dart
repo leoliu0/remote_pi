@@ -66,13 +66,13 @@ class SettingsViewModel extends ViewModel<SettingsState> {
 
   Future<String?> saveRelayUrl(String? value) async {
     if (value == null || value.trim().isEmpty) {
-      return 'Enter a URL or clear the field to use the default relay.';
+      await resetRelayUrl();
+      return null;
     }
-    final trimmed = value.trim();
-
-    final reason = relayUrlValidationMessage(trimmed);
+    final normalized = normalizeRelayUrl(value);
+    final reason = relayUrlValidationMessage(normalized);
     if (reason != null) return reason;
-    await _prefs.setRelayUrl(trimmed);
+    await _prefs.setRelayUrl(normalized);
     await _conn.reconnect(preferredEpk: _prefs.selectedPeerEpk);
     return null;
   }
