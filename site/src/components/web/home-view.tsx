@@ -2,11 +2,13 @@
 
 import { useState } from "react";
 import { PairedSession } from "./web-client";
+import { homeListMode } from "./session-list";
 
 interface HomeViewProps {
   sessions: PairedSession[];
   isRelayConnected?: boolean;
   deviceName?: string;
+  loading?: boolean;
   onOpenSession: (session: PairedSession) => void;
   onOpenPairModal: () => void;
   onOpenSettings?: () => void;
@@ -17,6 +19,7 @@ export function HomeView({
   sessions,
   isRelayConnected = true,
   deviceName = "Remote Pi",
+  loading = false,
   onOpenSession,
   onOpenPairModal,
   onOpenSettings,
@@ -53,6 +56,7 @@ export function HomeView({
     : filter === "online"
     ? onlineSessions
     : offlineSessions;
+  const listMode = homeListMode(loading, visibleSessions.length);
 
   // Group visible sessions by Peer / Device
   const groupedByDevice: Record<string, PairedSession[]> = {};
@@ -162,8 +166,12 @@ export function HomeView({
         </div>
       )}
 
-      {/* 3. Empty State Handling */}
-      {visibleSessions.length === 0 ? (
+      {listMode === "loading" ? (
+        <div className="flex flex-col items-center justify-center py-10 px-4 text-center">
+          <div className="w-4 h-4 border-2 border-[#4fc3f7] border-t-transparent rounded-full animate-spin mb-2.5" />
+          <div className="text-xs font-mono text-[#888]">Loading sessions…</div>
+        </div>
+      ) : listMode === "empty" ? (
         <div className="flex flex-col items-center justify-center py-10 px-4 text-center">
           <div className="w-10 h-10 rounded-full bg-white/[0.03] border border-white/10 flex items-center justify-center mb-2.5 text-[#888]">
             <svg className="w-5 h-5 text-[#888]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">

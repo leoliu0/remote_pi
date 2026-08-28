@@ -56,6 +56,7 @@ interface MultiQueryResult {
   isRelayConnected: boolean;
   roomsByPeer: Record<string, RelayRoom[]>;
   presenceByPeer: Record<string, boolean>;
+  roomsComplete: boolean;
 }
 
 async function queryRelayPeers(
@@ -63,6 +64,7 @@ async function queryRelayPeers(
   peers: Array<{ epk: string; device: string }>
 ): Promise<MultiQueryResult> {
   const { promise, resolve } = Promise.withResolvers<MultiQueryResult>();
+  let settled = false;
 
   const wsUrl = relayUrl.replace(/^http:\/\//, "ws://").replace(/^https:\/\//, "wss://");
   const ws = new WebSocket(wsUrl);
@@ -72,18 +74,40 @@ async function queryRelayPeers(
   const clientPubB64 = Buffer.from(clientPub).toString("base64");
 
   const epkList = peers.map((p) => p.epk);
-
-  const timeout = setTimeout(() => {
-    try { ws.close(); } catch {}
-    resolve({ isRelayConnected: false, roomsByPeer: {}, presenceByPeer: {} });
-  }, 2500);
-
   const roomsByPeer: Record<string, RelayRoom[]> = {};
   const presenceByPeer: Record<string, boolean> = {};
+  const roomsReceived = new Set<string>();
+
+  const snapshot = (connected: boolean): MultiQueryResult => ({
+    isRelayConnected: connected,
+    roomsByPeer: { ...roomsByPeer },
+    presenceByPeer: { ...presenceByPeer },
+    roomsComplete: epkList.length === 0 || epkList.every((epk) => roomsReceived.has(epk)),
+  });
+
+  const finish = (result: MultiQueryResult) => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(timeout);
+    try { ws.close(); } catch {}
+    resolve(result);
+  };
+
+  const timeout = setTimeout(() => {
+    finish(snapshot(roomsReceived.size > 0));
+  }, 1500);
 
   ws.on("error", () => {
-    clearTimeout(timeout);
-    resolve({ isRelayConnected: false, roomsByPeer: {}, presenceByPeer: {} });
+    if (roomsReceived.size > 0) {
+      finish(snapshot(true));
+    } else {
+      finish({
+        isRelayConnected: false,
+        roomsByPeer: {},
+        presenceByPeer: {},
+        roomsComplete: false,
+      });
+    }
   });
 
   ws.on("open", () => {
@@ -112,16 +136,14 @@ async function queryRelayPeers(
       } else if (msg.type === "rooms") {
         if (msg.peer && Array.isArray(msg.rooms)) {
           roomsByPeer[msg.peer] = msg.rooms;
+          roomsReceived.add(msg.peer);
+          if (epkList.length > 0 && epkList.every((epk) => roomsReceived.has(epk))) {
+            finish(snapshot(true));
+          }
         }
       }
     } catch {}
   });
-
-  setTimeout(() => {
-    clearTimeout(timeout);
-    try { ws.close(); } catch {}
-    resolve({ isRelayConnected: true, roomsByPeer, presenceByPeer });
-  }, 600);
 
   return promise;
 }
@@ -130,7 +152,7 @@ export async function GET() {
   try {
     const relayUrl = process.env.REMOTE_PI_RELAY_URL || "ws://178.157.59.181:3000";
     const knownPeers = getKnownPeers();
-    const { isRelayConnected, roomsByPeer } = await queryRelayPeers(relayUrl, knownPeers);
+    const { isRelayConnected, roomsByPeer, roomsComplete } = await queryRelayPeers(relayUrl, knownPeers);
 
     // Read default thinking level from local Pi settings
     let defaultThinking = "high";
@@ -218,6 +240,7 @@ export async function GET() {
     return NextResponse.json({
       localPiDetected: true,
       relayConnected: isRelayConnected,
+      roomsComplete,
       device: "Remote Pi",
       remoteEpk: knownPeers[0]?.epk,
       relayUrl,
@@ -227,6 +250,7 @@ export async function GET() {
     return NextResponse.json({
       localPiDetected: false,
       relayConnected: false,
+      roomsComplete: false,
       error: err?.message || "Failed to inspect local environment",
       sessions: [],
     });

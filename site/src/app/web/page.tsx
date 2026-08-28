@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   PairedSession,
   parsePairUri,
@@ -15,6 +15,13 @@ import { WebChat } from "@/components/web/web-chat";
 import { SessionInfoModal } from "@/components/web/session-info-modal";
 import { QuickActionsModal } from "@/components/web/quick-actions-modal";
 import { SettingsModal } from "@/components/web/settings-modal";
+import {
+  applyPeerRooms,
+  mergeRemoteSessions,
+  shouldIgnoreEmptyRoomsSnapshot,
+  upsertLiveRoom,
+} from "@/components/web/session-list";
+
 export default function WebPage() {
   const [view, setView] = useState<"home" | "chat" | "pair">("home");
   const [activeSession, setActiveSession] = useState<PairedSession | null>(null);
@@ -25,13 +32,17 @@ export default function WebPage() {
   const [showQuickActions, setShowQuickActions] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [mounted, setMounted] = useState(false);
+  const [sessionsLoading, setSessionsLoading] = useState(true);
+  const fetchGen = useRef(0);
 
   // Helper to refresh session list
   const refreshSessions = () => {
     const stored = getSavedSessions();
+    const gen = ++fetchGen.current;
     fetch("/api/local-session")
       .then((res) => res.json())
       .then((data) => {
+        if (gen !== fetchGen.current) return;
         if (data && data.localPiDetected && Array.isArray(data.sessions)) {
           if (typeof data.relayConnected === "boolean") {
             setIsRelayConnected(data.relayConnected);
@@ -39,6 +50,7 @@ export default function WebPage() {
           if (data.device) {
             setDeviceName(data.device);
           }
+          const roomsComplete = data.roomsComplete !== false;
           const remoteSessions: PairedSession[] = data.sessions.map((s: any) => ({
             id: s.id || `session_${s.roomId}`,
             name: s.name,
@@ -55,53 +67,24 @@ export default function WebPage() {
             lastConnectedAt: new Date().toISOString(),
           }));
 
-          // Merge: Live active sessions from relay are authoritative (keyed by roomId)
-          const map = new Map<string, PairedSession>();
-          for (const s of remoteSessions) {
-            map.set(s.roomId, s);
-          }
-          for (const s of stored) {
-            if (!map.has(s.roomId)) {
-              map.set(s.roomId, s);
-            }
-          }
-          const sortSessions = (list: PairedSession[]) =>
-            [...list].sort((a, b) => {
-              const rank = (s: PairedSession) =>
-                s.status === "working" ? 0 : s.isLive || s.status === "online" ? 1 : 2;
-              const rankDiff = rank(a) - rank(b);
-              if (rankDiff !== 0) return rankDiff;
-              const nameA = (a.name || a.roomId || "").toLowerCase();
-              const nameB = (b.name || b.roomId || "").toLowerCase();
-              if (nameA !== nameB) return nameA.localeCompare(nameB);
-              return (a.roomId || "").localeCompare(b.roomId || "");
-            });
-
-          const next = sortSessions(Array.from(map.values()));
-          setSavedSessions((prev) => {
-            if (prev.length === next.length) {
-              let same = true;
-              for (let i = 0; i < prev.length; i++) {
-                if (
-                  prev[i].id !== next[i].id ||
-                  prev[i].status !== next[i].status ||
-                  prev[i].model !== next[i].model ||
-                  prev[i].isLive !== next[i].isLive
-                ) {
-                  same = false;
-                  break;
-                }
-              }
-              if (same) return prev;
-            }
-            return next;
-          });
+          setSavedSessions((prev) =>
+            mergeRemoteSessions({
+              prev,
+              remote: remoteSessions,
+              stored,
+              roomsComplete,
+            }),
+          );
+          setSessionsLoading(false);
         } else {
-          setSavedSessions(stored);
+          setSavedSessions((prev) => (prev.length > 0 ? prev : stored));
+          setSessionsLoading(false);
         }
       })
       .catch(() => {
-        setSavedSessions(stored);
+        if (gen !== fetchGen.current) return;
+        setSavedSessions((prev) => (prev.length > 0 ? prev : stored));
+        setSessionsLoading(false);
       });
   };
 
@@ -117,6 +100,13 @@ export default function WebPage() {
       sse.onmessage = (e) => {
         try {
           const event = JSON.parse(e.data);
+
+          if (event.type === "init") {
+            if (typeof event.connected === "boolean") {
+              setIsRelayConnected(event.connected);
+            }
+            return;
+          }
 
           // Real-time turn start / turn end (working: true/false)
           if (event.type === "room_meta_updated" && event.roomId) {
@@ -141,8 +131,28 @@ export default function WebPage() {
               });
               return changed ? next : prev;
             });
-          } else if (event.type === "room_announced" || event.type === "rooms") {
-            refreshSessions();
+          } else if (event.type === "rooms" && event.peer && Array.isArray(event.rooms)) {
+            setSavedSessions((prev) => {
+              if (shouldIgnoreEmptyRoomsSnapshot(prev, event.peer, event.rooms)) {
+                return prev;
+              }
+              return applyPeerRooms(prev, event.peer, event.rooms, deviceName);
+            });
+            setSessionsLoading(false);
+          } else if (event.type === "room_announced") {
+            const room = event.room || event;
+            const peer = event.peer;
+            if (peer && (room.room_id || room.roomId)) {
+              setSavedSessions((prev) =>
+                upsertLiveRoom(
+                  prev,
+                  peer,
+                  { ...room, room_id: room.room_id || room.roomId },
+                  deviceName,
+                ),
+              );
+              setSessionsLoading(false);
+            }
           } else if (event.type === "room_ended" && event.roomId) {
             setSavedSessions((prev) =>
               prev.map((s) => {
@@ -150,17 +160,15 @@ export default function WebPage() {
                   return { ...s, status: "offline", isLive: false };
                 }
                 return s;
-              })
+              }),
             );
-          } else if (event.type === "presence") {
-            setIsRelayConnected(event.presence === "online");
           }
         } catch {}
       };
     } catch {}
 
-    // 2. Periodic sync backstop (every 2.5s)
-    const interval = setInterval(refreshSessions, 2500);
+    // 2. Periodic sync backstop
+    const interval = setInterval(refreshSessions, 10000);
 
     // 3. Check if pairing parameters are provided in URL query
     if (typeof window !== "undefined" && window.location.search) {
@@ -313,6 +321,7 @@ export default function WebPage() {
             sessions={savedSessions}
             isRelayConnected={isRelayConnected}
             deviceName={deviceName}
+            loading={sessionsLoading}
             onOpenSession={handleOpenSession}
             onOpenPairModal={() => setView("pair")}
             onOpenSettings={() => setShowSettings(true)}
