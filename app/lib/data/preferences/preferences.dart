@@ -149,67 +149,76 @@ class Preferences extends ChangeNotifier {
   /// Hydrate from secure storage. Safe to call multiple times.
   Future<void> load() async {
     var changed = false;
-
-    final raw = await _store.read(key: _kHideToolCallsKey);
-    final rawDisplay = await _store.read(key: _kToolCallDisplayKey);
-    final toolDisplay = rawDisplay != null
-        ? ToolCallDisplay.fromName(rawDisplay)
-        : (raw == 'true' ? ToolCallDisplay.hidden : ToolCallDisplay.brief);
-    if (toolDisplay != _toolCallDisplay) {
-      _toolCallDisplay = toolDisplay;
-      changed = true;
-    }
-    final selected = await _store.read(key: _kSelectedPeerEpkKey);
-    final cleaned = (selected != null && selected.isNotEmpty) ? selected : null;
-    if (cleaned != _selectedPeerEpk) {
-      _selectedPeerEpk = cleaned;
-      changed = true;
-    }
-
-    final relay = await _store.read(key: _kRelayUrlKey);
-    final relayCleaned = (relay != null && relay.isNotEmpty) ? relay : null;
-    if (relayCleaned != _relayUrl) {
-      _relayUrl = relayCleaned;
-      changed = true;
-    }
-
-    final onboarded = await _store.read(key: _kOnboardingCompletedKey);
-    final onboardedBool = onboarded == 'true';
-    if (onboardedBool != _onboardingCompleted) {
-      _onboardingCompleted = onboardedBool;
-      changed = true;
-    }
-
-    final theme = await _store.read(key: _kThemeModeKey);
-    final themeMode = _themeModeFromString(theme);
-    if (themeMode != _themeMode) {
-      _themeMode = themeMode;
-      changed = true;
-    }
-
-    final scale = AppFontScale.fromName(await _store.read(key: _kFontScaleKey));
-    if (scale != _fontScale) {
-      _fontScale = scale;
-      changed = true;
-    }
-
-    final fontFam =
-        AppFontFamily.fromName(await _store.read(key: _kFontFamilyKey));
-    if (fontFam != _fontFamily) {
-      _fontFamily = fontFam;
-      changed = true;
-    }
-
-    if (changed) notifyListeners();
     try {
-      final all = await _store.readAll();
+      Map<String, String> all = {};
+      try {
+        all = await _store.readAll().timeout(
+          const Duration(seconds: 1),
+          onTimeout: () => <String, String>{},
+        );
+      } catch (_) {}
+
+      final raw =
+          all[_kHideToolCallsKey] ?? await _store.read(key: _kHideToolCallsKey);
+      final rawDisplay = all[_kToolCallDisplayKey] ??
+          await _store.read(key: _kToolCallDisplayKey);
+      final toolDisplay = rawDisplay != null
+          ? ToolCallDisplay.fromName(rawDisplay)
+          : (raw == 'true' ? ToolCallDisplay.hidden : ToolCallDisplay.brief);
+      if (toolDisplay != _toolCallDisplay) {
+        _toolCallDisplay = toolDisplay;
+        changed = true;
+      }
+      final selected = all[_kSelectedPeerEpkKey] ??
+          await _store.read(key: _kSelectedPeerEpkKey);
+      final cleaned =
+          (selected != null && selected.isNotEmpty) ? selected : null;
+      if (cleaned != _selectedPeerEpk) {
+        _selectedPeerEpk = cleaned;
+        changed = true;
+      }
+      final relay =
+          all[_kRelayUrlKey] ?? await _store.read(key: _kRelayUrlKey);
+      final relayCleaned = (relay != null && relay.isNotEmpty) ? relay : null;
+      if (relayCleaned != _relayUrl) {
+        _relayUrl = relayCleaned;
+        changed = true;
+      }
+      final onboarded = all[_kOnboardingCompletedKey] ??
+          await _store.read(key: _kOnboardingCompletedKey);
+      final onboardedBool = onboarded == 'true';
+      if (onboardedBool != _onboardingCompleted) {
+        _onboardingCompleted = onboardedBool;
+        changed = true;
+      }
+      final theme =
+          all[_kThemeModeKey] ?? await _store.read(key: _kThemeModeKey);
+      final themeMode = _themeModeFromString(theme);
+      if (themeMode != _themeMode) {
+        _themeMode = themeMode;
+        changed = true;
+      }
+      final scaleRaw =
+          all[_kFontScaleKey] ?? await _store.read(key: _kFontScaleKey);
+      final scale = AppFontScale.fromName(scaleRaw);
+      if (scale != _fontScale) {
+        _fontScale = scale;
+        changed = true;
+      }
+      final fontFamRaw =
+          all[_kFontFamilyKey] ?? await _store.read(key: _kFontFamilyKey);
+      final fontFam = AppFontFamily.fromName(fontFamRaw);
+      if (fontFam != _fontFamily) {
+        _fontFamily = fontFam;
+        changed = true;
+      }
       for (final entry in all.entries) {
         if (entry.key.startsWith('prefs.draft.') && entry.value.isNotEmpty) {
           _drafts[entry.key] = entry.value;
         }
       }
     } catch (_) {}
-
+    if (changed) notifyListeners();
   }
 
   Future<void> setHideToolCalls(bool value) async {

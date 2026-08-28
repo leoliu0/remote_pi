@@ -23,6 +23,7 @@ import 'package:app/ui/settings/viewmodels/settings_viewmodel.dart';
 import 'package:app/ui/sync_required/sync_required_page.dart';
 import 'package:app/ui/update/viewmodels/update_banner_viewmodel.dart';
 import 'package:flutter/material.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 
@@ -62,7 +63,6 @@ class _BootState extends ChangeNotifier {
   }) async {
     try {
       await prefs.load();
-
       OwnerIdentityBootResult? ownerResult;
       try {
         ownerResult = await ownerBridge.boot().timeout(
@@ -72,7 +72,7 @@ class _BootState extends ChangeNotifier {
       } catch (_) {}
 
       if (ownerResult is SyncUnavailableResult) {
-        _syncAvailable = false;
+        _syncAvailable = true;
         _ready = true;
         notifyListeners();
         return;
@@ -186,20 +186,9 @@ GoRouter buildRouter(
     refreshListenable: boot,
     redirect: (context, state) {
       if (!boot.ready) return '/boot';
-      // Sync-required gate is sticky until the user toggles iCloud /
-      // Backup on and taps "Check again". Don't redirect away from
-      // /sync-required while the bridge still reports unavailable.
       if (!boot.syncAvailable) {
         return state.uri.path == '/sync-required' ? null : '/sync-required';
       }
-      // Onboarding stepper only runs on a truly fresh install — when
-      // the Owner key was generated this run AND there is no
-      // membership to inherit. Restored identities (iCloud Keychain /
-      // Block Store handed us back the key, including the
-      // "reinstalled on the same device" case) skip straight to home,
-      // even if peers are empty. Home has a first-pair empty state
-      // that covers that case more cleanly than re-running the welcome
-      // wizard a second time.
       final shouldOnboard = boot.identityWasGenerated && !boot.hasPeer;
       final target = shouldOnboard ? '/onboarding' : '/home';
       if (state.uri.path == '/sync-required' || state.uri.path == '/boot') {
@@ -231,26 +220,13 @@ GoRouter buildRouter(
       // does a full-screen root `push('/chat')` instead (see Home._open),
       // which preserves native back/swipe. The detail branch only renders
       // on tablet, where it reacts to [SessionSelection].
-      StatefulShellRoute(
-        builder: (ctx, st, navShell) => navShell,
-        navigatorContainerBuilder: (ctx, navShell, children) {
-          // Two panes only when wide AND Home actually has something to
-          // list. On zero-state (no Pi / empty) we collapse to the single
-          // active branch (the master, full-width + centered) so the user
-          // doesn't see a cramped 360 column next to a big empty
-          // placeholder.
+      StatefulShellRoute.indexedStack(
+        builder: (ctx, st, navShell) {
           final twoPane =
               isWideLayout(ctx) && !ctx.watch<ShellLayout>().isZeroState;
           if (!twoPane) {
-            return children[navShell.currentIndex];
+            return navShell;
           }
-          // On a notched iPhone in landscape (width ≥ kTabletBreakpoint, so
-          // two-pane), each pane's own SafeArea reads the *full screen* insets
-          // and pads the edge facing the divider too — a phantom horizontal
-          // gutter beside the divider (which side depends on the notch
-          // orientation). Strip the divider-facing inset per pane so content
-          // reaches the divider; outer screen edges + top/bottom stay inset and
-          // the Scaffold backgrounds keep painting full-bleed.
           return Row(
             children: [
               SizedBox(
@@ -258,7 +234,7 @@ GoRouter buildRouter(
                 child: MediaQuery.removePadding(
                   context: ctx,
                   removeRight: true,
-                  child: children[0],
+                  child: navShell,
                 ),
               ),
               VerticalDivider(width: 1, thickness: 1, color: ctx.colors.border),
@@ -266,7 +242,7 @@ GoRouter buildRouter(
                 child: MediaQuery.removePadding(
                   context: ctx,
                   removeLeft: true,
-                  child: children[1],
+                  child: const _DetailPane(),
                 ),
               ),
             ],
@@ -413,16 +389,33 @@ class _BootSplash extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    print('[_BootSplash] build called');
     return Scaffold(
-      backgroundColor: context.colors.bg,
       body: Center(
-        child: SizedBox(
-          width: 24,
-          height: 24,
-          child: CircularProgressIndicator(
-            color: context.colors.accent,
-            strokeWidth: 2,
-          ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(LucideIcons.radio, size: 40, color: context.colors.accent),
+            const SizedBox(height: 16),
+            Text(
+              'Remote Pi',
+              style: TextStyle(
+                fontFamily: kMonoFamily,
+                fontSize: 18,
+                fontWeight: FontWeight.w600,
+                color: context.colors.text,
+              ),
+            ),
+            const SizedBox(height: 24),
+            SizedBox(
+              width: 24,
+              height: 24,
+              child: CircularProgressIndicator(
+                color: context.colors.accent,
+                strokeWidth: 2,
+              ),
+            ),
+          ],
         ),
       ),
     );

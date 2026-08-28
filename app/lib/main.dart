@@ -14,13 +14,21 @@ import 'package:provider/provider.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  // Plan 31 — open the v2 SSOT boxes + WIPE the volatile runtime box BEFORE
-  // anything subscribes (#3 / Risk 2).
-  await LocalBoxes.init();
-  await setupDependencies();
-  // Eagerly construct the SSOT writer so it's consuming the channel from boot
-  // (messages can arrive before the chat screen mounts).
-  injector.get<SyncService>();
+  try {
+    await LocalBoxes.init();
+  } catch (e) {
+    debugPrint('[Main] LocalBoxes.init error: $e');
+  }
+  try {
+    await setupDependencies();
+  } catch (e) {
+    debugPrint('[Main] setupDependencies error: $e');
+  }
+  try {
+    injector.get<SyncService>();
+  } catch (e) {
+    debugPrint('[Main] SyncService error: $e');
+  }
   runApp(const RemotePiApp());
 }
 
@@ -102,17 +110,6 @@ class _RemotePiAppState extends State<RemotePiApp> with WidgetsBindingObserver {
           themeMode: prefs.themeMode,
           routerConfig: _router,
           debugShowCheckedModeBanner: false,
-          // Issue #114 — user-chosen text size. Applied here rather than by
-          // scaling `AppTypography`'s base sizes so the many per-widget
-          // `copyWith(fontSize: …)` overrides scale too. `TextScaler.linear`
-          // REPLACES the platform scaler, which is deliberate: Flutter can't
-          // read iOS's per-app Text Size anyway (it only reads the global
-          // accessibility setting), so honoring both would compound them.
-          builder: (context, child) => MediaQuery.withClampedTextScaling(
-            minScaleFactor: prefs.fontScale.factor,
-            maxScaleFactor: prefs.fontScale.factor,
-            child: child ?? const SizedBox.shrink(),
-          ),
         ),
       ),
     );

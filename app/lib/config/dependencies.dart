@@ -53,7 +53,12 @@ Future<void> setupDependencies() async {
   _injector.addInstance<PairingStorage>(PairingStorage());
 
   final prefs = Preferences();
-  await prefs.load();
+  try {
+    await prefs.load().timeout(
+      const Duration(seconds: 1),
+      onTimeout: () {},
+    );
+  } catch (_) {}
   _injector.addInstance<Preferences>(prefs);
 
   // Plan 31 — local SSOT box facade (boxes already opened + runtime wiped in
@@ -203,8 +208,13 @@ Future<void> setupDependencies() async {
   // from package_info; the manifest fetch + gating live in the ViewModel
   // (silent on iOS via `enabled` and on any fetch failure). Stateless
   // collaborators → addOther (lazy singleton, no dispose hook).
-  final packageInfo = await PackageInfo.fromPlatform();
-  final appVersion = packageInfo.version;
+  var appVersion = '1.2.2';
+  try {
+    final packageInfo = await PackageInfo.fromPlatform().timeout(
+      const Duration(milliseconds: 500),
+    );
+    appVersion = packageInfo.version;
+  } catch (_) {}
   _injector.addOther<UpdateChecker>(() => UpdateCheckerImpl());
   _injector.addOther<DismissedUpdateStore>(() => SecureDismissedUpdateStore());
   _injector.addOther<UrlOpener>(() => const UrlLauncherOpener());

@@ -89,20 +89,7 @@ class OwnerIdentityBridge extends ChangeNotifier {
     } on SyncUnavailable {
       return const SyncUnavailableResult();
     } catch (_) {
-      // Fallback: generate in-memory keypair so app never hangs
-      try {
-        final kp = await _ed25519.newKeyPair();
-        final pub = await kp.extractPublicKey();
-        final priv = await kp.extractPrivateKeyBytes();
-        final id = OwnerIdentity(
-          ownerPk: Uint8List.fromList(pub.bytes),
-          ownerSk: Uint8List.fromList(priv),
-        );
-        _current = id;
-        return IdentityReady(id, generated: true);
-      } catch (_) {
-        return const SyncUnavailableResult();
-      }
+      return const SyncUnavailableResult();
     }
   }
   Future<OwnerIdentity> _generateAndSave() async {

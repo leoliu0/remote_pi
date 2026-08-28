@@ -267,14 +267,21 @@ class PairingStorage extends ChangeNotifier {
   }
 
   Future<List<PeerRecord>> listPeers() async {
-    final all = await _store.readAll();
-    final prefix = '$_kPeersService:';
-    return all.entries
-        .where((e) => e.key.startsWith(prefix))
-        .map((e) => PeerRecord.fromJson(
-          jsonDecode(e.value) as Map<String, dynamic>,
-        ))
-        .toList();
+    try {
+      final all = await _store.readAll().timeout(
+        const Duration(seconds: 1),
+        onTimeout: () => <String, String>{},
+      );
+      final prefix = '$_kPeersService:';
+      return all.entries
+          .where((e) => e.key.startsWith(prefix))
+          .map((e) => PeerRecord.fromJson(
+            jsonDecode(e.value) as Map<String, dynamic>,
+          ))
+          .toList();
+    } catch (_) {
+      return [];
+    }
   }
 
   /// Wipe every peer + every persisted room map. Used by the
