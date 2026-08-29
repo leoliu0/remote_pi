@@ -1,5 +1,7 @@
 import 'dart:async';
 
+import 'package:cockpit_core/cockpit_core.dart';
+
 import 'package:cockpit/app/cockpit/domain/contracts/db_connection_store.dart';
 import 'package:cockpit/app/cockpit/domain/contracts/db_driver.dart';
 import 'package:cockpit/app/cockpit/domain/contracts/mongo_database_store.dart';
@@ -12,8 +14,12 @@ import 'package:cockpit/app/cockpit/domain/entities/ssh_tunnel_config.dart';
 
 /// Executa uma query SQL num host remoto (plano 58, Wave 4). Implementado
 /// pelo app (fala com o `cockpit-server` via `RemoteDbService`); o
-/// `DbQueryService` só o invoca quando o workspace ativo é remoto. Recebe a
-/// conexão + senha já resolvidas no cliente e devolve o `DbResult`.
+/// `DbQueryService` só o invoca quando o workspace ativo é remoto.
+///
+/// [workspaceRoot] é a raiz do workspace **no host** — metade da chave do
+/// segredo no cofre de lá (plano 62). [password] só vem preenchida quando a
+/// conexão NÃO guarda segredo (`savePassword` desligado); com segredo
+/// guardado ela vai `null` e quem resolve é o servidor.
 typedef RemoteDbExecutor =
     Future<DbResult> Function(
       DbConnection conn,
@@ -21,6 +27,7 @@ typedef RemoteDbExecutor =
       required int limit,
       required bool dml,
       String? password,
+      required String workspaceRoot,
     });
 
 /// Orquestra a execução de queries — o **mesmo** motor pra tab `.dbq` e pra
@@ -115,13 +122,13 @@ class DbQueryService {
     final remote = remoteExecutorFor?.call(workspaceId);
     if (remote != null) {
       final conn = await _resolveRemote(workspaceId, workspaceRoot, connName);
-      final password = await _passwordFor(conn, workspaceId);
       return remote(
         conn,
         sql,
         limit: limit ?? defaultLimit,
         dml: dml,
-        password: password,
+        password: await _remotePasswordFor(conn),
+        workspaceRoot: workspaceRoot,
       );
     }
     // Resolver conexão e abrir túnel ficam FORA da fila: não tocam o dylib, e
@@ -129,7 +136,7 @@ class DbQueryService {
     // mesmo engine à toa.
     final conn = await _resolve(workspaceRoot, workspaceId, connName);
     final driver = _driverFor(conn);
-    final password = await _passwordFor(conn, workspaceId);
+    final password = await _passwordFor(conn, workspaceRoot, workspaceId);
     final resolved = _resolvePaths(workspaceRoot, conn);
     return _serialized(conn.engine, () async {
       if (dml) {
@@ -156,18 +163,18 @@ class DbQueryService {
     final remote = remoteExecutorFor?.call(workspaceId);
     if (remote != null) {
       final conn = await _resolveRemote(workspaceId, workspaceRoot, connName);
-      final password = await _passwordFor(conn, workspaceId);
       return remote(
         conn,
         dbSchemaSql(conn.engine, table: table, schema: schema),
         limit: 10000,
         dml: false,
-        password: password,
+        password: await _remotePasswordFor(conn),
+        workspaceRoot: workspaceRoot,
       );
     }
     final conn = await _resolve(workspaceRoot, workspaceId, connName);
     final driver = _driverFor(conn);
-    final password = await _passwordFor(conn, workspaceId);
+    final password = await _passwordFor(conn, workspaceRoot, workspaceId);
     final resolved = _resolvePaths(workspaceRoot, conn);
     return _serialized(
       conn.engine,
@@ -200,7 +207,7 @@ class DbQueryService {
     final remote = remoteExecutorFor?.call(workspaceId);
     if (remote != null) {
       final conn = await _resolveRemote(workspaceId, workspaceRoot, connName);
-      final password = await _passwordFor(conn, workspaceId);
+      final password = await _remotePasswordFor(conn);
       DbResult? last;
       for (final sql in statements) {
         last = await remote(
@@ -209,13 +216,14 @@ class DbQueryService {
           limit: limit ?? defaultLimit,
           dml: false,
           password: password,
+          workspaceRoot: workspaceRoot,
         );
       }
       return last!;
     }
     final conn = await _resolve(workspaceRoot, workspaceId, connName);
     final driver = _driverFor(conn);
-    final password = await _passwordFor(conn, workspaceId);
+    final password = await _passwordFor(conn, workspaceRoot, workspaceId);
     final resolved = _resolvePaths(workspaceRoot, conn);
     return _serialized(
       conn.engine,
@@ -246,12 +254,16 @@ class DbQueryService {
     if (remote != null) {
       final conn = await _resolveRemote(workspaceId, workspaceRoot, connName);
       _requireEngine(conn, DbEngine.redis, connName);
-      final password = await _passwordFor(conn, workspaceId);
-      return remote.redis(conn, parts, password: password);
+      return remote.redis(
+        conn,
+        parts,
+        password: await _remotePasswordFor(conn),
+        workspaceRoot: workspaceRoot,
+      );
     }
     final conn = await _resolve(workspaceRoot, workspaceId, connName);
     _requireEngine(conn, DbEngine.redis, connName);
-    final password = await _passwordFor(conn, workspaceId);
+    final password = await _passwordFor(conn, workspaceRoot, workspaceId);
     return _serialized(
       conn.engine,
       () => _nosql.redis(conn, parts, password: password),
@@ -271,12 +283,16 @@ class DbQueryService {
     if (remote != null) {
       final conn = await _resolveRemote(workspaceId, workspaceRoot, connName);
       _requireEngine(conn, DbEngine.redis, connName);
-      final password = await _passwordFor(conn, workspaceId);
-      return remote.redisMany(conn, commands, password: password);
+      return remote.redisMany(
+        conn,
+        commands,
+        password: await _remotePasswordFor(conn),
+        workspaceRoot: workspaceRoot,
+      );
     }
     final conn = await _resolve(workspaceRoot, workspaceId, connName);
     _requireEngine(conn, DbEngine.redis, connName);
-    final password = await _passwordFor(conn, workspaceId);
+    final password = await _passwordFor(conn, workspaceRoot, workspaceId);
     return _serialized(
       conn.engine,
       () => _nosql.redisMany(conn, commands, password: password),
@@ -299,13 +315,18 @@ class DbQueryService {
     if (remote != null) {
       final conn = await _resolveRemote(workspaceId, workspaceRoot, connName);
       _requireEngine(conn, DbEngine.mongo, connName);
-      final password = await _passwordFor(conn, workspaceId);
       final target = database ?? mongoDatabase(workspaceId, conn);
-      return remote.mongo(conn, command, password: password, database: target);
+      return remote.mongo(
+        conn,
+        command,
+        password: await _remotePasswordFor(conn),
+        database: target,
+        workspaceRoot: workspaceRoot,
+      );
     }
     final conn = await _resolve(workspaceRoot, workspaceId, connName);
     _requireEngine(conn, DbEngine.mongo, connName);
-    final password = await _passwordFor(conn, workspaceId);
+    final password = await _passwordFor(conn, workspaceRoot, workspaceId);
     final target = database ?? mongoDatabase(workspaceId, conn);
     return _serialized(
       conn.engine,
@@ -349,13 +370,28 @@ class DbQueryService {
     return proportional > operationCap ? proportional : operationCap;
   }
 
-  /// Chave do cofre pra senha da conexão — única por workspace+nome.
-  static String secretKey(String workspaceId, String connName) =>
+  /// Chave do cofre pra senha da conexão.
+  ///
+  /// Chaveada pela **raiz do workspace**, e não pelo `workspaceId`: o id é
+  /// gerado por máquina (UUID no local, `remote:<host>::<path>` no remoto),
+  /// então a mesma conexão tinha chaves diferentes em cada cliente e a senha
+  /// nunca era achada de fora. Isto é exatamente o `DbSecretStore.keyFor` do
+  /// host — é o que faz local e remoto lerem a MESMA entrada.
+  static String secretKey(String workspaceRoot, String connName) =>
+      DbSecretStore.keyFor(workspaceRoot, connName);
+
+  /// Chave da PASSPHRASE da chave SSH — segredo distinto da senha do banco (a
+  /// conexão pode ter um sem o outro). O prefixo `ssh` não colide com uma
+  /// senha de banco porque lá a primeira parte é sempre um caminho absoluto.
+  static String sshSecretKey(String workspaceRoot, String connName) =>
+      DbSecretStore.keyFor('ssh', '$workspaceRoot\u0000$connName');
+
+  /// Chaves do formato ANTERIOR (cofre do SO, por `workspaceId`). Só existem
+  /// para a migração — ver `DbSecrets.read`.
+  static String legacySecretKey(String workspaceId, String connName) =>
       'cockpit.db.$workspaceId.$connName';
 
-  /// Chave do cofre pra passphrase da chave SSH — separada da senha do banco
-  /// (são segredos distintos, e a conexão pode ter um sem o outro).
-  static String sshSecretKey(String workspaceId, String connName) =>
+  static String legacySshSecretKey(String workspaceId, String connName) =>
       'cockpit.ssh.$workspaceId.$connName';
 
   /// Resolve a conexão por nome e, se ela tiver túnel SSH, **redireciona o
@@ -390,7 +426,7 @@ class DbQueryService {
   ) async {
     final all = await _store.load(root);
     for (final c in all) {
-      if (c.name == name) return _tunneled(c, workspaceId);
+      if (c.name == name) return _tunneled(c, root, workspaceId);
     }
     final available = all.map((c) => c.name).join(', ');
     throw DbQueryException(
@@ -410,10 +446,16 @@ class DbQueryService {
   Future<void> ping(
     DbConnection conn, {
     required String workspaceId,
+    required String workspaceRoot,
     String? password,
     String? sshPassphrase,
   }) async {
-    final target = await _tunneled(conn, workspaceId, override: sshPassphrase);
+    final target = await _tunneled(
+      conn,
+      workspaceRoot,
+      workspaceId,
+      override: sshPassphrase,
+    );
     return _serialized(conn.engine, () async {
       switch (conn.engine) {
         case DbEngine.redis:
@@ -433,6 +475,7 @@ class DbQueryService {
 
   Future<DbConnection> _tunneled(
     DbConnection conn,
+    String workspaceRoot,
     String workspaceId, {
     String? override,
   }) async {
@@ -442,6 +485,7 @@ class DbQueryService {
     final passphrase = await _passphraseFor(
       conn,
       ssh,
+      workspaceRoot,
       workspaceId,
       override: override,
     );
@@ -472,7 +516,7 @@ class DbQueryService {
       // Passphrase cacheada rejeitada (usuário trocou a chave, cofre velho):
       // esquece pra que a próxima tentativa volte a perguntar.
       if (e.kind == 'ssh_credential_required') {
-        _passphraseCache.remove(sshSecretKey(workspaceId, conn.name));
+        _passphraseCache.remove(sshSecretKey(workspaceRoot, conn.name));
       }
       throw DbQueryException(e.kind, e.message);
     }
@@ -484,6 +528,7 @@ class DbQueryService {
   Future<String?> _passphraseFor(
     DbConnection conn,
     SshTunnelConfig ssh,
+    String workspaceRoot,
     String workspaceId, {
     String? override,
   }) async {
@@ -492,9 +537,12 @@ class DbQueryService {
     // testar a nova.
     if (override != null && override.isNotEmpty) return override;
 
-    final key = sshSecretKey(workspaceId, conn.name);
+    final key = sshSecretKey(workspaceRoot, conn.name);
     if (ssh.savePassphrase) {
-      final saved = await _secrets.read(key);
+      final saved = await _secrets.read(
+        key,
+        legacyKey: legacySshSecretKey(workspaceId, conn.name),
+      );
       if (saved != null && saved.isNotEmpty) return saved;
     }
     final cached = _passphraseCache[key];
@@ -531,13 +579,13 @@ class DbQueryService {
   }
 
   /// Esquece a passphrase de sessão (renome/remoção de conexão).
-  void forgetSshPassphrase(String workspaceId, String connName) =>
-      _passphraseCache.remove(sshSecretKey(workspaceId, connName));
+  void forgetSshPassphrase(String workspaceRoot, String connName) =>
+      _passphraseCache.remove(sshSecretKey(workspaceRoot, connName));
 
   /// Esquece a senha de banco cacheada nesta sessão (renome/remoção/edição de
   /// conexão) — a próxima query relê o cofre com o valor atual.
-  void forgetPassword(String workspaceId, String connName) =>
-      _passwordCache.remove(secretKey(workspaceId, connName));
+  void forgetPassword(String workspaceRoot, String connName) =>
+      _passwordCache.remove(secretKey(workspaceRoot, connName));
 
   DbDriver _driverFor(DbConnection conn) {
     final driver = _registry.forEngine(conn.engine);
@@ -551,9 +599,31 @@ class DbQueryService {
     return driver;
   }
 
-  Future<String?> _passwordFor(DbConnection conn, String workspaceId) async {
+  /// Senha a MANDAR pro host num workspace remoto (plano 62).
+  ///
+  /// Com `savePassword` ligado, devolve `null` de propósito: o segredo mora no
+  /// cofre do host e é o servidor que o resolve — a senha não atravessa. Só o
+  /// modo sem segredo guardado (senha embutida na URL) ainda manda algo, que é
+  /// o preço explícito de não guardar.
+  ///
+  /// Antes, este caminho lia o cofre do CLIENTE com a chave
+  /// `cockpit.db.<workspaceId>.<conn>`, e `workspaceId` é local de cada
+  /// máquina (UUID no workspace local, `remote:<host>::<path>` no remoto). A
+  /// senha cadastrada num cliente nunca era achada por outro — a conexão
+  /// simplesmente não funcionava fora da máquina que a criou.
+  Future<String?> _remotePasswordFor(DbConnection conn) async {
     if (conn.engine == DbEngine.sqlite) return null;
-    final key = secretKey(workspaceId, conn.name);
+    if (conn.savePassword) return null;
+    return conn.urlPassword;
+  }
+
+  Future<String?> _passwordFor(
+    DbConnection conn,
+    String workspaceRoot,
+    String workspaceId,
+  ) async {
+    if (conn.engine == DbEngine.sqlite) return null;
+    final key = secretKey(workspaceRoot, conn.name);
     // Cache de sessão: sem ele, cada query relê o cofre nativo, e no macOS
     // toda leitura do Keychain pode disparar o prompt de autorização (ACL
     // atrelada à assinatura) — o usuário via "pediu a senha de novo" a cada
@@ -561,7 +631,12 @@ class DbQueryService {
     final cached = _passwordCache[key];
     if (cached != null) return cached;
     if (conn.savePassword) {
-      final saved = await _secrets.read(key);
+      final saved = await _secrets.read(
+        key,
+        // Migra a senha que ficou no cofre do SO desta máquina, sob a chave
+        // por workspaceId, para o cofre único por raiz (plano 62).
+        legacyKey: legacySecretKey(workspaceId, conn.name),
+      );
       if (saved != null) {
         _passwordCache[key] = saved;
         return saved;

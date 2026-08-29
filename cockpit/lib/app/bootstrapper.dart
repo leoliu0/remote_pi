@@ -7,6 +7,7 @@ import 'package:cockpit/app/app_widget.dart';
 import 'package:cockpit/app/cockpit/data/hooks/claude_hook_installer_impl.dart';
 import 'package:cockpit/app/cockpit/data/hooks/codex_hook_installer_impl.dart';
 import 'package:cockpit/app/cockpit/data/rpc/pi_process_registry.dart';
+import 'package:cockpit/app/cockpit/data/terminal/sidecar/sidecar_terminal_connector.dart';
 import 'package:cockpit/app/cockpit/data/tasks/task_process_registry.dart';
 import 'package:cockpit/app/cockpit/domain/contracts/hook_installer.dart';
 import 'package:cockpit/app/core/data/diagnostics/diagnostics_log.dart';
@@ -95,6 +96,16 @@ class _CockpitBootstrapperState extends State<CockpitBootstrapper> {
           DiagnosticsLog.instance.log('exit', 'flush estourou 2s — saindo');
         } on Object catch (e, stack) {
           DiagnosticsLog.instance.logError('exit-flush', e, stack);
+        }
+        // Encerra o sidecar JUNTO com o app. Sem isto, o `cockpit-server`
+        // sobrevivia ao fechamento e — como o self-update troca o binário no
+        // disco embaixo do processo vivo — o host seguia servindo código
+        // antigo indefinidamente. O `--exit-on-parent-close` cobre a morte
+        // abrupta; aqui é a saída limpa, que não precisa esperar o EOF.
+        try {
+          inject<SidecarTerminalConnector>().dispose();
+        } on Object catch (e, stack) {
+          DiagnosticsLog.instance.logError('exit-sidecar', e, stack);
         }
         DiagnosticsLog.instance.markCleanExit();
         return AppExitResponse.exit;

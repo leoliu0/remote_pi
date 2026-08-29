@@ -281,15 +281,15 @@ void main() {
       // Regressão: o Test chamava o driver direto e furava o túnel — validava
       // um host que a query real nunca usaria.
       final f = build(const []); // nem está no store: é a conexão do dialog
-      await f.service.ping(pg(tunnel: ssh), workspaceId: 'w1');
+      await f.service.ping(pg(tunnel: ssh), workspaceId: 'w1', workspaceRoot: '/ws');
       expect(f.driver.seen.single.host, '127.0.0.1');
       expect(f.tunnel.requests.single, 'deploy@bastion:22->db.internal:5432');
     });
 
     test('Redis e Mongo são testáveis (não só os engines SQL)', () async {
       final f = build(const []);
-      await f.service.ping(redis(tunnel: ssh), workspaceId: 'w1');
-      await f.service.ping(mongo(tunnel: ssh), workspaceId: 'w1');
+      await f.service.ping(redis(tunnel: ssh), workspaceId: 'w1', workspaceRoot: '/ws');
+      await f.service.ping(mongo(tunnel: ssh), workspaceId: 'w1', workspaceRoot: '/ws');
       // Redis por port-forward (endereço único), Mongo por SOCKS.
       expect(f.runner.seen.first.host, '127.0.0.1');
       expect(f.runner.seen.last.host, 'mongo.internal');
@@ -311,6 +311,7 @@ void main() {
       await f.service.ping(
         pg(tunnel: ssh.copyWith(savePassphrase: true)),
         workspaceId: 'w1',
+        workspaceRoot: '/ws',
         sshPassphrase: 'nova',
       );
       expect(f.tunnel.opens, 1);
@@ -415,6 +416,7 @@ class _SpyRunner implements NoSqlRunner {
     DbConnection conn,
     List<String> parts, {
     String? password,
+  String workspaceRoot = '',
   }) async {
     seen.add(conn);
     return null;
@@ -425,6 +427,7 @@ class _SpyRunner implements NoSqlRunner {
     DbConnection conn,
     List<List<String>> commands, {
     String? password,
+  String workspaceRoot = '',
   }) async {
     seen.add(conn);
     return const [];
@@ -436,6 +439,7 @@ class _SpyRunner implements NoSqlRunner {
     Map<String, dynamic> command, {
     String? password,
     String? database,
+  String workspaceRoot = '',
   }) async {
     seen.add(conn);
     return null;
@@ -457,7 +461,7 @@ class _MapSecrets implements DbSecrets {
   @override
   Future<void> write(String key, String value) async => values[key] = value;
   @override
-  Future<String?> read(String key) async => values[key];
+  Future<String?> read(String key, {String? legacyKey}) async => values[key];
   @override
   Future<void> delete(String key) async => values.remove(key);
 }

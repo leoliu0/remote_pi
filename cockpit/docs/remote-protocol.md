@@ -100,6 +100,55 @@ Códigos atuais: `handshake_required`, `version_mismatch`, `bad_message`,
 `session_not_found`, `spawn_failed`, `internal`. `code` é contrato (a UI
 traduz por enum); `detail` é texto de terceiros (errno etc.), exibido cru.
 
+## Domínio Bancos de dados — segredos (plano 62)
+
+Query, schema e comandos NoSQL executam **no host** (`db.query`, `db.redis`,
+`db.redisMany`, `db.mongo`), e o descritor de conexão viaja em `params.conn`.
+
+A senha **não** viaja junto. O cofre de senhas é do host — arquivo `0600` em
+`~/.cockpit/db-secrets.json`, chaveado por `(raiz do workspace, nome da
+conexão)` — e o cliente o alimenta por dois métodos **write-only**:
+
+| Método | `params` | Efeito |
+|---|---|---|
+| `db.secretSet` | `root`, `conn`, `value` | grava/substitui a senha da conexão |
+| `db.secretDelete` | `root`, `conn` | apaga a senha da conexão |
+
+O conteúdo é cifrado com AES-GCM e chave fixa do produto (modelo do DBeaver).
+É **ofuscação deliberada**: tira o segredo do texto claro em disco, cobrindo
+vazamento acidental (backup, pasta sincronizada, `grep`, print de tela). Não
+defende de quem executa como o dono da conta — a chave está no binário, e não
+poderia ser diferente num servidor que sobe por SSH sem humano presente. Cofre
+em claro (formato anterior) continua sendo lido; a escrita seguinte o regrava
+cifrado, então não há passo de migração.
+
+**Um cofre por máquina.** O mesmo arquivo é usado pelo app quando o workspace é
+LOCAL: a chave é derivada da raiz do workspace (nunca do `workspaceId`, que é
+gerado por máquina), então digitar a senha sentado no host ou a partir de um
+cliente remoto grava na MESMA entrada. Era o contrário antes, e a senha
+digitada no host não valia para cliente nenhum — o `cockpit-server` é headless
+e nunca teve como ler o cofre do SO. O que ficou lá migra sozinho na primeira
+leitura.
+
+
+**Não existe `db.secretGet`, e isso é contrato, não omissão**: o cliente grava
+e apaga, nunca relê. Quem lê é o servidor, ao montar a conexão.
+
+Campos do descritor que fecham o desenho:
+
+| Campo | Significado |
+|---|---|
+| `workspaceRoot` | raiz do workspace no host — primeira metade da chave do segredo |
+| `connName` | nome da conexão — segunda metade |
+| `storedSecret` | `true` = a senha está no cofre do host; `password` vai ausente e o servidor resolve |
+| `password` | só quando `storedSecret` é `false` (conexão que optou por não guardar segredo) |
+
+Com `storedSecret: true` e nada no cofre do host, o servidor responde
+`password_required` em vez de tentar conectar sem senha — o erro do banco
+("authentication failed") mandaria o usuário investigar a coisa errada. O caso
+típico é conexão cadastrada antes deste plano, cuja senha ficou no cofre do
+cliente que a criou.
+
 ## Aberto (para as próximas waves)
 
 - Backpressure/coalescing de output no fio (integrar com o
@@ -107,3 +156,6 @@ traduz por enum); `detail` é texto de terceiros (errno etc.), exibido cru.
 - Resize com N clientes attached (política tmux a decidir).
 - Frame binário para `pty.output` se o benchmark apontar o base64.
 - Envelopes dos domínios Arquivos, Git e Databases.
+- Túnel SSH da conexão de banco executado no host (hoje o descritor não carrega
+  o bloco `ssh`, então conexão com bastion não funciona a partir de um cliente
+  remoto — plano 62, onda 2).

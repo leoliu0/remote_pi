@@ -505,7 +505,8 @@
       "deleteConnectionMessage": "¿Quitar \"${name}\" de este workspace? Cualquier contraseña guardada se descartará. Los archivos .dbq que la referencian no se modifican.",
       "footer": ".cockpit/databases.json · ${n} conexiones",
       "footerOne": ".cockpit/databases.json · 1 conexión",
-      "noConnections": "Aún no hay conexiones."
+      "noConnections": "Aún no hay conexiones.",
+      "passwordRequired": "Contraseña no encontrada en el host. Abre esta conexión y vuelve a escribirla — se guarda en la máquina que ejecuta la base de datos, no en esta."
     },
     "dbMongoView": {
       "deleteDocumentTitle": "Eliminar documento",
@@ -549,7 +550,8 @@
       "choosePrivateKeyPlaceholder": "Elige una clave privada…",
       "choosePrivateKeyDialogTitle": "Elegir clave privada SSH",
       "keyPassphrase": "Frase de contraseña de la clave",
-      "savePassphrase": "Guardar frase de contraseña"
+      "savePassphrase": "Guardar frase de contraseña",
+      "passwordOnHost": "La contraseña se guarda en el host, no en esta máquina."
     },
     "sshPrompts": {
       "unknownSshHostTitle": "Host SSH desconocido",

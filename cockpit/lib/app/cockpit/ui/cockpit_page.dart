@@ -29,6 +29,8 @@ import 'package:cockpit/app/core/ui/themes/themes.dart';
 import 'package:cockpit/app/core/ui/settings_controller.dart';
 import 'package:cockpit/app/core/ui/widgets/hover_tap.dart';
 import 'package:cockpit/app/core/utils/platform_kind.dart';
+import 'package:cockpit/app/cockpit/data/remote/remote_db_writer_impl.dart';
+import 'package:cockpit/app/cockpit/domain/contracts/remote_db_writer.dart';
 import 'package:cockpit/i18n/strings.g.dart';
 import 'package:flutter/gestures.dart' show PointerDownEvent, kBackMouseButton;
 import 'package:flutter/services.dart'
@@ -255,8 +257,11 @@ class _CockpitPageState extends State<CockpitPage> {
       // As conexões de um workspace remoto vivem no host
       // (.cockpit/databases.json) — resolução da query E leitura do painel.
       ..remoteConnectionsFor = _remoteConnectionsFor;
-    context.read<DatabaseViewModel>().remoteConnectionsFor =
-        _remoteConnectionsFor;
+    context.read<DatabaseViewModel>()
+      ..remoteConnectionsFor = _remoteConnectionsFor
+      // Escrita da config de banco de um workspace remoto: definição por
+      // `fs.write` no host, senha no cofre do host (plano 62).
+      ..remoteDbWriterFor = _remoteDbWriterFor;
     // Task Run remoto (plano 58): descoberta via fs.read + execução via terminal
     // do host, roteados quando o workspace ativo é remoto.
     context.read<TasksViewModel>().remoteContextFor = _remoteTaskContextFor;
@@ -297,6 +302,17 @@ class _CockpitPageState extends State<CockpitPage> {
     return loadRemoteConnections(
       () => _vm.remoteHosts.fileServiceFor(host),
       root,
+    );
+  }
+
+  /// Writer remoto de config de banco do workspace [wsId] (plano 62).
+  /// `null` quando o workspace é local — aí vale o store + cofre desta máquina.
+  RemoteDbWriter? _remoteDbWriterFor(String wsId) {
+    final host = _vm.remoteHostForWorkspace(wsId);
+    if (host == null) return null;
+    return RemoteDbWriterImpl(
+      () => _vm.remoteHosts.fileServiceFor(host),
+      () => _vm.remoteHosts.dbServiceFor(host),
     );
   }
 

@@ -7,6 +7,7 @@ import 'package:meta/meta.dart';
 import 'package:cockpit_core/cockpit_core.dart';
 import 'package:cockpit_protocol/cockpit_protocol.dart';
 
+
 class _RpcUnknown implements Exception {
   const _RpcUnknown(this.method);
   final String method;
@@ -29,12 +30,17 @@ class RemoteServer {
     this._git,
     this._db, {
     this.serverVersion = '0.1.0',
-  });
+    DbSecretStore? dbSecrets,
+  }) : _dbSecrets = dbSecrets ?? DbSecretStore();
 
   final TerminalService _terminals;
   final FileService _files;
   final GitService _git;
   final DbService _db;
+
+  /// Cofre de senhas de banco DESTE host (plano 62). O cliente grava e apaga
+  /// por ele, nunca lê de volta.
+  final DbSecretStore _dbSecrets;
   final String serverVersion;
   static const _codec = RemoteMessageCodec();
 
@@ -280,6 +286,7 @@ class RemoteServer {
       _files,
       _git,
       _db,
+      _dbSecrets,
       serverVersion,
       _statusEnv,
       _endpoint?.token,
@@ -308,6 +315,7 @@ class _Connection {
     this._files,
     this._git,
     this._db,
+    this._dbSecrets,
     this._serverVersion,
     this._statusEnv,
     this._expectedToken,
@@ -344,11 +352,39 @@ class _Connection {
 
   bool ownsTab(String tabId) => _tabIds.contains(tabId);
 
+  /// Descritor de conexão do payload, **com o segredo do host preenchido**
+  /// (plano 62).
+  ///
+  /// Este é o ponto em que a senha entra no fluxo, e ele fica do lado do host
+  /// de propósito: antes, o cliente resolvia a senha no cofre DELE e a mandava
+  /// pelo fio a cada query — o que fazia a conexão só funcionar a partir da
+  /// máquina que a cadastrou, e punha a senha em trânsito o tempo todo.
+  RemoteDbConnDescriptor _conn(Map<String, Object?> p) {
+    final conn = RemoteDbConnDescriptor.fromJson(
+      (p['conn'] as Map).cast<String, Object?>(),
+    );
+    // Senha veio no fio (conexão sem segredo guardado): respeita o que o
+    // cliente mandou, não há o que resolver.
+    if (!conn.storedSecret) return conn;
+    final secret = _dbSecrets.read(conn.workspaceRoot, conn.connName);
+    if (secret == null || secret.isEmpty) {
+      // Conectar sem senha aqui produziria um erro do banco ("authentication
+      // failed") que não diz a coisa importante: a senha existe, só está no
+      // cofre do cliente que cadastrou a conexão, e precisa ser regravada aqui.
+      throw const DbServiceException(
+        DbErrorKind.passwordRequired,
+        'no stored password on this host for this connection',
+      );
+    }
+    return conn.withPassword(secret);
+  }
+
   final Socket _socket;
   final TerminalService _terminals;
   final FileService _files;
   final GitService _git;
   final DbService _db;
+  final DbSecretStore _dbSecrets;
   final String _serverVersion;
 
   /// Env que leva o hook do agente até o receptor de status do HOST
@@ -650,35 +686,35 @@ class _Connection {
           (p['args'] as List).cast<String>(),
         )).toJson(),
         'db.query' => _db.query(
-          RemoteDbConnDescriptor.fromJson(
-            (p['conn'] as Map).cast<String, Object?>(),
-          ),
+          _conn(p),
           p['sql'] as String,
           limit: (p['limit'] as num?)?.toInt() ?? 200,
           dml: p['dml'] as bool? ?? false,
         ),
-        'db.redis' => _db.redis(
-          RemoteDbConnDescriptor.fromJson(
-            (p['conn'] as Map).cast<String, Object?>(),
-          ),
-          (p['parts'] as List).cast<String>(),
-        ),
-        'db.redisMany' => _db.redisMany(
-          RemoteDbConnDescriptor.fromJson(
-            (p['conn'] as Map).cast<String, Object?>(),
-          ),
-          [
-            for (final c in (p['commands'] as List).cast<List>())
-              c.cast<String>(),
-          ],
-        ),
+        'db.redis' => _db.redis(_conn(p), (p['parts'] as List).cast<String>()),
+        'db.redisMany' => _db.redisMany(_conn(p), [
+          for (final c in (p['commands'] as List).cast<List>()) c.cast<String>(),
+        ]),
         'db.mongo' => _db.mongo(
-          RemoteDbConnDescriptor.fromJson(
-            (p['conn'] as Map).cast<String, Object?>(),
-          ),
+          _conn(p),
           (p['command'] as Map).cast<String, Object?>(),
           database: p['database'] as String?,
         ),
+        // Segredo de banco: escrita e remoção apenas. Não existe `db.secretGet`
+        // de propósito (plano 62, decisão B) — o cliente é mensageiro, e
+        // mensageiro não relê o que entregou.
+        'db.secretSet' => () {
+          _dbSecrets.write(
+            p['root'] as String,
+            p['conn'] as String,
+            p['value'] as String,
+          );
+          return null;
+        }(),
+        'db.secretDelete' => () {
+          _dbSecrets.delete(p['root'] as String, p['conn'] as String);
+          return null;
+        }(),
         _ => throw _RpcUnknown(req.method),
       };
       _send(RpcResponse(rid: req.rid, ok: true, data: await _awaited(data)));

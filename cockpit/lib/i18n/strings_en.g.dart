@@ -1695,6 +1695,9 @@ class Translations$cockpit$dbPanel$en {
 
 	/// en: 'No connections yet.'
 	String get noConnections => 'No connections yet.';
+
+	/// en: 'Password not found on the host. Open this connection and enter it again — it is saved on the machine that runs the database, not on this one.'
+	String get passwordRequired => 'Password not found on the host. Open this connection and enter it again — it is saved on the machine that runs the database, not on this one.';
 }
 
 // Path: cockpit.dbMongoView
@@ -1827,6 +1830,9 @@ class Translations$cockpit$dbConnectionDialog$en {
 
 	/// en: 'Save passphrase'
 	String get savePassphrase => 'Save passphrase';
+
+	/// en: 'The password is stored on the host, not on this machine.'
+	String get passwordOnHost => 'The password is stored on the host, not on this machine.';
 }
 
 // Path: cockpit.sshPrompts
@@ -4086,6 +4092,7 @@ extension on Translations {
 			'cockpit.dbPanel.footer' => ({required Object n}) => '.cockpit/databases.json · ${n} connections',
 			'cockpit.dbPanel.footerOne' => '.cockpit/databases.json · 1 connection',
 			'cockpit.dbPanel.noConnections' => 'No connections yet.',
+			'cockpit.dbPanel.passwordRequired' => 'Password not found on the host. Open this connection and enter it again — it is saved on the machine that runs the database, not on this one.',
 			'cockpit.dbMongoView.deleteDocumentTitle' => 'Delete document',
 			'cockpit.dbMongoView.deleteDocumentMessage' => ({required Object id, required Object collection}) => 'Delete the document with _id ${id} from "${collection}"?',
 			'cockpit.dbMongoView.filterHint' => 'Filter — JSON, e.g. {"status": "active"}',
@@ -4123,6 +4130,7 @@ extension on Translations {
 			'cockpit.dbConnectionDialog.choosePrivateKeyDialogTitle' => 'Choose SSH private key',
 			'cockpit.dbConnectionDialog.keyPassphrase' => 'Key passphrase',
 			'cockpit.dbConnectionDialog.savePassphrase' => 'Save passphrase',
+			'cockpit.dbConnectionDialog.passwordOnHost' => 'The password is stored on the host, not on this machine.',
 			'cockpit.sshPrompts.unknownSshHostTitle' => 'Unknown SSH host',
 			'cockpit.sshPrompts.neverConnected' => ({required Object endpoint}) => 'Cockpit has never connected to ${endpoint} before.',
 			'cockpit.sshPrompts.trustHint' => 'Trust it only if this fingerprint matches the server. You can check it on the server with:',
@@ -4163,10 +4171,10 @@ extension on Translations {
 			'cockpit.findBar.badPattern' => 'Bad pattern',
 			'cockpit.findBar.noResults' => 'No results',
 			'cockpit.contentSearch.sectionSearch' => 'SEARCH',
-			'cockpit.contentSearch.searchInFiles' => 'Search in files',
-			'cockpit.contentSearch.matchCase' => 'Match case',
 			_ => null,
 		} ?? switch (path) {
+			'cockpit.contentSearch.searchInFiles' => 'Search in files',
+			'cockpit.contentSearch.matchCase' => 'Match case',
 			'cockpit.contentSearch.wholeWord' => 'Whole word',
 			'cockpit.contentSearch.useRegex' => 'Use regular expression',
 			'cockpit.contentSearch.invalidRegex' => 'Invalid regular expression.',

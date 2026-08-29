@@ -847,6 +847,7 @@ class _Translations$cockpit$dbPanel$es extends Translations$cockpit$dbPanel$en {
 	@override String footer({required Object n}) => '.cockpit/databases.json · ${n} conexiones';
 	@override String get footerOne => '.cockpit/databases.json · 1 conexión';
 	@override String get noConnections => 'Aún no hay conexiones.';
+	@override String get passwordRequired => 'Contraseña no encontrada en el host. Abre esta conexión y vuelve a escribirla — se guarda en la máquina que ejecuta la base de datos, no en esta.';
 }
 
 // Path: cockpit.dbMongoView
@@ -905,6 +906,7 @@ class _Translations$cockpit$dbConnectionDialog$es extends Translations$cockpit$d
 	@override String get choosePrivateKeyDialogTitle => 'Elegir clave privada SSH';
 	@override String get keyPassphrase => 'Frase de contraseña de la clave';
 	@override String get savePassphrase => 'Guardar frase de contraseña';
+	@override String get passwordOnHost => 'La contraseña se guarda en el host, no en esta máquina.';
 }
 
 // Path: cockpit.sshPrompts
@@ -2181,6 +2183,7 @@ extension on TranslationsEs {
 			'cockpit.dbPanel.footer' => ({required Object n}) => '.cockpit/databases.json · ${n} conexiones',
 			'cockpit.dbPanel.footerOne' => '.cockpit/databases.json · 1 conexión',
 			'cockpit.dbPanel.noConnections' => 'Aún no hay conexiones.',
+			'cockpit.dbPanel.passwordRequired' => 'Contraseña no encontrada en el host. Abre esta conexión y vuelve a escribirla — se guarda en la máquina que ejecuta la base de datos, no en esta.',
 			'cockpit.dbMongoView.deleteDocumentTitle' => 'Eliminar documento',
 			'cockpit.dbMongoView.deleteDocumentMessage' => ({required Object id, required Object collection}) => '¿Eliminar el documento con _id ${id} de "${collection}"?',
 			'cockpit.dbMongoView.filterHint' => 'Filtro — JSON, ej.: {"status": "active"}',
@@ -2218,6 +2221,7 @@ extension on TranslationsEs {
 			'cockpit.dbConnectionDialog.choosePrivateKeyDialogTitle' => 'Elegir clave privada SSH',
 			'cockpit.dbConnectionDialog.keyPassphrase' => 'Frase de contraseña de la clave',
 			'cockpit.dbConnectionDialog.savePassphrase' => 'Guardar frase de contraseña',
+			'cockpit.dbConnectionDialog.passwordOnHost' => 'La contraseña se guarda en el host, no en esta máquina.',
 			'cockpit.sshPrompts.unknownSshHostTitle' => 'Host SSH desconocido',
 			'cockpit.sshPrompts.neverConnected' => ({required Object endpoint}) => 'Cockpit nunca se ha conectado a ${endpoint} antes.',
 			'cockpit.sshPrompts.trustHint' => 'Confía solo si esta fingerprint coincide con el servidor. Puedes verificarla en el servidor con:',
@@ -2258,10 +2262,10 @@ extension on TranslationsEs {
 			'cockpit.findBar.badPattern' => 'Patrón inválido',
 			'cockpit.findBar.noResults' => 'Sin resultados',
 			'cockpit.contentSearch.sectionSearch' => 'BÚSQUEDA',
-			'cockpit.contentSearch.searchInFiles' => 'Buscar en los archivos',
-			'cockpit.contentSearch.matchCase' => 'Coincidir mayúsculas',
 			_ => null,
 		} ?? switch (path) {
+			'cockpit.contentSearch.searchInFiles' => 'Buscar en los archivos',
+			'cockpit.contentSearch.matchCase' => 'Coincidir mayúsculas',
 			'cockpit.contentSearch.wholeWord' => 'Palabra completa',
 			'cockpit.contentSearch.useRegex' => 'Usar expresión regular',
 			'cockpit.contentSearch.invalidRegex' => 'Expresión regular inválida.',

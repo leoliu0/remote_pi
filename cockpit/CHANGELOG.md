@@ -24,6 +24,102 @@ As versões seguem o `version:` do `pubspec.yaml` (SSOT). O campo `notes` do
     linhas não-vazias — o começo da seção deve fazer sentido sozinho.
 -->
 
+## [1.28.20] - 2026-08-29
+
+**Still a beta for the upcoming 2.0.0.** One password store per machine, and
+the background server now shuts down with the app.
+
+### Fixed
+
+- **A database password typed on the host now works from remote clients.**
+  There were two separate stores on the same machine: opening a workspace
+  locally saved the password to the OS keychain, while a remote client saved it
+  to the host's file. The background server has no way to read the OS keychain -
+  it starts over SSH, with no desktop session - so a password you typed while
+  sitting at the host was never found from anywhere else. You saved it
+  successfully and the remote kept reporting it as missing. There is now one
+  store per machine, and passwords already in the OS keychain move into it the
+  first time they are used - nothing to retype.
+
+  The key is now derived from the workspace folder rather than an id generated
+  per machine, which is what made the same connection look different from every
+  client.
+
+- **The background server no longer outlives the app.** Closing Cockpit left
+  `cockpit-server` running. Because an update replaces its file on disk while
+  the old process keeps running the old code, a machine used as a host could
+  serve a stale version indefinitely - silently, since nothing errors. It now
+  exits with the app, including when the app is force quit or crashes.
+
+### Note on where passwords live
+
+Local workspaces moved off the OS keychain to the same encrypted file the host
+uses. The keychain is stronger in principle - it prompts when an unauthorized
+program reads an item - and the file does not. That trade buys one place
+instead of two, which is what makes "configure it once, use it from anywhere"
+true. Passwords for connections you would rather not store at all are still
+better left unsaved.
+
+## [1.28.19] - 2026-08-29
+
+**Still a beta for the upcoming 2.0.0.** The database passwords stored on a
+remote host are no longer kept as plain text on disk.
+
+### Changed
+
+- **The host's database password store is now encrypted.** Passwords that a
+  client saves on a remote host used to sit in a plain-text file. They are now
+  encrypted (AES-GCM) in the same file, with a product key built into the app -
+  the same approach DBeaver takes for its saved credentials. Nothing to do on
+  your side: an existing store keeps working and is rewritten encrypted the
+  next time you save a password.
+
+  Worth knowing what this does and does not cover. It takes the secret out of
+  plain text on disk, which is what protects you from the realistic accident -
+  a backup, a synced folder, a search across files, a screenshot. It is not a
+  defense against someone already running programs under your account on the
+  host: the key ships with the app, and it has to, because the server starts
+  over SSH with nobody there to type anything. Anyone with that level of access
+  to the host can reach the databases through it regardless.
+
+## [1.28.18] - 2026-08-29
+
+**Still a beta for the upcoming 2.0.0.** Remote hosts get two fixes that made
+them unusable in common setups - password login and remote databases - plus a
+way to close tabs from the internal CLI.
+
+### Fixed
+
+- **Remote hosts registered with a password now actually use it.** The password
+  was saved correctly but never offered: SSH tried key authentication first and
+  the stored password was never reached, so the connection failed with
+  "Permission denied (publickey)" or "Too many authentication failures". Exactly
+  the case of someone who chooses password *because* their key does not work.
+- **Databases of a remote workspace now work from any client.** The connection
+  was defined on the host and the query ran on the host, but the password was
+  looked up on the client under a key derived per machine - so a connection set
+  up on one computer was never found from another, and it silently connected
+  without a password. The password now lives on the host, next to the database
+  it opens, and never travels over the wire. Saving or editing a connection of a
+  remote workspace also works now; before, it failed before writing anything.
+  A connection you already had keeps working: open it once and the old password
+  is moved to the host for you.
+- **Adding a workspace no longer repeats itself.** The "+" menu said "New local
+  workspace" / "New remote workspace" on both entries; it now reads **Local** and
+  **Remote**.
+
+### Added
+
+- **`cockpit close-tab`** in the internal CLI - the counterpart of `new-tab`,
+  which could open tabs but never close them. Takes a tab id or a stable tab
+  label; with no target it closes the tab you are in.
+
+### Known limitation
+
+- A database connection that goes through an **SSH tunnel** (bastion) still does
+  not work from a remote workspace: the tunnel is described on the host but
+  nothing opens it there yet. Connections without a tunnel are unaffected.
+
 ## [1.28.17] - 2026-08-27
 
 **Still a beta for the upcoming 2.0.0.** Three Windows fixes, all reproduced and

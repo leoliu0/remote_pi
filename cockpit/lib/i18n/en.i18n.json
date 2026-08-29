@@ -505,7 +505,8 @@
       "deleteConnectionMessage": "Remove \"${name}\" from this workspace? Any saved password is discarded. .dbq files that reference it are not touched.",
       "footer": ".cockpit/databases.json · ${n} connections",
       "footerOne": ".cockpit/databases.json · 1 connection",
-      "noConnections": "No connections yet."
+      "noConnections": "No connections yet.",
+      "passwordRequired": "Password not found on the host. Open this connection and enter it again — it is saved on the machine that runs the database, not on this one."
     },
     "dbMongoView": {
       "deleteDocumentTitle": "Delete document",
@@ -549,7 +550,8 @@
       "choosePrivateKeyPlaceholder": "Choose a private key…",
       "choosePrivateKeyDialogTitle": "Choose SSH private key",
       "keyPassphrase": "Key passphrase",
-      "savePassphrase": "Save passphrase"
+      "savePassphrase": "Save passphrase",
+      "passwordOnHost": "The password is stored on the host, not on this machine."
     },
     "sshPrompts": {
       "unknownSshHostTitle": "Unknown SSH host",

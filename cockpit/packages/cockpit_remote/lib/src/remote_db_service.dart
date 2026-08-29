@@ -74,6 +74,40 @@ class RemoteDbService implements DbService {
     }
   }
 
+  /// Grava a senha da conexão **no cofre do host** (plano 62). Write-only por
+  /// contrato: não existe leitura de volta, nem aqui nem no protocolo.
+  Future<void> setSecret({
+    required String workspaceRoot,
+    required String connName,
+    required String value,
+  }) async {
+    try {
+      await _connection.call('db.secretSet', {
+        'root': workspaceRoot,
+        'conn': connName,
+        'value': value,
+      });
+    } on RemoteRpcException catch (e) {
+      throw _mapError(e);
+    }
+  }
+
+  /// Apaga a senha da conexão no cofre do host (conexão removida, renomeada,
+  /// ou `savePassword` desligado).
+  Future<void> deleteSecret({
+    required String workspaceRoot,
+    required String connName,
+  }) async {
+    try {
+      await _connection.call('db.secretDelete', {
+        'root': workspaceRoot,
+        'conn': connName,
+      });
+    } on RemoteRpcException catch (e) {
+      throw _mapError(e);
+    }
+  }
+
   DbServiceException _mapError(RemoteRpcException e) => DbServiceException(
     DbErrorKind.values.asNameMap()[e.code] ?? DbErrorKind.queryFailed,
     e.detail,

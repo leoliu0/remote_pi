@@ -505,7 +505,8 @@
       "deleteConnectionMessage": "Remover \"${name}\" deste workspace? Qualquer senha salva será descartada. Arquivos .dbq que fazem referência a ela não são afetados.",
       "footer": ".cockpit/databases.json · ${n} conexões",
       "footerOne": ".cockpit/databases.json · 1 conexão",
-      "noConnections": "Nenhuma conexão ainda."
+      "noConnections": "Nenhuma conexão ainda.",
+      "passwordRequired": "Senha não encontrada no host. Abra esta conexão e digite-a de novo — ela fica salva na máquina que executa o banco, não nesta."
     },
     "dbMongoView": {
       "deleteDocumentTitle": "Excluir documento",
@@ -549,7 +550,8 @@
       "choosePrivateKeyPlaceholder": "Escolha uma chave privada…",
       "choosePrivateKeyDialogTitle": "Escolher chave privada SSH",
       "keyPassphrase": "Senha da chave",
-      "savePassphrase": "Salvar senha da chave"
+      "savePassphrase": "Salvar senha da chave",
+      "passwordOnHost": "A senha fica salva no host, não nesta máquina."
     },
     "sshPrompts": {
       "unknownSshHostTitle": "Host SSH desconhecido",

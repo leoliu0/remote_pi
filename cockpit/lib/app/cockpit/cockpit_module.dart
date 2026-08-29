@@ -192,7 +192,7 @@ Future<Module> buildCockpitModule({
         // DB tab (plano 51): conexões por workspace + drivers + motor
         // compartilhado tab/CLI.
         ..addInstance<DbConnectionStore>(const DbConnectionStoreImpl())
-        ..addInstance<DbSecrets>(const DbSecretsImpl())
+        ..addInstance<DbSecrets>(DbSecretsImpl())
         ..addInstance<DbDriverRegistry>(const DbDriverRegistryImpl())
         ..addInstance<NoSqlRunner>(const NoSqlRunnerImpl())
         // Database escolhido por conexão Mongo (URL de Atlas vem sem path):
