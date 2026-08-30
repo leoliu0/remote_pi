@@ -24,6 +24,70 @@ As versões seguem o `version:` do `pubspec.yaml` (SSOT). O campo `notes` do
     linhas não-vazias — o começo da seção deve fazer sentido sozinho.
 -->
 
+## [1.28.23] - 2026-08-29
+
+**Still a beta for the upcoming 2.0.0.** Closing the app no longer crashes, and
+listing databases from a terminal on a remote host works.
+
+### Fixed
+
+- **Closing the app no longer hangs for a few seconds.** It was not slowness:
+  the app was crashing on every exit, and the pause you saw was the system
+  writing a ~30 MB crash dump before the window went away. Destroying the
+  window made the toolkit emit its final resize events, which the app answered
+  by asking a window that no longer existed whether it was maximized.
+
+  It had a second cost that was easy to miss: the app marked the exit as clean
+  *before* the crash, so its own crash detector never saw the most frequent
+  crash it had - one per close. Old dumps can be cleared with
+  `coredumpctl --vacuum-size=0` on Linux.
+
+- **`cockpit db` now finds the connections of a remote workspace.** The
+  previous release stopped it from refusing the tab, but it then answered with
+  an empty list on a workspace that has ten connections - worse than the error,
+  because it looks like an answer. It was reading the connection file from the
+  client's disk, where the host's folder does not exist. `db query` and
+  `db schema` were affected too, reporting "no connection named ..." for
+  connections that exist.
+
+  Only the client needed this one; a host already on 1.28.21 needs nothing.
+
+## [1.28.21] - 2026-08-29
+
+**Still a beta for the upcoming 2.0.0.** Databases behind an SSH bastion now
+work from a remote workspace, and the internal CLI stops refusing the very tab
+it is running in.
+
+### Fixed
+
+- **`cockpit db` now works from a terminal on a remote host.** It answered
+  "this pane has no workspace folder" for every remote tab, along with
+  `list-tasks` and `read-task`. A remote workspace keeps its folder in a
+  different field, and the CLI was reading the empty one - the panel in the app
+  worked because it resolved the folder another way.
+
+  This mattered more than a plain failure: agents do not stop at an error, they
+  find another route. One of them worked around it by pointing at a *local*
+  workspace and reported the state of a database running on the client machine
+  as if it were the host's. A command that names a workspace on another machine
+  now says so.
+
+- **Database connections that go through an SSH bastion work from a remote
+  workspace.** The tunnel is now opened by the host - the machine that can
+  actually reach the bastion and holds the private key - instead of not being
+  opened at all. The key and its passphrase live on the host, next to the
+  database they reach.
+
+  The first connection to a bastion the host has never seen will fail once, on
+  purpose, and offer you its fingerprint to review. Trusting it is remembered on
+  the host.
+
+- **Renaming a database connection no longer loses its saved password.**
+- **A Linux client connecting to a macOS host no longer drops a working
+  connection.** It compared its own server binary against the host's, concluded
+  the host was out of date on every boot, and tore down a connection that was
+  working to attempt an install it cannot perform.
+
 ## [1.28.20] - 2026-08-29
 
 **Still a beta for the upcoming 2.0.0.** One password store per machine, and

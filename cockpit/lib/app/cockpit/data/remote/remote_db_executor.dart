@@ -148,6 +148,7 @@ class _RemoteNoSqlRunner implements NoSqlRunner {
       workspaceRoot: workspaceRoot,
       connName: conn.name,
       storedSecret: conn.savePassword,
+      ssh: conn.ssh,
     );
     try {
       return await service.mongo(
@@ -180,6 +181,9 @@ RemoteDbConnDescriptor _descriptor(
   workspaceRoot: workspaceRoot,
   connName: conn.name,
   storedSecret: conn.savePassword,
+  // Túnel SSH: vai no fio para o HOST abrir (onda 2). O cliente não tenta —
+  // ele não alcança o bastion nem tem a chave privada de lá.
+  ssh: conn.ssh,
 );
 
 /// Traduz o erro do serviço remoto pro `kind` que a tab e a CLI conhecem.
@@ -194,6 +198,7 @@ DbQueryException _mapped(DbServiceException e) {
     DbErrorKind.timeout => 'timeout',
     DbErrorKind.unsupportedEngine => 'unsupported_engine',
     DbErrorKind.passwordRequired => 'password_required',
+    DbErrorKind.sshTunnelFailed => 'ssh_tunnel_failed',
   };
   return DbQueryException(kind, e.detail ?? kind);
 }

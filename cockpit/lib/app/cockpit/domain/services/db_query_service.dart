@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:cockpit_core/cockpit_core.dart';
 
@@ -6,11 +7,9 @@ import 'package:cockpit/app/cockpit/domain/contracts/db_connection_store.dart';
 import 'package:cockpit/app/cockpit/domain/contracts/db_driver.dart';
 import 'package:cockpit/app/cockpit/domain/contracts/mongo_database_store.dart';
 import 'package:cockpit/app/cockpit/domain/contracts/nosql_runner.dart';
-import 'package:cockpit/app/cockpit/domain/contracts/ssh_tunnel.dart';
 import 'package:cockpit/app/cockpit/domain/db_schema_sql.dart';
 import 'package:cockpit/app/cockpit/domain/entities/db_connection.dart';
 import 'package:cockpit/app/cockpit/domain/entities/db_result.dart';
-import 'package:cockpit/app/cockpit/domain/entities/ssh_tunnel_config.dart';
 
 /// Executa uma query SQL num host remoto (plano 58, Wave 4). Implementado
 /// pelo app (fala com o `cockpit-server` via `RemoteDbService`); o
@@ -81,6 +80,51 @@ class DbQueryService {
   /// caminho SQL — só o destino do comando muda.
   NoSqlRunner? Function(String workspaceId)? remoteNoSqlFor;
 
+  /// Confia numa host key de bastion **no host** do workspace remoto. Setado
+  /// pela página junto do [remoteExecutorFor]; `null` = sem como persistir, e
+  /// aí a falha de host key fica sendo só erro (o caminho da CLI).
+  Future<void> Function(String workspaceId, String endpoint, String fingerprint)?
+  remoteHostKeyTrustFor;
+
+  /// Roda [run] e, se ele falhar por **host key desconhecida no bastion**,
+  /// pergunta ao humano, confia no host e tenta **uma** vez mais.
+  ///
+  /// Existe porque quem abre o túnel agora é o host (onda 2) e o servidor não
+  /// pergunta nada a ninguém: ele falha com o fingerprint, e é aqui — onde há
+  /// um humano e um diálogo — que a decisão acontece. Um retry só: se falhar
+  /// de novo, o problema não era confiança.
+  ///
+  /// Chave TROCADA não passa por aqui de propósito: `ssh_host_key_changed` é
+  /// exatamente o caso que nunca se aceita inline.
+  Future<T> _withRemoteHostKeyRecovery<T>(
+    String workspaceId,
+    Future<T> Function() run,
+  ) async {
+    try {
+      return await run();
+    } on DbQueryException catch (e) {
+      if (e.kind != 'ssh_tunnel_failed') rethrow;
+      final trust = remoteHostKeyTrustFor;
+      final prompt = hostKeyPrompt;
+      if (trust == null || prompt == null) rethrow;
+      final Map<String, Object?> detail;
+      try {
+        final decoded = jsonDecode(e.message);
+        if (decoded is! Map) rethrow;
+        detail = decoded.cast<String, Object?>();
+      } on Object {
+        rethrow;
+      }
+      if (detail['kind'] != 'ssh_host_key_unknown') rethrow;
+      final endpoint = detail['endpoint'] as String?;
+      final fingerprint = detail['fingerprint'] as String?;
+      if (endpoint == null || fingerprint == null) rethrow;
+      if (await prompt(endpoint, fingerprint) != HostKeyVerdict.trust) rethrow;
+      await trust(workspaceId, endpoint, fingerprint);
+      return run();
+    }
+  }
+
   /// Passphrases digitadas mas **não** salvas no cofre: valem enquanto o app
   /// viver. É o que permite "não quero segredo em cofre nenhum" sem punir com
   /// um prompt por query.
@@ -105,8 +149,21 @@ class DbQueryService {
   /// conexão em vez de manter uma global.
   final Map<DbEngine, Future<void>> _queues = {};
 
-  Future<List<DbConnection>> connections(String workspaceRoot) =>
-      _store.load(workspaceRoot);
+  /// Conexões registradas do workspace.
+  ///
+  /// [workspaceId] é obrigatório porque é ele que diz se o workspace é remoto —
+  /// e aí as conexões vêm do `.cockpit/databases.json` do HOST, não do disco
+  /// daqui. Sem esse parâmetro a função lia sempre o store local: num workspace
+  /// remoto o caminho não existe no cliente, e `cockpit db list` respondia uma
+  /// lista vazia num workspace com dez conexões.
+  Future<List<DbConnection>> connections(
+    String workspaceRoot, {
+    required String workspaceId,
+  }) async {
+    final remote = remoteConnectionsFor?.call(workspaceId, workspaceRoot);
+    if (remote != null) return remote;
+    return _store.load(workspaceRoot);
+  }
 
   /// Executa [sql] contra a conexão [connName] do workspace. [workspaceId]
   /// entra na chave do cofre (`cockpit.db.<workspaceId>.<nome>`).
@@ -122,13 +179,17 @@ class DbQueryService {
     final remote = remoteExecutorFor?.call(workspaceId);
     if (remote != null) {
       final conn = await _resolveRemote(workspaceId, workspaceRoot, connName);
-      return remote(
-        conn,
-        sql,
-        limit: limit ?? defaultLimit,
-        dml: dml,
-        password: await _remotePasswordFor(conn),
-        workspaceRoot: workspaceRoot,
+      final password = await _remotePasswordFor(conn);
+      return _withRemoteHostKeyRecovery(
+        workspaceId,
+        () => remote(
+          conn,
+          sql,
+          limit: limit ?? defaultLimit,
+          dml: dml,
+          password: password,
+          workspaceRoot: workspaceRoot,
+        ),
       );
     }
     // Resolver conexão e abrir túnel ficam FORA da fila: não tocam o dylib, e
@@ -163,13 +224,17 @@ class DbQueryService {
     final remote = remoteExecutorFor?.call(workspaceId);
     if (remote != null) {
       final conn = await _resolveRemote(workspaceId, workspaceRoot, connName);
-      return remote(
-        conn,
-        dbSchemaSql(conn.engine, table: table, schema: schema),
-        limit: 10000,
-        dml: false,
-        password: await _remotePasswordFor(conn),
-        workspaceRoot: workspaceRoot,
+      final password = await _remotePasswordFor(conn);
+      return _withRemoteHostKeyRecovery(
+        workspaceId,
+        () => remote(
+          conn,
+          dbSchemaSql(conn.engine, table: table, schema: schema),
+          limit: 10000,
+          dml: false,
+          password: password,
+          workspaceRoot: workspaceRoot,
+        ),
       );
     }
     final conn = await _resolve(workspaceRoot, workspaceId, connName);
@@ -208,18 +273,20 @@ class DbQueryService {
     if (remote != null) {
       final conn = await _resolveRemote(workspaceId, workspaceRoot, connName);
       final password = await _remotePasswordFor(conn);
-      DbResult? last;
-      for (final sql in statements) {
-        last = await remote(
-          conn,
-          sql,
-          limit: limit ?? defaultLimit,
-          dml: false,
-          password: password,
-          workspaceRoot: workspaceRoot,
-        );
-      }
-      return last!;
+      return _withRemoteHostKeyRecovery(workspaceId, () async {
+        DbResult? last;
+        for (final sql in statements) {
+          last = await remote(
+            conn,
+            sql,
+            limit: limit ?? defaultLimit,
+            dml: false,
+            password: password,
+            workspaceRoot: workspaceRoot,
+          );
+        }
+        return last!;
+      });
     }
     final conn = await _resolve(workspaceRoot, workspaceId, connName);
     final driver = _driverFor(conn);
@@ -254,11 +321,15 @@ class DbQueryService {
     if (remote != null) {
       final conn = await _resolveRemote(workspaceId, workspaceRoot, connName);
       _requireEngine(conn, DbEngine.redis, connName);
-      return remote.redis(
-        conn,
-        parts,
-        password: await _remotePasswordFor(conn),
-        workspaceRoot: workspaceRoot,
+      final password = await _remotePasswordFor(conn);
+      return _withRemoteHostKeyRecovery(
+        workspaceId,
+        () => remote.redis(
+          conn,
+          parts,
+          password: password,
+          workspaceRoot: workspaceRoot,
+        ),
       );
     }
     final conn = await _resolve(workspaceRoot, workspaceId, connName);
@@ -283,11 +354,15 @@ class DbQueryService {
     if (remote != null) {
       final conn = await _resolveRemote(workspaceId, workspaceRoot, connName);
       _requireEngine(conn, DbEngine.redis, connName);
-      return remote.redisMany(
-        conn,
-        commands,
-        password: await _remotePasswordFor(conn),
-        workspaceRoot: workspaceRoot,
+      final password = await _remotePasswordFor(conn);
+      return _withRemoteHostKeyRecovery(
+        workspaceId,
+        () => remote.redisMany(
+          conn,
+          commands,
+          password: password,
+          workspaceRoot: workspaceRoot,
+        ),
       );
     }
     final conn = await _resolve(workspaceRoot, workspaceId, connName);
@@ -316,12 +391,16 @@ class DbQueryService {
       final conn = await _resolveRemote(workspaceId, workspaceRoot, connName);
       _requireEngine(conn, DbEngine.mongo, connName);
       final target = database ?? mongoDatabase(workspaceId, conn);
-      return remote.mongo(
-        conn,
-        command,
-        password: await _remotePasswordFor(conn),
-        database: target,
-        workspaceRoot: workspaceRoot,
+      final password = await _remotePasswordFor(conn);
+      return _withRemoteHostKeyRecovery(
+        workspaceId,
+        () => remote.mongo(
+          conn,
+          command,
+          password: password,
+          database: target,
+          workspaceRoot: workspaceRoot,
+        ),
       );
     }
     final conn = await _resolve(workspaceRoot, workspaceId, connName);
@@ -400,6 +479,10 @@ class DbQueryService {
   /// CLI recebem uma `DbConnection` TCP comum.
   /// Resolve a conexão pelo nome a partir das conexões REMOTAS do host
   /// (`.cockpit/databases.json` lá) — sem túnel local, sem store local.
+  ///
+  /// O bloco `ssh` fica intacto de propósito e viaja no descritor: quem abre o
+  /// bastion é o HOST (plano 62, onda 2), que é quem o alcança e quem tem a
+  /// chave privada. Abrir aqui apontaria o túnel para a rede errada.
   Future<DbConnection> _resolveRemote(
     String workspaceId,
     String root,

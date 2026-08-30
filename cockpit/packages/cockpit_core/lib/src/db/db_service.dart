@@ -1,3 +1,5 @@
+import '../ssh/ssh_tunnel_config.dart';
+
 /// Descritor de conexão de DB no fio (plano 58, Wave 4; segredos no host,
 /// plano 62). O cliente descreve a conexão e o servidor executa a query no
 /// host. Campos derivados do `DbConnection` do app.
@@ -24,6 +26,7 @@ class RemoteDbConnDescriptor {
     this.workspaceRoot = '',
     this.connName = '',
     this.storedSecret = false,
+    this.ssh,
   });
 
   /// `sqlite` | `postgres` | `mysql` | `mssql` | `redis` | `mongo`.
@@ -51,6 +54,14 @@ class RemoteDbConnDescriptor {
   /// falharia com um erro do banco sem relação aparente com senha.
   final bool storedSecret;
 
+  /// Túnel SSH (bastion) da conexão, quando houver.
+  ///
+  /// Vai no fio para que **o host** o abra — é ele quem alcança o bastion e
+  /// quem tem a chave privada. Antes o bloco ficava de fora e o host recebia
+  /// `host:porta` cru, discando direto: conexão com bastion simplesmente não
+  /// funcionava a partir de um cliente remoto.
+  final SshTunnelConfig? ssh;
+
   /// TLS pro Redis (`rediss://`); ignorado pelos demais engines (Postgres/…
   /// derivam de query params na URL; Mongo, do scheme).
   final bool useTls;
@@ -68,6 +79,7 @@ class RemoteDbConnDescriptor {
     if (workspaceRoot.isNotEmpty) 'workspaceRoot': workspaceRoot,
     if (connName.isNotEmpty) 'connName': connName,
     if (storedSecret) 'storedSecret': true,
+    if (ssh != null) 'ssh': ssh!.toJson(),
   };
 
   /// Cópia com a senha resolvida — usada só pelo servidor, ao completar o
@@ -85,7 +97,54 @@ class RemoteDbConnDescriptor {
     workspaceRoot: workspaceRoot,
     connName: connName,
     storedSecret: storedSecret,
+    ssh: ssh,
   );
+
+  /// Cópia apontando para a ponta local do túnel (SQL e Redis, que leem
+  /// [host]/[port]). A URL também é reescrita: o Postgres tira `sslmode` dela,
+  /// e deixar host/porta divergindo entre os dois campos é armadilha.
+  RemoteDbConnDescriptor withEndpoint(String newHost, int newPort) =>
+      _copy(host: newHost, port: newPort, url: _urlWithEndpoint(newHost, newPort));
+
+  /// Cópia com proxy SOCKS5 na URL — o caminho do Mongo.
+  ///
+  /// Port-forward não serve lá: num replica set o driver pergunta ao servidor
+  /// quem são os membros e passa a discar os hostnames reais, furando qualquer
+  /// porta fixa. Com SOCKS quem escolhe o destino é o driver.
+  RemoteDbConnDescriptor withSocksProxy(String proxyHost, int proxyPort) {
+    if (url.isEmpty) return this;
+    final uri = Uri.parse(url);
+    final params = Map<String, String>.of(uri.queryParameters)
+      ..['proxyHost'] = proxyHost
+      ..['proxyPort'] = '$proxyPort';
+    return _copy(url: uri.replace(queryParameters: params).toString());
+  }
+
+  String _urlWithEndpoint(String newHost, int newPort) {
+    if (url.isEmpty) return url;
+    try {
+      return Uri.parse(url).replace(host: newHost, port: newPort).toString();
+    } on FormatException {
+      return url;
+    }
+  }
+
+  RemoteDbConnDescriptor _copy({String? url, String? host, int? port}) =>
+      RemoteDbConnDescriptor(
+        engine: engine,
+        url: url ?? this.url,
+        host: host ?? this.host,
+        port: port ?? this.port,
+        user: user,
+        database: database,
+        sqlitePath: sqlitePath,
+        password: password,
+        useTls: useTls,
+        workspaceRoot: workspaceRoot,
+        connName: connName,
+        storedSecret: storedSecret,
+        ssh: ssh,
+      );
 
   factory RemoteDbConnDescriptor.fromJson(Map<String, Object?> j) =>
       RemoteDbConnDescriptor(
@@ -101,6 +160,7 @@ class RemoteDbConnDescriptor {
         workspaceRoot: j['workspaceRoot'] as String? ?? '',
         connName: j['connName'] as String? ?? '',
         storedSecret: j['storedSecret'] as bool? ?? false,
+        ssh: SshTunnelConfig.fromJson(j['ssh']),
       );
 }
 
@@ -114,6 +174,11 @@ enum DbErrorKind {
   /// nenhuma para ela (plano 62). Acontece com conexão configurada antes da
   /// migração: a senha ficou no cofre do CLIENTE que a cadastrou.
   passwordRequired,
+
+  /// O túnel SSH da conexão não abriu. O `detail` traz o kind do motor
+  /// (`ssh_key_missing`, `ssh_host_key_unknown`, …) e é o que a UI usa para
+  /// decidir se dá para oferecer "confiar nesta host key".
+  sshTunnelFailed,
 }
 
 class DbServiceException implements Exception {

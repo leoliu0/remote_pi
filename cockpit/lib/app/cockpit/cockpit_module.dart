@@ -1,3 +1,4 @@
+import 'package:cockpit_core/cockpit_core.dart';
 import 'dart:io';
 
 import 'package:cockpit/app/cockpit/domain/contracts/db_connection_store.dart';
@@ -10,10 +11,7 @@ import 'package:cockpit/app/cockpit/domain/services/db_query_service.dart';
 import 'package:cockpit/app/cockpit/data/db/db_secrets_impl.dart';
 import 'package:cockpit/app/cockpit/data/db/json_mongo_database_store.dart';
 import 'package:cockpit/app/cockpit/data/db/json_ssh_host_key_store.dart';
-import 'package:cockpit/app/cockpit/data/db/ssh_key_pem.dart';
-import 'package:cockpit/app/cockpit/data/db/ssh_tunnel_impl.dart';
 import 'package:cockpit/app/cockpit/domain/contracts/mongo_database_store.dart';
-import 'package:cockpit/app/cockpit/domain/contracts/ssh_tunnel.dart';
 import 'package:cockpit/app/cockpit/data/filesystem/app_launcher_impl.dart';
 import 'package:cockpit/app/cockpit/data/filesystem/content_searcher_impl.dart';
 import 'package:cockpit/app/cockpit/data/filesystem/file_reader_impl.dart';

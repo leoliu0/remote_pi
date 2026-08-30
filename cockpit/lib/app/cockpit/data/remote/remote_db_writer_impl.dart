@@ -48,6 +48,49 @@ class RemoteDbWriterImpl implements RemoteDbWriter {
   }
 
   @override
+  Future<void> renameSecret(
+    String workspaceRoot,
+    String fromConn,
+    String toConn,
+  ) async {
+    final db = await _dbServiceProvider();
+    await db.renameSecret(
+      workspaceRoot: workspaceRoot,
+      fromConn: fromConn,
+      toConn: toConn,
+    );
+  }
+
+  @override
+  Future<void> setSshPassphrase(
+    String workspaceRoot,
+    String connName,
+    String? value,
+  ) async {
+    final db = await _dbServiceProvider();
+    if (value == null || value.isEmpty) {
+      await db.deleteSecret(
+        workspaceRoot: workspaceRoot,
+        connName: connName,
+        kind: DbSecretKind.sshPassphrase,
+      );
+      return;
+    }
+    await db.setSecret(
+      workspaceRoot: workspaceRoot,
+      connName: connName,
+      value: value,
+      kind: DbSecretKind.sshPassphrase,
+    );
+  }
+
+  @override
+  Future<void> trustHostKey(String endpoint, String fingerprint) async {
+    final db = await _dbServiceProvider();
+    await db.trustHostKey(endpoint: endpoint, fingerprint: fingerprint);
+  }
+
+  @override
   Future<void> deleteSecret(String workspaceRoot, String connName) async {
     final db = await _dbServiceProvider();
     await db.deleteSecret(workspaceRoot: workspaceRoot, connName: connName);

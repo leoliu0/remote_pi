@@ -80,13 +80,14 @@ class CockpitCommand {
 /// Resultado de um [CockpitCommand], serializado de volta pra CLI como uma linha
 /// JSON `{ok, data?|error?}`.
 class CockpitCommandResult {
-  const CockpitCommandResult.ok([this.data, this.afterResponse])
+  const CockpitCommandResult.ok([this.data, this.afterResponse, this.warning])
     : ok = true,
       error = null;
   const CockpitCommandResult.fail(this.error)
     : ok = false,
       data = null,
-      afterResponse = null;
+      afterResponse = null,
+      warning = null;
 
   final bool ok;
   final Object? data;
@@ -103,10 +104,17 @@ class CockpitCommandResult {
   /// porque daqui não há mais como reportar erro.
   final void Function()? afterResponse;
 
+  /// Aviso que a CLI imprime no **stderr**, sem sujar o stdout que os agentes
+  /// parseiam. Existe para o comando que fez algo correto mas provavelmente
+  /// não o que se queria — hoje só `--workspace` mirando um workspace de OUTRA
+  /// máquina, que executa lá e devolve resposta com cara de local.
+  final String? warning;
+
   Map<String, dynamic> toJson() => <String, dynamic>{
     'ok': ok,
     if (data != null) 'data': data,
     if (error != null) 'error': error,
+    if (warning != null) 'warning': warning,
   };
 }
 

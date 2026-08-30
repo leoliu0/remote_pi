@@ -1,3 +1,4 @@
+import 'package:cockpit_core/cockpit_core.dart';
 import 'dart:async' show StreamSubscription, unawaited;
 import 'dart:io';
 
@@ -45,7 +46,6 @@ import 'package:cockpit/app/core/ui/widgets/app_tooltip.dart';
 import 'package:shadcn_flutter/shadcn_flutter.dart';
 import 'package:flutter_modular/flutter_modular.dart';
 import 'package:cockpit/app/core/domain/result.dart';
-import 'package:cockpit/app/cockpit/domain/contracts/ssh_tunnel.dart';
 import 'package:cockpit/app/cockpit/domain/services/db_query_service.dart';
 import 'package:cockpit/app/cockpit/ui/viewmodels/database_viewmodel.dart';
 import 'package:cockpit/app/cockpit/ui/widgets/ssh_prompts.dart';
@@ -256,7 +256,16 @@ class _CockpitPageState extends State<CockpitPage> {
       }
       // As conexões de um workspace remoto vivem no host
       // (.cockpit/databases.json) — resolução da query E leitura do painel.
-      ..remoteConnectionsFor = _remoteConnectionsFor;
+      ..remoteConnectionsFor = _remoteConnectionsFor
+      // Túnel SSH da conexão roda no HOST (onda 2), e o servidor não pergunta
+      // nada: ele falha com o fingerprint. O diálogo é aqui, e o "confio" vai
+      // pro store do host — decisão no humano, estado onde o túnel abre.
+      ..remoteHostKeyTrustFor = (wsId, endpoint, fingerprint) async {
+        final host = _vm.remoteHostForWorkspace(wsId);
+        if (host == null) return;
+        final db = await _vm.remoteHosts.dbServiceFor(host);
+        await db.trustHostKey(endpoint: endpoint, fingerprint: fingerprint);
+      };
     context.read<DatabaseViewModel>()
       ..remoteConnectionsFor = _remoteConnectionsFor
       // Escrita da config de banco de um workspace remoto: definição por

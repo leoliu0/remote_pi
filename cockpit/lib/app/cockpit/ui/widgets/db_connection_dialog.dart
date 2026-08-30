@@ -1,8 +1,8 @@
+import 'package:cockpit_core/cockpit_core.dart';
 import 'dart:async';
 import 'dart:io';
 
 import 'package:cockpit/app/cockpit/domain/entities/db_connection.dart';
-import 'package:cockpit/app/cockpit/domain/entities/ssh_tunnel_config.dart';
 import 'package:cockpit/app/cockpit/ui/viewmodels/database_viewmodel.dart';
 import 'package:cockpit/app/cockpit/ui/widgets/db_engine_icon.dart';
 import 'package:cockpit/app/core/ui/themes/themes.dart';

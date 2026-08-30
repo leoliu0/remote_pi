@@ -31,7 +31,9 @@ class RemoteServer {
     this._db, {
     this.serverVersion = '0.1.0',
     DbSecretStore? dbSecrets,
-  }) : _dbSecrets = dbSecrets ?? DbSecretStore();
+    SshTunnel? dbTunnel,
+  }) : _dbSecrets = dbSecrets ?? DbSecretStore(),
+       _dbTunnel = dbTunnel ?? SshTunnelImpl(FileSshHostKeyStore());
 
   final TerminalService _terminals;
   final FileService _files;
@@ -41,6 +43,11 @@ class RemoteServer {
   /// Cofre de senhas de banco DESTE host (plano 62). O cliente grava e apaga
   /// por ele, nunca lê de volta.
   final DbSecretStore _dbSecrets;
+
+  /// Túneis SSH das conexões de banco (plano 62, onda 2). Um por servidor, e
+  /// não por conexão de cliente: o motor cacheia por (config, alvo), e abrir um
+  /// handshake SSH por query custaria ~1s em cada uma.
+  final SshTunnel _dbTunnel;
   final String serverVersion;
   static const _codec = RemoteMessageCodec();
 
@@ -287,6 +294,7 @@ class RemoteServer {
       _git,
       _db,
       _dbSecrets,
+      _dbTunnel,
       serverVersion,
       _statusEnv,
       _endpoint?.token,
@@ -316,6 +324,7 @@ class _Connection {
     this._git,
     this._db,
     this._dbSecrets,
+    this._dbTunnel,
     this._serverVersion,
     this._statusEnv,
     this._expectedToken,
@@ -359,25 +368,84 @@ class _Connection {
   /// de propósito: antes, o cliente resolvia a senha no cofre DELE e a mandava
   /// pelo fio a cada query — o que fazia a conexão só funcionar a partir da
   /// máquina que a cadastrou, e punha a senha em trânsito o tempo todo.
-  RemoteDbConnDescriptor _conn(Map<String, Object?> p) {
-    final conn = RemoteDbConnDescriptor.fromJson(
+  Future<RemoteDbConnDescriptor> _conn(Map<String, Object?> p) async {
+    var conn = RemoteDbConnDescriptor.fromJson(
       (p['conn'] as Map).cast<String, Object?>(),
     );
     // Senha veio no fio (conexão sem segredo guardado): respeita o que o
     // cliente mandou, não há o que resolver.
-    if (!conn.storedSecret) return conn;
-    final secret = _dbSecrets.read(conn.workspaceRoot, conn.connName);
-    if (secret == null || secret.isEmpty) {
-      // Conectar sem senha aqui produziria um erro do banco ("authentication
-      // failed") que não diz a coisa importante: a senha existe, só está no
-      // cofre do cliente que cadastrou a conexão, e precisa ser regravada aqui.
-      throw const DbServiceException(
-        DbErrorKind.passwordRequired,
-        'no stored password on this host for this connection',
+    if (conn.storedSecret) {
+      final secret = _dbSecrets.read(conn.workspaceRoot, conn.connName);
+      if (secret == null || secret.isEmpty) {
+        // Conectar sem senha aqui produziria um erro do banco ("authentication
+        // failed") que não diz a coisa importante: a senha existe, só está no
+        // cofre do cliente que cadastrou a conexão, e precisa ser regravada
+        // aqui.
+        throw const DbServiceException(
+          DbErrorKind.passwordRequired,
+          'no stored password on this host for this connection',
+        );
+      }
+      conn = conn.withPassword(secret);
+    }
+    return _tunneled(conn);
+  }
+
+  /// Abre (ou reusa) o túnel SSH da conexão e devolve o descritor apontando
+  /// para a ponta local — **deste host**.
+  ///
+  /// É o passo que faltava para conexão com bastion funcionar a partir de um
+  /// cliente remoto: antes o bloco `ssh` nem viajava, o host recebia
+  /// `host:porta` cru e discava direto, sem o salto.
+  ///
+  /// A chave privada e a passphrase são as **daqui**, não as do cliente — quem
+  /// alcança o bastion é esta máquina, e é nela que a credencial tem de estar.
+  Future<RemoteDbConnDescriptor> _tunneled(RemoteDbConnDescriptor conn) async {
+    final ssh = conn.ssh;
+    if (ssh == null) return conn;
+    final passphrase = _dbSecrets.readKey(
+      DbSecretStore.sshKeyFor(conn.workspaceRoot, conn.connName),
+    );
+    try {
+      // Mongo vai por SOCKS, os demais por port-forward: num replica set o
+      // driver descobre os membros e passa a discar os hostnames reais, o que
+      // fura qualquer porta fixa. Mesma regra do caminho local.
+      if (conn.engine == 'mongo') {
+        final proxy = await _dbTunnel.ensureSocks(ssh, passphrase: passphrase);
+        return conn.withSocksProxy(proxy.host, proxy.port);
+      }
+      final endpoint = await _dbTunnel.ensure(
+        ssh,
+        targetHost: conn.host,
+        targetPort: conn.port ?? _defaultPort(conn.engine),
+        passphrase: passphrase,
+      );
+      return conn.withEndpoint(endpoint.host, endpoint.port);
+    } on SshTunnelException catch (e) {
+      // Detail estruturado (JSON) em vez de prosa: é com o `kind` que a UI
+      // decide se pode oferecer "confiar nesta host key", e com `endpoint` +
+      // `fingerprint` que ela monta o diálogo. Extrair isso de uma frase seria
+      // frágil justamente no caminho que precisa ser confiável.
+      throw DbServiceException(
+        DbErrorKind.sshTunnelFailed,
+        jsonEncode({
+          'kind': e.kind,
+          'message': e.message,
+          if (e.endpoint != null) 'endpoint': e.endpoint,
+          if (e.fingerprint != null) 'fingerprint': e.fingerprint,
+        }),
       );
     }
-    return conn.withPassword(secret);
   }
+
+  static int _defaultPort(String engine) => switch (engine) {
+    'postgres' => 5432,
+    'mysql' => 3306,
+    'mssql' => 1433,
+    'redis' => 6379,
+    'mongo' => 27017,
+    _ => 0,
+  };
 
   final Socket _socket;
   final TerminalService _terminals;
@@ -385,6 +453,7 @@ class _Connection {
   final GitService _git;
   final DbService _db;
   final DbSecretStore _dbSecrets;
+  final SshTunnel _dbTunnel;
   final String _serverVersion;
 
   /// Env que leva o hook do agente até o receptor de status do HOST
@@ -686,33 +755,66 @@ class _Connection {
           (p['args'] as List).cast<String>(),
         )).toJson(),
         'db.query' => _db.query(
-          _conn(p),
+          await _conn(p),
           p['sql'] as String,
           limit: (p['limit'] as num?)?.toInt() ?? 200,
           dml: p['dml'] as bool? ?? false,
         ),
-        'db.redis' => _db.redis(_conn(p), (p['parts'] as List).cast<String>()),
-        'db.redisMany' => _db.redisMany(_conn(p), [
+        'db.redis' => _db.redis(await _conn(p), (p['parts'] as List).cast<String>()),
+        'db.redisMany' => _db.redisMany(await _conn(p), [
           for (final c in (p['commands'] as List).cast<List>()) c.cast<String>(),
         ]),
         'db.mongo' => _db.mongo(
-          _conn(p),
+          await _conn(p),
           (p['command'] as Map).cast<String, Object?>(),
           database: p['database'] as String?,
         ),
         // Segredo de banco: escrita e remoção apenas. Não existe `db.secretGet`
         // de propósito (plano 62, decisão B) — o cliente é mensageiro, e
         // mensageiro não relê o que entregou.
+        // `kind` escolhe QUAL segredo da conexão: a senha do banco (default) ou
+        // a passphrase da chave SSH do túnel. São segredos distintos e a
+        // conexão pode ter um sem o outro.
         'db.secretSet' => () {
-          _dbSecrets.write(
-            p['root'] as String,
-            p['conn'] as String,
-            p['value'] as String,
+          final root = p['root'] as String;
+          final conn = p['conn'] as String;
+          final key = p['kind'] == 'sshPassphrase'
+              ? DbSecretStore.sshKeyFor(root, conn)
+              : DbSecretStore.keyFor(root, conn);
+          _dbSecrets.writeKey(key, p['value'] as String);
+          return null;
+        }(),
+        // Confiança numa host key de bastion: a decisão é do humano, no
+        // cliente (que tem o diálogo), e o estado fica aqui — mesmo idioma do
+        // cofre de senhas. O servidor não pergunta nada a ninguém; ele falha
+        // com `ssh_host_key_unknown` carregando o fingerprint e espera este
+        // comando.
+        'db.hostKeyTrust' => () async {
+          await FileSshHostKeyStore().trust(
+            p['endpoint'] as String,
+            p['fingerprint'] as String,
           );
           return null;
         }(),
         'db.secretDelete' => () {
-          _dbSecrets.delete(p['root'] as String, p['conn'] as String);
+          final root = p['root'] as String;
+          final conn = p['conn'] as String;
+          _dbSecrets.deleteKey(
+            p['kind'] == 'sshPassphrase'
+                ? DbSecretStore.sshKeyFor(root, conn)
+                : DbSecretStore.keyFor(root, conn),
+          );
+          return null;
+        }(),
+        // Renome acontece AQUI, e não como delete+set no cliente, porque o
+        // cliente não pode ler o valor para regravá-lo — o segredo nunca sai
+        // do host, nem para dar a volta.
+        'db.secretRename' => () {
+          _dbSecrets.rename(
+            p['root'] as String,
+            p['from'] as String,
+            p['to'] as String,
+          );
           return null;
         }(),
         _ => throw _RpcUnknown(req.method),

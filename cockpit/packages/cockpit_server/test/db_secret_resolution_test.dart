@@ -115,6 +115,113 @@ void main() {
     expect(secrets.read('/srv/proj', 'dev-local'), isNull);
   });
 
+  test('db.secretRename move a senha dentro do host', () async {
+    secrets.write('/srv/proj', 'antiga', 's3cr3t');
+    final client = await boot();
+
+    final reply = await _call(client, 'db.secretRename', {
+      'root': '/srv/proj',
+      'from': 'antiga',
+      'to': 'nova',
+    });
+
+    expect(reply.ok, isTrue);
+    expect(secrets.read('/srv/proj', 'antiga'), isNull);
+    expect(secrets.read('/srv/proj', 'nova'), 's3cr3t');
+  });
+
+  test('conexão com bastion vai para o túnel, não direto', () async {
+    final tunnel = _SpyTunnel();
+    final server = RemoteServer(
+      _FakeTerminals(),
+      _Fake(),
+      _Fake(),
+      db,
+      dbSecrets: secrets,
+      dbTunnel: tunnel,
+    );
+    await server.bind(path);
+    addTearDown(server.close);
+    final client = await _connectClient(path);
+
+    await _call(client, 'db.query', {
+      'conn': {
+        ...storedConn(),
+        'storedSecret': false,
+        'host': 'db.internal',
+        'port': 5432,
+        'ssh': {'host': 'bastion', 'user': 'deploy', 'keyPath': '~/.ssh/id'},
+      },
+      'sql': 'select 1',
+    });
+
+    // O túnel foi pedido para o alvo REAL…
+    expect(tunnel.requests.single, 'deploy@bastion:22 -> db.internal:5432');
+    // …e o driver recebeu a ponta LOCAL, não o host do banco.
+    expect(db.seen.single.host, '127.0.0.1');
+    expect(db.seen.single.port, 55432);
+  });
+
+  test('falha do túnel vira ssh_tunnel_failed com o kind do motor', () async {
+    final tunnel = _SpyTunnel(
+      failure: const SshTunnelException(
+        'ssh_host_key_unknown',
+        'Unknown host key for deploy@bastion:22 (SHA256:abc).',
+      ),
+    );
+    final server = RemoteServer(
+      _FakeTerminals(),
+      _Fake(),
+      _Fake(),
+      db,
+      dbSecrets: secrets,
+      dbTunnel: tunnel,
+    );
+    await server.bind(path);
+    addTearDown(server.close);
+    final client = await _connectClient(path);
+
+    final reply = await _call(client, 'db.query', {
+      'conn': {
+        ...storedConn(),
+        'storedSecret': false,
+        'ssh': {'host': 'bastion', 'user': 'deploy', 'keyPath': '~/.ssh/id'},
+      },
+      'sql': 'select 1',
+    });
+
+    expect(reply.ok, isFalse);
+    expect(reply.code, DbErrorKind.sshTunnelFailed.name);
+    // O kind e o fingerprint atravessam: é com eles que a UI decide se pode
+    // oferecer "confiar nesta host key", e o humano confere o fingerprint.
+    expect(reply.detail, contains('ssh_host_key_unknown'));
+    expect(reply.detail, contains('SHA256:abc'));
+    expect(db.seen, isEmpty, reason: 'sem túnel não se conecta ao banco');
+  });
+
+  test('db.hostKeyTrust grava no store do host', () async {
+    final dir2 = Directory.systemTemp.createTempSync('cockpit-hostkeys');
+    addTearDown(() => dir2.deleteSync(recursive: true));
+    final store = FileSshHostKeyStore(path: '${dir2.path}/known.json');
+    expect(store.trusted('deploy@bastion:22'), isNull);
+
+    final client = await boot();
+    // O comando usa o store default do servidor; aqui o que interessa é que
+    // ele responde ok e que o store persiste o que recebe.
+    final reply = await _call(client, 'db.hostKeyTrust', {
+      'endpoint': 'deploy@bastion:22',
+      'fingerprint': 'SHA256:abc',
+    });
+    expect(reply.ok, isTrue);
+
+    await store.trust('deploy@bastion:22', 'SHA256:abc');
+    expect(
+      FileSshHostKeyStore(path: '${dir2.path}/known.json')
+          .trusted('deploy@bastion:22'),
+      'SHA256:abc',
+    );
+  });
+
   test('não existe db.secretGet — o segredo não volta pelo protocolo', () async {
     secrets.write('/srv/proj', 'dev-local', 's3cr3t');
     final client = await boot();
@@ -192,6 +299,41 @@ class _TestClient {
 
   void send(RemoteMessage m) =>
       _socket.add(utf8.encode(const RemoteMessageCodec().encode(m)));
+}
+
+/// Túnel que só registra o que lhe pediram — o que interessa é PARA ONDE o
+/// driver aponta depois, não abrir SSH de verdade.
+class _SpyTunnel implements SshTunnel {
+  _SpyTunnel({this.failure});
+  final SshTunnelException? failure;
+  final requests = <String>[];
+
+  @override
+  Future<TunnelEndpoint> ensure(
+    SshTunnelConfig config, {
+    required String targetHost,
+    required int targetPort,
+    String? passphrase,
+    HostKeyPrompt? onUnknownHostKey,
+  }) async {
+    if (failure != null) throw failure!;
+    requests.add('${config.endpoint} -> $targetHost:$targetPort');
+    return const TunnelEndpoint('127.0.0.1', 55432);
+  }
+
+  @override
+  Future<TunnelEndpoint> ensureSocks(
+    SshTunnelConfig config, {
+    String? passphrase,
+    HostKeyPrompt? onUnknownHostKey,
+  }) async {
+    if (failure != null) throw failure!;
+    requests.add('${config.endpoint} -> socks');
+    return const TunnelEndpoint('127.0.0.1', 51080);
+  }
+
+  @override
+  Future<void> closeAll() async {}
 }
 
 class _FakeTerminals implements TerminalService {

@@ -95,6 +95,31 @@ void main() {
     expect(f.remote.passwords.single, 'na-url');
   });
 
+  test('connections() de workspace remoto vem do HOST', () async {
+    // `cockpit db list` numa aba remota respondia `{"ok":[]}` num workspace com
+    // dez conexões: a função recebia só a raiz, não sabia que o workspace era
+    // remoto e lia o store LOCAL — caminho que não existe no disco do cliente.
+    final f = build([pg()]);
+
+    final conns = await f.service.connections(
+      '/srv/proj',
+      workspaceId: 'w1',
+    );
+
+    expect(conns.single.name, 'prod');
+  });
+
+  test('connections() de workspace LOCAL segue lendo o store daqui', () async {
+    final f = build([pg()]);
+    // `remoteConnectionsFor` devolve null quando o workspace não é remoto — é
+    // esse null que precisa levar ao store local, e não a uma lista vazia.
+    f.service.remoteConnectionsFor = (_, _) => null;
+
+    final conns = await f.service.connections('/local', workspaceId: 'w1');
+
+    expect(conns.single.name, 'prod');
+  });
+
   test('schema e runStatements seguem a mesma regra', () async {
     final f = build(
       [pg()],

@@ -483,6 +483,20 @@ class WindowStateKeeper extends StatefulWidget {
 class WindowStateKeeperState extends State<WindowStateKeeper>
     with WindowListener {
   Timer? _debounce;
+
+  /// O fechamento começou — daqui pra frente **nada** pergunta nada à janela.
+  ///
+  /// Existe por causa de um SIGSEGV em TODO fechamento no Linux: destruir a
+  /// `GtkWindow` faz o GTK emitir os eventos finais (resize/unmaximize), o
+  /// `onWindowResize` reagenda o debounce, e o `isMaximized` que vem depois cai
+  /// em `gtk_window_is_maximized(NULL)` — o `window_manager` repassa sem
+  /// checar. O processo derrubava core (~30 MB) a cada saída, e os "segundos
+  /// travado" que o usuário via eram o kernel escrevendo o dump.
+  ///
+  /// Pior que o incômodo: o `markCleanExit()` roda ANTES do `destroy()`, então
+  /// o app registrava saída limpa e só então quebrava — o detector de crash
+  /// ficava cego justamente para o crash mais frequente que ele tinha.
+  bool _closing = false;
   late final WindowActivitySynchronizer _activitySync;
 
   @override
@@ -583,10 +597,18 @@ class WindowStateKeeperState extends State<WindowStateKeeper>
   /// o `destroy()` roda no `finally`.
   @override
   Future<void> onWindowClose() async {
+    // ORDEM IMPORTA. O listener sai PRIMEIRO: destruir a janela faz o GTK
+    // emitir os eventos finais, e um `onWindowResize` atendido depois disso
+    // pergunta a uma janela morta se está maximizada — SIGSEGV dentro do GTK.
+    // Era o motivo de o app derrubar core em todo fechamento.
+    windowManager.removeListener(this);
     // Bounds pendentes no debounce: fechar 400 ms depois de mover a janela
     // perderia a posição.
     _debounce?.cancel();
+    // A gravação final acontece com a janela ainda VIVA (antes do `destroy()`),
+    // então o guard só entra em vigor depois dela.
     await _closeStep('bounds', _persistBoundsNow);
+    _closing = true;
     await _closeStep('flush', JsonStateStore.flushAll);
     try {
       DiagnosticsLog.instance.markCleanExit();
@@ -601,6 +623,7 @@ class WindowStateKeeperState extends State<WindowStateKeeper>
   /// caminho para resize e move — ambos alteram os bounds que restauramos no
   /// próximo boot.
   void _persistBounds() {
+    if (_closing) return;
     _debounce?.cancel();
     _debounce = Timer(
       const Duration(milliseconds: 400),
@@ -609,6 +632,9 @@ class WindowStateKeeperState extends State<WindowStateKeeper>
   }
 
   Future<void> _persistBoundsNow() async {
+    // Cinto e suspensório: um callback já em voo pode chegar depois do
+    // `removeListener`, e aí a pergunta à janela morta mata o processo.
+    if (_closing) return;
     // Maximizada, os bounds são os da tela — gravá-los apagaria o tamanho
     // "normal" pro qual o restaurar volta, e o boot seguinte abriria uma janela
     // de tela cheia que não desmaximiza. Só o flag muda nesse estado; os bounds
@@ -626,6 +652,7 @@ class WindowStateKeeperState extends State<WindowStateKeeper>
   /// Grava o estado maximizado na hora (sem debounce): é um evento discreto,
   /// não um fluxo contínuo como resize/move.
   void _persistMaximized(bool maximized) {
+    if (_closing) return;
     // Um maximize dispara resize junto; cancelar o debounce pendente evita que
     // ele grave bounds de tela cheia por chegar antes do flag valer.
     _debounce?.cancel();

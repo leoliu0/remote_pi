@@ -127,6 +127,26 @@ void main() {
     expect(leitor.read('/srv/proj', 'dev'), isNull);
   });
 
+  test('rename move o segredo sem o valor sair do cofre', () {
+    final store = DbSecretStore(path: path);
+    store.write('/srv/proj', 'antiga', 's3cr3t');
+
+    store.rename('/srv/proj', 'antiga', 'nova');
+
+    expect(store.read('/srv/proj', 'antiga'), isNull);
+    expect(store.read('/srv/proj', 'nova'), 's3cr3t');
+    // Persistiu: quem renomeia não pode depender de o processo continuar vivo.
+    expect(DbSecretStore(path: path).read('/srv/proj', 'nova'), 's3cr3t');
+  });
+
+  test('rename de chave inexistente é no-op (não cria entrada vazia)', () {
+    final store = DbSecretStore(path: path);
+    store.write('/srv/proj', 'outra', 'x');
+    store.rename('/srv/proj', 'nao-existe', 'nova');
+    expect(store.read('/srv/proj', 'nova'), isNull);
+    expect(store.read('/srv/proj', 'outra'), 'x');
+  });
+
   test('o arquivo nasce 0600', () {
     // Permissão POSIX; no Windows o equivalente é ACL e o teste não se aplica.
     if (Platform.isWindows) return;

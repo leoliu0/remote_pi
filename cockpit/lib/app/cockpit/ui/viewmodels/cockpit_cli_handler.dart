@@ -114,7 +114,7 @@ class CockpitCliHandler {
                 // Raiz do workspace no disco. `workspaceId` é um UUID opaco
                 // desde a migração dos realms — quem precisa do caminho (ex.:
                 // scripts que casavam por sufixo) usa este campo.
-                'workspacePath': _vm.projectById(s.projectId)?.path,
+                'workspacePath': _vm.projectById(s.projectId)?.effectiveRoot,
                 // Aba de task output → id da task espelhada (`npm:dev`…), o
                 // mesmo aceito por `read-task`. Ausente nas demais tabs.
                 if (s is TaskOutputSession) 'taskId': s.taskId,
@@ -289,9 +289,11 @@ class CockpitCliHandler {
               (p) => <String, dynamic>{
                 'id': p.id,
                 'name': p.name,
-                // Raiz no disco (mesma razão do `workspacePath` do list-panes:
-                // o `id` virou UUID opaco; antes o path ERA o id).
-                'path': p.path,
+                // Raiz do workspace na máquina onde ele vive (mesma razão do
+                // `workspacePath` do list-panes: o `id` virou UUID opaco; antes
+                // o path ERA o id). Num workspace remoto é a pasta do HOST —
+                // reportar o `path` cru mostrava '' e sugeria "sem pasta".
+                'path': p.effectiveRoot,
                 // Nº de tabs (sessões) abertas nesse workspace. Campo era 'panes'
                 // (enganoso — sempre foi contagem de tabs, não de folhas-pane).
                 'tabs': _vm.allSessions
@@ -350,14 +352,15 @@ class CockpitCliHandler {
         final project = sender != null
             ? _vm.projectById(sender.projectId)
             : _vm.selectedProject;
+        final tasksRoot = project?.effectiveRoot ?? '';
         if (project == null ||
             project.isSystemTerminal ||
-            project.path.isEmpty) {
+            tasksRoot.isEmpty) {
           return const CockpitCommandResult.fail(
             'no workspace to list tasks for',
           );
         }
-        final defs = await _tasks.discover(project.path);
+        final defs = await _tasks.discover(tasksRoot);
         final tasks = defs
             .map(
               (d) => <String, dynamic>{
@@ -393,8 +396,8 @@ class CockpitCliHandler {
       // <id|path>` pra uso fora de pane. Erros de banco voltam como
       // `<kind>: <message>` (a CLI reconstrói o JSON `{"error":{…}}`).
       case 'db-list':
-        return _dbCommand(c, (project) async {
-          final conns = await _db.connections(project.path);
+        return _dbCommand(c, (project, root) async {
+          final conns = await _db.connections(root, workspaceId: project.id);
           return CockpitCommandResult.ok([
             // `agents: false` = invisível pros agentes (a GUI segue vendo).
             for (final conn in conns)
@@ -410,7 +413,7 @@ class CockpitCliHandler {
         });
 
       case 'db-schema':
-        return _dbCommand(c, (project) async {
+        return _dbCommand(c, (project, root) async {
           final (conn, connErr) = await _agentConn(
             project,
             (c.args['db'] ?? '').toString(),
@@ -418,7 +421,7 @@ class CockpitCliHandler {
           if (connErr != null) return CockpitCommandResult.fail(connErr);
           final table = (c.args['table'] ?? '').toString();
           final result = await _db.schema(
-            workspaceRoot: project.path,
+            workspaceRoot: root,
             workspaceId: project.id,
             connName: conn!.name,
             table: table.isEmpty ? null : table,
@@ -428,7 +431,7 @@ class CockpitCliHandler {
 
       case 'db-query':
       case 'db-execute':
-        return _dbCommand(c, (project) async {
+        return _dbCommand(c, (project, root) async {
           final (conn, connErr) = await _agentConn(
             project,
             (c.args['db'] ?? '').toString(),
@@ -448,7 +451,7 @@ class CockpitCliHandler {
             if (violation != null) return CockpitCommandResult.fail(violation);
           }
           final result = await _db.query(
-            workspaceRoot: project.path,
+            workspaceRoot: root,
             workspaceId: project.id,
             connName: conn.name,
             sql: sql,
@@ -461,7 +464,7 @@ class CockpitCliHandler {
       // `cockpit db run <file.dbq>` — executa o arquivo (frontmatter decide
       // conexão e limite). O path chega absoluto (a CLI resolve contra o cwd).
       case 'db-run':
-        return _dbCommand(c, (project) async {
+        return _dbCommand(c, (project, root) async {
           final path = (c.args['path'] ?? '').toString();
           if (path.isEmpty) {
             return const CockpitCommandResult.fail('missing .dbq path');
@@ -498,7 +501,7 @@ class CockpitCliHandler {
           // Mesma semântica de script da tab: statements em sequência,
           // resultado do último.
           final result = await _db.runStatements(
-            workspaceRoot: project.path,
+            workspaceRoot: root,
             workspaceId: project.id,
             connName: conn.name,
             statements: statements,
@@ -512,7 +515,7 @@ class CockpitCliHandler {
       // uma linha do `cockpit db`. Texto em inglês por decisão: a CLI fala com
       // agentes e scripts, não com a UI.
       case 'http-list':
-        return _projectCommand(c, (project) async {
+        return _projectCommand(c, (project, root) async {
           final (doc, err) = await _httpDoc(c);
           if (err != null) return CockpitCommandResult.fail(err);
           return CockpitCommandResult.ok([
@@ -529,7 +532,7 @@ class CockpitCliHandler {
       // `cockpit http run <file.http> [--request <nome|índice>]` — sem
       // `--request`, roda o primeiro request do arquivo.
       case 'http-run':
-        return _projectCommand(c, (project) async {
+        return _projectCommand(c, (project, root) async {
           final (doc, err) = await _httpDoc(c);
           if (err != null) return CockpitCommandResult.fail(err);
           if (doc!.requests.isEmpty) {
@@ -577,7 +580,7 @@ class CockpitCliHandler {
       // `cockpit redis` — comando de cache CLI-only (plano 51). `args.parts`
       // é a lista do comando (`['GET','foo']`). Reply cru em JSON.
       case 'redis-cmd':
-        return _dbCommand(c, (project) async {
+        return _dbCommand(c, (project, root) async {
           final (conn, connErr) = await _agentConn(
             project,
             (c.args['db'] ?? '').toString(),
@@ -591,7 +594,7 @@ class CockpitCliHandler {
             if (violation != null) return CockpitCommandResult.fail(violation);
           }
           final reply = await _db.redisCommand(
-            workspaceRoot: project.path,
+            workspaceRoot: root,
             workspaceId: project.id,
             connName: conn.name,
             parts: parts,
@@ -601,7 +604,7 @@ class CockpitCliHandler {
 
       // `cockpit mongo` — CLI-only: `args.command` é o JSON do runCommand.
       case 'mongo-cmd':
-        return _dbCommand(c, (project) async {
+        return _dbCommand(c, (project, root) async {
           final raw = (c.args['command'] ?? '{}').toString();
           final Map<String, dynamic> command;
           try {
@@ -630,7 +633,7 @@ class CockpitCliHandler {
           final dbErr = await _mongoDatabaseError(project, conn, database);
           if (dbErr != null) return CockpitCommandResult.fail(dbErr);
           final reply = await _db.mongoCommand(
-            workspaceRoot: project.path,
+            workspaceRoot: root,
             workspaceId: project.id,
             connName: conn.name,
             command: command,
@@ -643,7 +646,7 @@ class CockpitCliHandler {
       // o agente abre a view filtrada pro humano. Abrir view ≠ executar — não
       // devolve dados; valida filtro/conexão ANTES de abrir.
       case 'browse':
-        return _dbCommand(c, (project) async {
+        return _dbCommand(c, (project, root) async {
           final raw = (c.args['url'] ?? '').toString();
           if (raw.isEmpty) {
             return const CockpitCommandResult.fail('missing url');
@@ -671,7 +674,7 @@ class CockpitCliHandler {
         });
 
       case 'redis-browse':
-        return _dbCommand(c, (project) async {
+        return _dbCommand(c, (project, root) async {
           final connName = (c.args['db'] ?? '').toString();
           final err = await _checkBrowseConn(project, connName, DbEngine.redis);
           if (err != null) return CockpitCommandResult.fail(err);
@@ -689,7 +692,7 @@ class CockpitCliHandler {
         });
 
       case 'mongo-browse':
-        return _dbCommand(c, (project) async {
+        return _dbCommand(c, (project, root) async {
           final connName = (c.args['db'] ?? '').toString();
           final collection = (c.args['collection'] ?? '').toString();
           if (collection.isEmpty) {
@@ -765,7 +768,7 @@ class CockpitCliHandler {
     try {
       final svc = MongoBrowseService(_db)
         ..target(
-          workspaceRoot: project.path,
+          workspaceRoot: project.effectiveRoot,
           workspaceId: project.id,
           connName: conn.name,
         );
@@ -785,7 +788,10 @@ class CockpitCliHandler {
   ) async {
     if (connName.isEmpty) return (null, 'missing --db <name>');
     final conns = [
-      for (final c in await _db.connections(project.path))
+      for (final c in await _db.connections(
+        project.effectiveRoot,
+        workspaceId: project.id,
+      ))
         if (c.agents) c,
     ];
     for (final conn in conns) {
@@ -866,9 +872,17 @@ class CockpitCliHandler {
   /// Resolve o workspace do comando (`--workspace <id|path>`, ou o do pane
   /// emissor) e roda [action] nele. Compartilhado por `db`/`redis`/`mongo` e
   /// `http` — todos precisam de uma pasta de workspace real.
+  /// Resolve o workspace do comando e entrega a **raiz efetiva** junto.
+  ///
+  /// A raiz vem pronta (e não `project.path`) porque num workspace remoto o
+  /// `path` é vazio — a pasta vive em `remotePath`. Enquanto cada caso lia
+  /// `project.path` por conta própria, toda aba remota recebia "this pane has
+  /// no workspace folder" em `db`, `list-tasks` e `read-task`; e agentes
+  /// contornavam apontando `--workspace` para um workspace local, o que troca
+  /// a MÁQUINA em silêncio e responde sobre o computador errado.
   Future<CockpitCommandResult> _projectCommand(
     CockpitCommand c,
-    Future<CockpitCommandResult> Function(Project project) action,
+    Future<CockpitCommandResult> Function(Project project, String root) action,
   ) async {
     Project? project;
     final ws = (c.args['workspace'] ?? '').toString();
@@ -892,22 +906,50 @@ class CockpitCliHandler {
         );
       }
     }
-    if (project.isSystemTerminal || project.path.isEmpty) {
+    final root = project.effectiveRoot;
+    if (project.isSystemTerminal || root.isEmpty) {
       return const CockpitCommandResult.fail(
         'this pane has no workspace folder',
       );
     }
-    return action(project);
+    final result = await action(project, root);
+    final crossing = _machineWarning(c, project);
+    // Só decora o sucesso: um erro já traz a explicação dele.
+    if (crossing == null || !result.ok) return result;
+    return CockpitCommandResult.ok(result.data, result.afterResponse, crossing);
+  }
+
+  /// Aviso quando `--workspace` mira um workspace de OUTRA máquina que não a da
+  /// aba emissora.
+  ///
+  /// A execução sempre acontece onde o workspace vive — essa parte está certa.
+  /// O problema é o silêncio: um agente numa aba do host, ao apontar para um
+  /// workspace local, recebe de volta o estado da máquina do CLIENTE com toda a
+  /// cara de ser a de onde ele está. Já aconteceu: a resposta descrevia um
+  /// Postgres em `localhost:5433` que rodava no cliente, não no host da aba.
+  String? _machineWarning(CockpitCommand c, Project target) {
+    if ((c.args['workspace'] ?? '').toString().isEmpty) return null;
+    final tabId = c.tabId;
+    final sender = tabId == null ? null : _vm.session(tabId);
+    final from = sender == null ? null : _vm.projectById(sender.projectId);
+    if (from == null) return null;
+    final fromHost = from.remoteHostId;
+    final toHost = target.remoteHostId;
+    if (fromHost == toHost) return null;
+    String where(String? hostId) =>
+        hostId == null ? 'this computer' : 'remote host $hostId';
+    return 'ran on ${where(toHost)} — the workspace you targeted with '
+        '--workspace lives there, while this tab runs on ${where(fromHost)}';
   }
 
   /// [_projectCommand] + tradução do erro de banco para o formato
   /// `<kind>: <message>` que a CLI reconstrói em `{"error":{…}}`.
   Future<CockpitCommandResult> _dbCommand(
     CockpitCommand c,
-    Future<CockpitCommandResult> Function(Project project) action,
-  ) => _projectCommand(c, (project) async {
+    Future<CockpitCommandResult> Function(Project project, String root) action,
+  ) => _projectCommand(c, (project, root) async {
     try {
-      return await action(project);
+      return await action(project, root);
     } on DbQueryException catch (e) {
       return CockpitCommandResult.fail('${e.kind}: ${e.message}');
     }

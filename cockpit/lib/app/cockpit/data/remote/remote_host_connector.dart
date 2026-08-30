@@ -10,11 +10,13 @@ import 'package:cockpit/app/cockpit/data/remote/host_shell/posix_host_shell.dart
 import 'package:cockpit/app/cockpit/data/remote/host_shell/windows_host_shell.dart';
 import 'package:cockpit/app/cockpit/data/remote/ssh_known_hosts.dart';
 import 'package:cockpit/app/cockpit/data/remote/ssh_tunnel.dart';
-import 'package:cockpit/app/cockpit/domain/contracts/ssh_tunnel.dart'
-    show HostKeyPrompt, HostKeyVerdict;
 import 'package:cockpit/app/cockpit/domain/entities/remote_host.dart';
 import 'package:cockpit/app/core/utils/platform_kind.dart';
-import 'package:cockpit_core/cockpit_core.dart';
+// O motor de túnel de BANCO também exporta `SshTunnel`/`SshTunnelException`,
+// e este arquivo tem os seus próprios (o túnel do HOST remoto, outra coisa).
+// Esconde os do banco: aqui só interessam os tipos de host key.
+import 'package:cockpit_core/cockpit_core.dart'
+    hide SshTunnel, SshTunnelImpl, SshTunnelException;
 import 'package:cockpit_remote/cockpit_remote.dart';
 
 /// Estado observável da conexão com um host (badge/telas da UI, plano 58).
@@ -534,6 +536,16 @@ class RemoteHostConnector {
   /// "desatualizado" em todo boot e derrubaria o servidor remoto sem motivo.
   Future<bool> _remoteServerIsStale(HostShell shell) async {
     if (shell.installsFromHostBundle) return false;
+    // Host de OUTRA plataforma: este cliente não tem binário para enviar (o
+    // `.deb` traz só o ELF do Linux, o `.app` só o Mach-O), então não é fonte
+    // da instalação e não tem autoridade para julgá-la.
+    //
+    // Sem esta linha o resolver caía no nome sem sufixo e devolvia o binário
+    // da PRÓPRIA plataforma: o hash nunca batia com o do host, todo boot
+    // acusava "desatualizado", e o cliente DERRUBAVA uma conexão que estava
+    // funcionando para tentar um bootstrap que o guard de OS logo abaixo
+    // recusa. Cliente Linux + host macOS ficava sem conexão nenhuma.
+    if (shell.probe.os != _localOsName) return false;
     final local = localServerBinaryResolver(arch: shell.probe.arch);
     if (local == null) return false;
     final remoteHash = await shell.serverSha256();

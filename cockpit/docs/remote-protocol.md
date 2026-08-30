@@ -113,6 +113,16 @@ conexão)` — e o cliente o alimenta por dois métodos **write-only**:
 |---|---|---|
 | `db.secretSet` | `root`, `conn`, `value` | grava/substitui a senha da conexão |
 | `db.secretDelete` | `root`, `conn` | apaga a senha da conexão |
+| `db.secretRename` | `root`, `from`, `to` | move a senha para o nome novo |
+| `db.hostKeyTrust` | `endpoint`, `fingerprint` | confia numa host key de bastion |
+
+`db.secretSet`/`db.secretDelete` aceitam `kind`: `password` (default) ou
+`sshPassphrase` — a passphrase da chave do túnel é segredo distinto da senha do
+banco, e a conexão pode ter um sem o outro.
+
+`db.secretRename` existe porque o cliente não pode ler o segredo para regravá-lo
+sob outro nome: sem ele, renomear uma conexão apagava a senha e o usuário só
+descobria na query seguinte.
 
 O conteúdo é cifrado com AES-GCM e chave fixa do produto (modelo do DBeaver).
 É **ofuscação deliberada**: tira o segredo do texto claro em disco, cobrindo
@@ -149,6 +159,24 @@ Com `storedSecret: true` e nada no cofre do host, o servidor responde
 típico é conexão cadastrada antes deste plano, cuja senha ficou no cofre do
 cliente que a criou.
 
+### Túnel SSH da conexão (plano 62, onda 2)
+
+O descritor carrega o bloco `ssh` da conexão e **quem abre o túnel é o host** —
+ele é quem alcança o bastion e quem tem a chave privada. Antes o bloco não
+viajava, o host recebia `host:porta` cru e discava direto: conexão com bastion
+não funcionava a partir de cliente remoto.
+
+- **Chave e passphrase são as do host.** `keyPath` resolve contra o `~` de lá; a
+  passphrase sai do mesmo cofre da senha, sob `kind: sshPassphrase`.
+- **Mongo vai por SOCKS**, os demais por port-forward — num replica set o driver
+  descobre os membros e passa a discar os hostnames reais, furando porta fixa.
+- **Host key**: o servidor não pergunta nada. Chave desconhecida vira
+  `ssh_tunnel_failed` com detail `<kind>|<mensagem>`, e a mensagem traz o
+  fingerprint. O cliente mostra o diálogo que já tem e confia via
+  `db.hostKeyTrust` — decisão do humano no cliente, estado no host, o mesmo
+  idioma do cofre. Consequência aceita: a primeira conexão a um bastion novo
+  falha uma vez, de propósito.
+
 ## Aberto (para as próximas waves)
 
 - Backpressure/coalescing de output no fio (integrar com o
@@ -156,6 +184,3 @@ cliente que a criou.
 - Resize com N clientes attached (política tmux a decidir).
 - Frame binário para `pty.output` se o benchmark apontar o base64.
 - Envelopes dos domínios Arquivos, Git e Databases.
-- Túnel SSH da conexão de banco executado no host (hoje o descritor não carrega
-  o bloco `ssh`, então conexão com bastion não funciona a partir de um cliente
-  remoto — plano 62, onda 2).
