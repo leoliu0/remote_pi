@@ -4,7 +4,7 @@ import 'package:app/ui/core/themes/themes.dart';
 import 'package:flutter/material.dart';
 import 'package:app/ui/chat/widgets/chat_image.dart';
 import 'package:flutter/services.dart';
-import 'package:gpt_markdown/gpt_markdown.dart';
+import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -40,9 +40,8 @@ String stripThinkingTrace(String text, {bool isLiveStreaming = false}) {
 }
 
 /// Plan/32b — renders the agent's Markdown reply (GFM + code) themed to the
-/// app's dark/mono look. Links open in the system browser (url_launcher);
-/// code blocks get a copy button. Tolerant of partial markdown so it can also
-/// drive the live streaming bubble.
+/// app's dark/mono look. Uses standard Flutter Markdown parsing to prevent
+/// text doubling or line wrapping bugs.
 class AgentMarkdown extends StatelessWidget {
   const AgentMarkdown(this.data, {super.key, this.selectable = false});
 
@@ -62,111 +61,56 @@ class AgentMarkdown extends StatelessWidget {
       color: colors.text,
     );
 
-    final markdown = Theme(
-      data: Theme.of(context).copyWith(
-        extensions: [
-          GptMarkdownThemeData(
-            brightness: Theme.of(context).brightness,
-            h1: baseMono.copyWith(
-              fontSize: 22.0,
-              fontWeight: FontWeight.w700,
-              color: colors.text,
-              letterSpacing: -0.2,
-            ),
-            h2: baseMono.copyWith(
-              fontSize: 19.5,
-              fontWeight: FontWeight.w700,
-              color: colors.text,
-              letterSpacing: -0.2,
-            ),
-            h3: baseMono.copyWith(
-              fontSize: 17.5,
-              fontWeight: FontWeight.w700,
-              color: colors.text,
-            ),
-            h4: baseMono.copyWith(
-              fontSize: 16.5,
-              fontWeight: FontWeight.w700,
-              color: colors.text,
-            ),
-            h5: baseMono.copyWith(
-              fontSize: 15.5,
-              fontWeight: FontWeight.w700,
-              color: colors.text,
-            ),
-            h6: baseMono.copyWith(
-              fontSize: 15.0,
-              fontWeight: FontWeight.w700,
-              color: colors.text,
-            ),
-            highlightColor: colors.codeBg,
-            linkColor: colors.accent,
-            hrLineColor: colors.border,
-          ),
-        ],
-        textTheme: Theme.of(context).textTheme.copyWith(
-          headlineLarge: baseMono.copyWith(
-            fontSize: 22.0,
-            fontWeight: FontWeight.w700,
-            color: colors.text,
-            letterSpacing: -0.2,
-          ),
-          headlineMedium: baseMono.copyWith(
-            fontSize: 19.5,
-            fontWeight: FontWeight.w700,
-            color: colors.text,
-            letterSpacing: -0.2,
-          ),
-          headlineSmall: baseMono.copyWith(
-            fontSize: 17.5,
-            fontWeight: FontWeight.w700,
-            color: colors.text,
-          ),
-          titleLarge: baseMono.copyWith(
-            fontSize: 16.5,
-            fontWeight: FontWeight.w700,
-            color: colors.text,
-          ),
-          titleMedium: baseMono.copyWith(
-            fontSize: 15.5,
-            fontWeight: FontWeight.w700,
-            color: colors.text,
-          ),
-          titleSmall: baseMono.copyWith(
-            fontSize: 15.0,
-            fontWeight: FontWeight.w700,
-            color: colors.text,
-          ),
-          bodyLarge: baseMono,
-          bodyMedium: baseMono,
-          bodySmall: baseMono.copyWith(fontSize: 13.0, color: colors.muted),
-        ),
+    final styleSheet = MarkdownStyleSheet(
+      p: baseMono,
+      h1: baseMono.copyWith(fontSize: 22.0, fontWeight: FontWeight.w700, letterSpacing: -0.2),
+      h2: baseMono.copyWith(fontSize: 19.5, fontWeight: FontWeight.w700, letterSpacing: -0.2),
+      h3: baseMono.copyWith(fontSize: 17.5, fontWeight: FontWeight.w700),
+      h4: baseMono.copyWith(fontSize: 16.5, fontWeight: FontWeight.w700),
+      h5: baseMono.copyWith(fontSize: 15.5, fontWeight: FontWeight.w700),
+      h6: baseMono.copyWith(fontSize: 15.0, fontWeight: FontWeight.w700),
+      em: baseMono.copyWith(fontStyle: FontStyle.italic),
+      strong: baseMono.copyWith(fontWeight: FontWeight.bold),
+      code: baseMono.copyWith(
+        fontSize: 14.0,
+        color: colors.highlight,
+        backgroundColor: colors.codeBg,
       ),
-      child: GptMarkdown(
-        data,
-        style: baseMono,
-        useDollarSignsForLatex: false,
-        onLinkTap: (url, _) => _openLink(context, url),
-        highlightBuilder: (context, text, style) => Text(
-          text,
-          style: baseMono.copyWith(
-            fontSize: 14.0,
-            color: colors.highlight,
-            backgroundColor: colors.codeBg,
-          ),
-        ),
-        // Fenced ``` blocks — dark card + copy button.
-        codeBuilder: (context, name, code, closed) =>
-            _CodeBlock(language: name, code: code),
-        // Markdown images — supports data URIs, base64, files, network + zoom.
-        imageBuilder: (context, url, width, height) => ChatImage(
-          url: url,
-          width: width,
-          height: height,
-        ),
+      codeblockDecoration: BoxDecoration(
+        color: colors.codeBg,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: colors.border),
       ),
+      blockquote: baseMono.copyWith(color: colors.muted),
+      blockquoteDecoration: BoxDecoration(
+        border: Border(left: BorderSide(color: colors.accent, width: 3)),
+      ),
+      horizontalRuleDecoration: BoxDecoration(
+        border: Border(top: BorderSide(color: colors.border, width: 1)),
+      ),
+      listBullet: baseMono.copyWith(color: colors.muted),
+      tableBody: baseMono.copyWith(fontSize: 14.0),
+      tableHead: baseMono.copyWith(fontSize: 14.0, fontWeight: FontWeight.bold),
+      tableBorder: TableBorder.all(color: colors.border, width: 1),
+      tableCellsPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
     );
-    return selectable ? SelectionArea(child: markdown) : markdown;
+
+    final widget = MarkdownBody(
+      data: data,
+      selectable: selectable,
+      styleSheet: styleSheet,
+      onTapLink: (text, href, title) {
+        if (href != null) _openLink(context, href);
+      },
+      imageBuilder: (uri, title, alt) {
+        return ChatImage(url: uri.toString());
+      },
+      builders: {
+        'code': _CodeElementBuilder(context),
+      },
+    );
+
+    return widget;
   }
 
   static Future<void> _openLink(BuildContext context, String url) async {
@@ -181,6 +125,22 @@ class AgentMarkdown extends StatelessWidget {
     } catch (_) {
       messenger?.showSnackBar(SnackBar(content: Text("Couldn't open $url")));
     }
+  }
+}
+
+class _CodeElementBuilder extends MarkdownElementBuilder {
+  final BuildContext context;
+  _CodeElementBuilder(this.context);
+
+  @override
+  Widget? visitElementAfter(mdElement, TextStyle? preferredStyle) {
+    // Only intercept multiline fenced code blocks (<pre><code>...)
+    final text = mdElement.textContent;
+    if (mdElement.attributes['class'] != null || text.contains('\n')) {
+      final language = mdElement.attributes['class']?.replaceFirst('language-', '') ?? '';
+      return _CodeBlock(language: language, code: text.trimRight());
+    }
+    return null;
   }
 }
 
