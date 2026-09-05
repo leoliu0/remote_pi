@@ -847,6 +847,7 @@ class _Translations$cockpit$dbPanel$pt_BR extends Translations$cockpit$dbPanel$e
 	@override String footer({required Object n}) => '.cockpit/databases.json · ${n} conexões';
 	@override String get footerOne => '.cockpit/databases.json · 1 conexão';
 	@override String get noConnections => 'Nenhuma conexão ainda.';
+	@override String get passwordRequired => 'Senha não encontrada no host. Abra esta conexão e digite-a de novo — ela fica salva na máquina que executa o banco, não nesta.';
 }
 
 // Path: cockpit.dbMongoView
@@ -905,6 +906,7 @@ class _Translations$cockpit$dbConnectionDialog$pt_BR extends Translations$cockpi
 	@override String get choosePrivateKeyDialogTitle => 'Escolher chave privada SSH';
 	@override String get keyPassphrase => 'Senha da chave';
 	@override String get savePassphrase => 'Salvar senha da chave';
+	@override String get passwordOnHost => 'A senha fica salva no host, não nesta máquina.';
 }
 
 // Path: cockpit.sshPrompts
@@ -1098,8 +1100,8 @@ class _Translations$cockpit$remoteHost$pt_BR extends Translations$cockpit$remote
 	@override String pickFolderTitle({required Object host}) => 'Abrir pasta em ${host}';
 	@override String get openHere => 'Abrir aqui';
 	@override String get emptyFolder => 'Sem subpastas';
-	@override String get newLocal => 'Novo workspace local';
-	@override String get newRemote => 'Novo workspace remoto';
+	@override String get newLocal => 'Local';
+	@override String get newRemote => 'Remoto';
 	@override String get chooseHost => 'Escolher um host';
 	@override String get newHostEntry => 'Novo host…';
 	@override String get editHost => 'Editar host';
@@ -2181,6 +2183,7 @@ extension on TranslationsPtBr {
 			'cockpit.dbPanel.footer' => ({required Object n}) => '.cockpit/databases.json · ${n} conexões',
 			'cockpit.dbPanel.footerOne' => '.cockpit/databases.json · 1 conexão',
 			'cockpit.dbPanel.noConnections' => 'Nenhuma conexão ainda.',
+			'cockpit.dbPanel.passwordRequired' => 'Senha não encontrada no host. Abra esta conexão e digite-a de novo — ela fica salva na máquina que executa o banco, não nesta.',
 			'cockpit.dbMongoView.deleteDocumentTitle' => 'Excluir documento',
 			'cockpit.dbMongoView.deleteDocumentMessage' => ({required Object id, required Object collection}) => 'Excluir o documento com _id ${id} de "${collection}"?',
 			'cockpit.dbMongoView.filterHint' => 'Filtro — JSON, ex.: {"status": "active"}',
@@ -2218,6 +2221,7 @@ extension on TranslationsPtBr {
 			'cockpit.dbConnectionDialog.choosePrivateKeyDialogTitle' => 'Escolher chave privada SSH',
 			'cockpit.dbConnectionDialog.keyPassphrase' => 'Senha da chave',
 			'cockpit.dbConnectionDialog.savePassphrase' => 'Salvar senha da chave',
+			'cockpit.dbConnectionDialog.passwordOnHost' => 'A senha fica salva no host, não nesta máquina.',
 			'cockpit.sshPrompts.unknownSshHostTitle' => 'Host SSH desconhecido',
 			'cockpit.sshPrompts.neverConnected' => ({required Object endpoint}) => 'O Cockpit nunca se conectou a ${endpoint} antes.',
 			'cockpit.sshPrompts.trustHint' => 'Confie apenas se esta fingerprint corresponder ao servidor. Você pode verificar no servidor com:',
@@ -2258,10 +2262,10 @@ extension on TranslationsPtBr {
 			'cockpit.findBar.badPattern' => 'Padrão inválido',
 			'cockpit.findBar.noResults' => 'Nenhum resultado',
 			'cockpit.contentSearch.sectionSearch' => 'BUSCA',
-			'cockpit.contentSearch.searchInFiles' => 'Buscar nos arquivos',
-			'cockpit.contentSearch.matchCase' => 'Diferenciar maiúsculas',
 			_ => null,
 		} ?? switch (path) {
+			'cockpit.contentSearch.searchInFiles' => 'Buscar nos arquivos',
+			'cockpit.contentSearch.matchCase' => 'Diferenciar maiúsculas',
 			'cockpit.contentSearch.wholeWord' => 'Palavra inteira',
 			'cockpit.contentSearch.useRegex' => 'Usar expressão regular',
 			'cockpit.contentSearch.invalidRegex' => 'Expressão regular inválida.',
@@ -2311,8 +2315,8 @@ extension on TranslationsPtBr {
 			'cockpit.remoteHost.pickFolderTitle' => ({required Object host}) => 'Abrir pasta em ${host}',
 			'cockpit.remoteHost.openHere' => 'Abrir aqui',
 			'cockpit.remoteHost.emptyFolder' => 'Sem subpastas',
-			'cockpit.remoteHost.newLocal' => 'Novo workspace local',
-			'cockpit.remoteHost.newRemote' => 'Novo workspace remoto',
+			'cockpit.remoteHost.newLocal' => 'Local',
+			'cockpit.remoteHost.newRemote' => 'Remoto',
 			'cockpit.remoteHost.chooseHost' => 'Escolher um host',
 			'cockpit.remoteHost.newHostEntry' => 'Novo host…',
 			'cockpit.remoteHost.editHost' => 'Editar host',

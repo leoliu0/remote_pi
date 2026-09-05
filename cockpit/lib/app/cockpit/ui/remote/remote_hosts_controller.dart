@@ -1,3 +1,4 @@
+import 'package:cockpit_core/cockpit_core.dart';
 import 'dart:async';
 
 import 'package:cockpit/app/cockpit/data/remote/mobile_ssh_key_store.dart';
@@ -6,8 +7,6 @@ import 'package:cockpit/app/core/utils/remote_path.dart';
 import 'package:cockpit/app/cockpit/data/remote/remote_host_password_store.dart';
 import 'package:cockpit/app/cockpit/data/remote/remote_host_terminal_gateway.dart';
 import 'package:cockpit/app/cockpit/domain/contracts/remote_hosts_store.dart';
-import 'package:cockpit/app/cockpit/domain/contracts/ssh_tunnel.dart'
-    show HostKeyPrompt, HostKeyVerdict;
 import 'package:cockpit/app/cockpit/domain/contracts/terminal_gateway.dart';
 import 'package:cockpit/app/cockpit/domain/entities/remote_host.dart';
 import 'package:cockpit/app/cockpit/domain/entities/remote_workspace_pin.dart';
