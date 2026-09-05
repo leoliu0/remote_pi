@@ -3577,10 +3577,20 @@ async function _cmdStart(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<voi
     }
   } catch { /* defensive — never block /remote-pi start on this */ }
 
-  const roomMeta: { name: string; cwd: string; model?: string; thinking?: ThinkingLevel } = { name: sessionName, cwd };
+  const roomMeta: { name: string; cwd: string; model?: string; thinking?: ThinkingLevel; goal?: string } = { name: sessionName, cwd };
   const modelName = _currentModelName();
   if (modelName) roomMeta.model = modelName;
   if (_currentThinking) roomMeta.thinking = _currentThinking;
+  try {
+    const rawGoal = (_pi as { getGoalModeState?: () => { enabled?: boolean; goal?: { status?: string } } })?.getGoalModeState?.();
+    if (rawGoal?.enabled === true) {
+      roomMeta.goal = "active";
+    } else if (rawGoal?.goal?.status === "paused") {
+      roomMeta.goal = "paused";
+    } else if (rawGoal) {
+      roomMeta.goal = "idle";
+    }
+  } catch {}
   // Persist so _attemptReconnect can replay the same hello payload — without
   // this, reconnect issues a bare hello and the relay creates a "default room"
   // entry that surfaces in the app as a phantom legacy session.
