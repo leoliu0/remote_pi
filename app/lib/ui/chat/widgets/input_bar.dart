@@ -975,8 +975,9 @@ class _QuickActionsChip extends StatelessWidget {
     String label = 'Actions';
     if (model != null && model!.isNotEmpty) {
       final clean = model!.split('/').last;
-      final shortModel = clean.length > 12 ? clean.substring(0, 10) + '..' : clean;
-      label = thinking != null ? '$shortModel · $thinking' : shortModel;
+      // Short model name so composer action/submit buttons always fit comfortably
+      final shortModel = clean.length > 7 ? clean.substring(0, 6) + '..' : clean;
+      label = thinking != null ? '$shortModel·$thinking' : shortModel;
     }
 
     return Material(
@@ -995,13 +996,17 @@ class _QuickActionsChip extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             children: [
               Icon(LucideIcons.slidersHorizontal, size: 12, color: colors.muted),
-              const SizedBox(width: 4),
-              Text(
-                label,
-                style: typo.monoSmall.copyWith(
-                  fontSize: 11,
-                  color: colors.text,
-                  fontWeight: FontWeight.w500,
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 80),
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: typo.monoSmall.copyWith(
+                    fontSize: 11,
+                    color: colors.text,
+                    fontWeight: FontWeight.w500,
+                  ),
                 ),
               ),
             ],

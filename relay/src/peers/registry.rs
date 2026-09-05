@@ -287,7 +287,7 @@ impl PeerRegistry {
         room_id: &str,
         patch: RoomMetaPatch,
     ) -> bool {
-        let (current_model, current_thinking, current_working) = {
+        let (current_model, current_thinking, current_working, current_goal) = {
             let mut lock = self.senders.lock().unwrap();
             let key = (peer_id.to_string(), room_id.to_string());
             match lock.get_mut(&key) {
@@ -302,6 +302,9 @@ impl PeerRegistry {
                         if let Some(w) = patch.working {
                             meta.working = w;
                         }
+                        if let Some(ref g) = patch.goal {
+                            meta.goal = g.clone();
+                        }
                     }
                     // All conns at this key carry the same post-patch state
                     // now; read the first as the canonical snapshot.
@@ -310,6 +313,7 @@ impl PeerRegistry {
                         head.1.model.clone(),
                         head.1.thinking.clone(),
                         head.1.working,
+                        head.1.goal.clone(),
                     )
                 }
                 _ => return false,
@@ -329,6 +333,9 @@ impl PeerRegistry {
             }
             if let Some(t) = &current_thinking {
                 meta_obj.insert("thinking".to_string(), serde_json::Value::String(t.clone()));
+            }
+            if let Some(g) = &current_goal {
+                meta_obj.insert("goal".to_string(), serde_json::Value::Bool(*g));
             }
             // `working` is always present (non-nullable bool), so it always
             // rides along in the broadcast — subscribers can rely on it.

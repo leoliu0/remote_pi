@@ -43,9 +43,8 @@ void main() {
         ),
       ),
     );
-
-    expect(find.text('glm-5.3-fl.. · high'), findsOneWidget);
-    await tester.tap(find.text('glm-5.3-fl.. · high'));
+    expect(find.text('glm-5...·high'), findsOneWidget);
+    await tester.tap(find.text('glm-5...·high'));
     expect(opened, isTrue);
   });
 
