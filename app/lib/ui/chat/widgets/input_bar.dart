@@ -672,13 +672,6 @@ class _InputBarState extends State<InputBar> {
                       _focusNode.requestFocus();
                     },
                   ),
-                  const SizedBox(width: 4),
-                  if (widget.onOpenQuickActions != null)
-                    _QuickActionsChip(
-                      model: widget.activeModel,
-                      thinking: widget.activeThinking,
-                      onTap: widget.onOpenQuickActions!,
-                    ),
                   const Spacer(),
                   if (showQueueButton) ...[
                     _QueueButton(onTap: _queue),
