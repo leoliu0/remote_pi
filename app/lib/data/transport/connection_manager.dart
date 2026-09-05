@@ -690,6 +690,7 @@ class ConnectionManager extends Service {
         :final model,
         :final thinking,
         :final working,
+        :final goal,
       ):
         final key = toStandardB64(peer);
         final list = _roomsByPeer[key] ?? <RoomInfo>[];
@@ -707,11 +708,13 @@ class ConnectionManager extends Service {
         // relay that omits it (null) keeps the cached value instead of
         // forcing the room back to idle.
         var preservedWorking = false;
+        String? preservedGoal;
         final existingIdx = list.indexWhere((r) => r.roomId == roomId);
         if (existingIdx >= 0) {
           preservedName = list[existingIdx].name;
           preservedThinking = list[existingIdx].thinking;
           preservedWorking = list[existingIdx].working;
+          preservedGoal = list[existingIdx].goal;
         }
         final next = RoomInfo(
           roomId: roomId,
@@ -721,6 +724,7 @@ class ConnectionManager extends Service {
           model: model,
           thinking: thinking ?? preservedThinking,
           working: working ?? preservedWorking,
+          goal: goal ?? preservedGoal,
         );
         final liveAlready = _liveRoomIds[key]?.contains(roomId) ?? false;
         final identicalEntry = existingIdx >= 0 && list[existingIdx] == next;
@@ -760,8 +764,10 @@ class ConnectionManager extends Service {
         :final model,
         :final thinking,
         :final working,
+        :final goal,
         :final hasModel,
         :final hasThinking,
+        :final hasGoal,
       ):
         final key = toStandardB64(peer);
         final list = _roomsByPeer[key];
@@ -777,27 +783,31 @@ class ConnectionManager extends Service {
         // would clobber the previously cached model with null.
         final nextModel = hasModel ? model : current.model;
         final nextThinking = hasThinking ? thinking : current.thinking;
+        final nextGoal = hasGoal ? goal : current.goal;
         if (working == true) {
           _workingOffTimers.remove('$key:$roomId')?.cancel();
           _unreadFinishedRooms.remove('$key:$roomId');
           if (current.model == nextModel &&
               current.thinking == nextThinking &&
+              current.goal == nextGoal &&
               current.working == true) {
             break;
           }
           list[idx] = current.copyWith(
             model: nextModel,
             thinking: nextThinking,
+            goal: nextGoal,
             working: true,
           );
           roomsDirty = true;
           // ignore: unawaited_futures
           _persistRoomsForPeer(key);
         } else if (working == false) {
-          if (hasModel || hasThinking) {
+          if (hasModel || hasThinking || hasGoal) {
             list[idx] = current.copyWith(
               model: nextModel,
               thinking: nextThinking,
+              goal: nextGoal,
             );
             roomsDirty = true;
           }
@@ -806,12 +816,14 @@ class ConnectionManager extends Service {
           }
         } else {
           if (current.model == nextModel &&
-              current.thinking == nextThinking) {
+              current.thinking == nextThinking &&
+              current.goal == nextGoal) {
             break;
           }
           list[idx] = current.copyWith(
             model: nextModel,
             thinking: nextThinking,
+            goal: nextGoal,
           );
           roomsDirty = true;
           // ignore: unawaited_futures
@@ -825,6 +837,7 @@ class ConnectionManager extends Service {
         for (final r in rooms) {
           final preservedName = byId[r.roomId]?.name ?? r.name;
           final preservedThinking = r.thinking ?? byId[r.roomId]?.thinking;
+          final preservedGoal = r.goal ?? byId[r.roomId]?.goal;
           final hasActiveWorkingTimer =
               _workingOffTimers.containsKey('$key:${r.roomId}');
           final effectiveWorking =
@@ -840,6 +853,7 @@ class ConnectionManager extends Service {
             model: r.model ?? byId[r.roomId]?.model,
             thinking: preservedThinking,
             working: effectiveWorking,
+            goal: preservedGoal,
           );
         }
         final newList = byId.values.toList();

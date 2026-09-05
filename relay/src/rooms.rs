@@ -19,10 +19,10 @@ pub struct RoomMeta {
     /// never interprets it. None = not reported yet.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thinking: Option<String>,
-    /// Goal Mode active for this room. Opaque bool from the Pi — the relay
-    /// never interprets it. None = not reported yet.
+    /// Goal Mode status for this room (e.g. "active", "paused", "idle").
+    /// Opaque string from the Pi — the relay never interprets it.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub goal: Option<bool>,
+    pub goal: Option<String>,
     /// Whether this room currently has an in-flight agent turn (plano 32).
     /// A plain bool with the same merge-patch semantics as `thinking`: a
     /// `room_meta_update` that omits `working` leaves it unchanged — it never
@@ -48,9 +48,9 @@ pub struct RoomMetaPatch {
     /// `None` = field absent (leave current), `Some(b)` = set to `b`. There is
     /// no "clear to null" — `false` *is* the cleared state.
     pub working: Option<bool>,
-    /// `goal` mirrors `thinking`'s nullable patch shape: absent = leave
-    /// current, `Some(None)` = clear, `Some(Some(b))` = set.
-    pub goal: Option<Option<bool>>,
+    /// `goal` mirrors `thinking`'s nullable string patch shape: absent = leave
+    /// current, `Some(None)` = clear, `Some(Some(s))` = set.
+    pub goal: Option<Option<String>>,
 }
 
 impl RoomMetaPatch {

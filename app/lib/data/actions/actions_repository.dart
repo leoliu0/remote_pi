@@ -61,11 +61,13 @@ class ActiveRoomMeta {
   /// surface so the app stack lights up the moment the relay catches
   /// up, no further app changes required.
   final ThinkingLevel? thinking;
+  final String? goal;
   const ActiveRoomMeta({
     this.peerEpk,
     this.roomId = 'main',
     this.model,
     this.thinking,
+    this.goal,
   });
 
   @override
@@ -74,10 +76,11 @@ class ActiveRoomMeta {
       other.peerEpk == peerEpk &&
       other.roomId == roomId &&
       other.model == model &&
-      other.thinking == thinking;
+      other.thinking == thinking &&
+      other.goal == goal;
 
   @override
-  int get hashCode => Object.hash(peerEpk, roomId, model, thinking);
+  int get hashCode => Object.hash(peerEpk, roomId, model, thinking, goal);
 }
 
 /// Typed failure thrown by [ActionsRepository] when an action cannot
@@ -239,6 +242,7 @@ class ActionsRepository extends Repository implements IActionsRepository {
       roomId: roomId,
       model: active?.model,
       thinking: active?.thinking,
+      goal: active?.goal,
     );
 
     // Plan/28 Wave D — detect external model changes. The local
@@ -349,6 +353,7 @@ class ActionsRepository extends Repository implements IActionsRepository {
         roomId: _conn.activeRoomId,
         model: currentName,
         thinking: _activeRoomMeta.thinking,
+        goal: _activeRoomMeta.goal,
       );
       if (nextMeta != _activeRoomMeta) {
         _activeRoomMeta = nextMeta;

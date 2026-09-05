@@ -37,6 +37,7 @@ sealed class ControlInbound {
         // or nested under `meta.working`; read both for forward-compat.
         final rawWorking =
             (j['working'] as bool?) ?? (metaJson?['working'] as bool?);
+        final rawGoal = (j['goal'] as String?) ?? (metaJson?['goal'] as String?);
         return RoomAnnounced(
           peer: j['peer'] as String,
           roomId: j['room_id'] as String,
@@ -48,6 +49,7 @@ sealed class ControlInbound {
               ? ThinkingLevel.fromWire(rawThinking)
               : null,
           working: rawWorking,
+          goal: rawGoal,
         );
       }(),
       'room_ended' => RoomEnded(
@@ -65,6 +67,7 @@ sealed class ControlInbound {
         final meta = j['meta'] as Map<String, dynamic>?;
         final hasModel = meta?.containsKey('model') ?? false;
         final hasThinking = meta?.containsKey('thinking') ?? false;
+        final hasGoal = meta?.containsKey('goal') ?? false;
         final rawThinking = meta?['thinking'] as String?;
         return RoomMetaUpdated(
           peer: j['peer'] as String,
@@ -73,12 +76,11 @@ sealed class ControlInbound {
           thinking: rawThinking != null
               ? ThinkingLevel.fromWire(rawThinking)
               : null,
-          // Plan/32 — `working` has no "clear to null" state (false IS the
-          // cleared state), so a plain nullable bool models the patch:
-          // null = absent (preserve current), true/false = set.
           working: meta?['working'] as bool?,
+          goal: meta?['goal'] as String?,
           hasModel: hasModel,
           hasThinking: hasThinking,
+          hasGoal: hasGoal,
         );
       }(),
       _ => null,
@@ -193,6 +195,7 @@ class RoomInfo {
   /// session — not just the single connected one. Defaults to `false`
   /// (idle / not reported yet).
   final bool working;
+  final String? goal;
 
   const RoomInfo({
     required this.roomId,
@@ -202,6 +205,7 @@ class RoomInfo {
     this.model,
     this.thinking,
     this.working = false,
+    this.goal,
   });
 
   factory RoomInfo.fromJson(Map<String, dynamic> j) {
@@ -216,6 +220,7 @@ class RoomInfo {
           ? ThinkingLevel.fromWire(rawThinking)
           : null,
       working: (j['working'] as bool?) ?? false,
+      goal: j['goal'] as String?,
     );
   }
 
@@ -227,6 +232,7 @@ class RoomInfo {
     'model': model,
     if (thinking != null) 'thinking': thinking!.wire,
     'working': working,
+    if (goal != null) 'goal': goal,
   };
 
   RoomInfo copyWith({
@@ -236,6 +242,7 @@ class RoomInfo {
     Object? model = _kRoomInfoUnset,
     Object? thinking = _kRoomInfoUnset,
     bool? working,
+    Object? goal = _kRoomInfoUnset,
   }) => RoomInfo(
     roomId: roomId,
     name: name ?? this.name,
@@ -246,6 +253,7 @@ class RoomInfo {
         ? this.thinking
         : thinking as ThinkingLevel?,
     working: working ?? this.working,
+    goal: identical(goal, _kRoomInfoUnset) ? this.goal : goal as String?,
   );
 
   @override
@@ -257,11 +265,12 @@ class RoomInfo {
       other.startedAt == startedAt &&
       other.model == model &&
       other.thinking == thinking &&
-      other.working == working;
+      other.working == working &&
+      other.goal == goal;
 
   @override
   int get hashCode =>
-      Object.hash(roomId, name, cwd, startedAt, model, thinking, working);
+      Object.hash(roomId, name, cwd, startedAt, model, thinking, working, goal);
 }
 
 class RoomAnnounced extends ControlInbound {
@@ -283,6 +292,7 @@ class RoomAnnounced extends ControlInbound {
   /// frame omitted it (legacy relay); the ConnectionManager then keeps
   /// any previously-known value instead of forcing `false`.
   final bool? working;
+  final String? goal;
   const RoomAnnounced({
     required this.peer,
     required this.roomId,
@@ -292,6 +302,7 @@ class RoomAnnounced extends ControlInbound {
     this.model,
     this.thinking,
     this.working,
+    this.goal,
   });
 }
 
@@ -347,14 +358,18 @@ class RoomMetaUpdated extends ControlInbound {
   /// set. No separate `hasWorking` flag is needed because `working` can
   /// never be "explicitly null" on the wire — `false` is the off state.
   final bool? working;
+  final String? goal;
+  final bool hasGoal;
   const RoomMetaUpdated({
     required this.peer,
     required this.roomId,
     this.model,
     this.thinking,
     this.working,
+    this.goal,
     this.hasModel = true,
     this.hasThinking = true,
+    this.hasGoal = false,
   });
 }
 

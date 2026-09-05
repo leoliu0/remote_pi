@@ -112,7 +112,8 @@ async fn handle_peer(socket: WebSocket, peer_addr: SocketAddr, state: AppState) 
             .unwrap_or(false);
         let goal = room_meta_val
             .and_then(|m| m.get("goal"))
-            .and_then(|v| v.as_bool());
+            .and_then(|v| v.as_str())
+            .map(String::from);
         let started_at = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
@@ -289,7 +290,7 @@ async fn handle_peer(socket: WebSocket, peer_addr: SocketAddr, state: AppState) 
                                         .and_then(|v| v.as_bool());
                                     let goal_patch = meta_obj
                                         .and_then(|m| m.get("goal"))
-                                        .map(|v| v.as_bool());
+                                        .map(|v| v.as_str().map(String::from));
                                     let patch = RoomMetaPatch {
                                         model: model_patch,
                                         thinking: thinking_patch,

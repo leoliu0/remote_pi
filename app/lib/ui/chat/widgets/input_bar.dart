@@ -72,6 +72,8 @@ class InputBar extends StatefulWidget {
   final String initialText;
   final String? activeModel;
   final String? activeThinking;
+  /// Goal Mode status: 'active' | 'paused' | 'idle' | null.
+  final String? goalStatus;
 
   /// Fired whenever the typed composer text changes.
   final void Function(String text)? onDraftChanged;
@@ -95,6 +97,7 @@ class InputBar extends StatefulWidget {
     this.initialText = '',
     this.activeModel,
     this.activeThinking,
+    this.goalStatus,
     this.onDraftChanged,
   });
 
@@ -662,14 +665,26 @@ class _InputBarState extends State<InputBar> {
                   const SizedBox(width: 6),
                   _GoalModeQuickButton(
                     enabled: !widget.disabled,
+                    status: widget.goalStatus,
                     onTap: () {
-                      // Prefill, don't send: Goal Mode takes a goal phrase,
-                      // so drop "/goal " into the composer and focus the field.
-                      _controller.text = '/goal ';
-                      _controller.selection = TextSelection.collapsed(
-                        offset: _controller.text.length,
-                      );
-                      _focusNode.requestFocus();
+                      if (widget.goalStatus == 'paused') {
+                        // If current goal is paused, one-tap resume
+                        widget.onSend('/goal resume');
+                      } else if (widget.goalStatus == 'active') {
+                        // If active, prefill /goal to manage, pause, or view
+                        _controller.text = '/goal ';
+                        _controller.selection = TextSelection.collapsed(
+                          offset: _controller.text.length,
+                        );
+                        _focusNode.requestFocus();
+                      } else {
+                        // New goal: prefill /goal for user to type objective
+                        _controller.text = '/goal ';
+                        _controller.selection = TextSelection.collapsed(
+                          offset: _controller.text.length,
+                        );
+                        _focusNode.requestFocus();
+                      }
                     },
                   ),
                   const Spacer(),
@@ -920,14 +935,71 @@ class _HistoryRecallButton extends StatelessWidget {
 class _GoalModeQuickButton extends StatelessWidget {
   const _GoalModeQuickButton({
     required this.enabled,
+    this.status,
     required this.onTap,
   });
 
   final bool enabled;
+  final String? status;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
+    final colors = context.colors;
+    final isActive = status == 'active';
+    final isPaused = status == 'paused';
+
+    final String tooltip;
+    if (isActive) {
+      tooltip = 'Goal active — tap to manage (/goal)';
+    } else if (isPaused) {
+      tooltip = 'Goal paused — tap to resume (/goal resume)';
+    } else {
+      tooltip = 'New goal (/goal)';
+    }
+
+    Widget iconWidget;
+    if (isActive) {
+      iconWidget = Container(
+        width: 22,
+        height: 22,
+        decoration: BoxDecoration(
+          color: colors.accent,
+          shape: BoxShape.circle,
+        ),
+        child: Icon(LucideIcons.target, size: 13, color: colors.surface),
+      );
+    } else if (isPaused) {
+      iconWidget = Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Icon(
+            LucideIcons.target,
+            size: 18,
+            color: enabled ? colors.accent : colors.muted.withValues(alpha: 0.35),
+          ),
+          Positioned(
+            right: -2,
+            bottom: -2,
+            child: Container(
+              width: 7,
+              height: 7,
+              decoration: BoxDecoration(
+                color: colors.warning,
+                shape: BoxShape.circle,
+              ),
+            ),
+          ),
+        ],
+      );
+    } else {
+      iconWidget = Icon(
+        LucideIcons.target,
+        size: 18,
+        color: enabled ? colors.muted2 : colors.muted.withValues(alpha: 0.35),
+      );
+    }
+
     return SizedBox(
       width: 38,
       height: 38,
@@ -936,13 +1008,8 @@ class _GoalModeQuickButton extends StatelessWidget {
         padding: EdgeInsets.zero,
         iconSize: 18,
         splashRadius: 18,
-        tooltip: 'Goal mode (/goal)',
-        icon: Icon(
-          LucideIcons.target,
-          color: enabled
-              ? context.colors.accent
-              : context.colors.muted.withValues(alpha: 0.35),
-        ),
+        tooltip: tooltip,
+        icon: iconWidget,
         onPressed: enabled ? onTap : null,
       ),
     );

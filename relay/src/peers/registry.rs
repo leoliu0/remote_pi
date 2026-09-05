@@ -335,7 +335,7 @@ impl PeerRegistry {
                 meta_obj.insert("thinking".to_string(), serde_json::Value::String(t.clone()));
             }
             if let Some(g) = &current_goal {
-                meta_obj.insert("goal".to_string(), serde_json::Value::Bool(*g));
+                meta_obj.insert("goal".to_string(), serde_json::Value::String(g.clone()));
             }
             // `working` is always present (non-nullable bool), so it always
             // rides along in the broadcast — subscribers can rely on it.
@@ -406,6 +406,7 @@ mod tests {
             cwd: None,
             model: None,
             thinking: None,
+            goal: None,
             working: false,
             started_at: 0,
         }

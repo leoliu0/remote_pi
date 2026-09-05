@@ -231,7 +231,7 @@ let _myRoomId: string | null = null;   // this Pi's room id (derived from cwd)
 // open instead of starting null. The SDK fires `thinking_level_select`
 // on every change (initial load + user toggle), mirrored to room_meta
 // the same way model is — apps subscribe to one channel for both.
-let _myRoomMeta: { name: string; cwd: string; model?: string; thinking?: ThinkingLevel; working?: boolean; goal?: boolean } | null = null;
+let _myRoomMeta: { name: string; cwd: string; model?: string; thinking?: ThinkingLevel; working?: boolean; goal?: string } | null = null;
 let _currentModel: string | undefined = undefined;  // last-known model name
 let _currentThinking: ThinkingLevel | undefined = undefined;  // last-known thinking level
 /** True while the user's selected "auto" is the effective source of truth.
@@ -2575,19 +2575,28 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
       meta: { thinking: level },
     });
   });
-  // Goal Mode state (plan: goal button active state). The SDK fires
-  // `goal_updated` whenever the goal loop starts/stops/pauses — mirror
-  // `state.enabled` into room_meta so the app's goal button can show an
-  // active state. Old relays drop the `goal` patch harmlessly.
+  // Goal Mode state (plan: smart goal button). The SDK fires
+  // `goal_updated` whenever the goal loop starts/stops/pauses.
+  // We compute status: 'active' | 'paused' | 'idle' and mirror it to room_meta.
   (pi as { on: (event: string, handler: (event: unknown) => void) => void }).on("goal_updated", (event) => {
-    const active = (event as { state?: { enabled?: boolean } })?.state?.enabled === true;
-    if (_myRoomMeta?.goal === active) return;
-    if (_myRoomMeta) _myRoomMeta = { ..._myRoomMeta, goal: active };
+    const raw = event as { state?: { enabled?: boolean; goal?: { status?: string } } } | undefined;
+    const enabled = raw?.state?.enabled === true;
+    const status = raw?.state?.goal?.status;
+    let goalStatus: string | undefined = undefined;
+    if (enabled) {
+      goalStatus = "active";
+    } else if (status === "paused") {
+      goalStatus = "paused";
+    } else {
+      goalStatus = "idle";
+    }
+    if (_myRoomMeta?.goal === goalStatus) return;
+    if (_myRoomMeta) _myRoomMeta = { ..._myRoomMeta, goal: goalStatus };
     if (!_relay || !_myRoomId) return;
     _relay.sendControl({
       type: "room_meta_update",
       room_id: _myRoomId,
-      meta: { goal: active },
+      meta: { goal: goalStatus },
     });
   });
 
