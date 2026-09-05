@@ -47,6 +47,7 @@ Future<void> showQuickActionsSheet(BuildContext context) {
           child: QuickActionsSheetBody(
             messenger: messenger,
             onSessionReset: chat.clearActiveSession,
+            onSendPrompt: (t) => chat.sendMessage(t),
           ),
         ),
       );
@@ -64,13 +65,14 @@ class QuickActionsSheetBody extends StatefulWidget {
   /// mirror. Optional so tests can omit it; in the app it is wired to
   /// [ChatViewModel.clearActiveSession].
   final Future<void> Function()? onSessionReset;
+  final Future<void> Function(String text)? onSendPrompt;
 
   const QuickActionsSheetBody({
     super.key,
     required this.messenger,
     this.onSessionReset,
+    this.onSendPrompt,
   });
-
   @override
   State<QuickActionsSheetBody> createState() => _QuickActionsSheetBodyState();
 }
@@ -143,6 +145,18 @@ class _QuickActionsSheetBodyState extends State<QuickActionsSheetBody> {
               subtitle: 'Summarize old turns to free room.',
               busy: busyAction == ActionName.sessionCompact,
               onTap: () => _onCompact(vm),
+            ),
+            const _Divider(),
+            _ActionTile(
+              key: const Key('qa-goal-mode'),
+              icon: LucideIcons.target,
+              label: 'Goal mode',
+              subtitle: 'Toggle persistent autonomous goal loop (/goal).',
+              busy: false,
+              onTap: () async {
+                Navigator.of(context).pop();
+                await widget.onSendPrompt?.call('/goal');
+              },
             ),
             const _Divider(),
             _ActionTile(
