@@ -2527,6 +2527,8 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     }
     if (!_anyPeerActive()) return;
     if (event.source === "extension") return;
+    // Don't re-broadcast terminal input if it matches the current in-flight turn from user_message
+    if (_currentTurnId !== null) return;
     const turnId = `local_${randomUUID()}`;
     _currentTurnId = turnId;
     _broadcastToActive({ type: "user_input", id: turnId, text: event.text });
