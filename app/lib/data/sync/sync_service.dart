@@ -1228,7 +1228,8 @@ class SyncService extends Service {
       final mapKey = _key(MsgRole.user, id);
       var existingSeq = _idToSeq[mapKey];
 
-      // Search for an existing pending user message with identical text to dedupe.
+      // Search for an existing user message with identical text to dedupe
+      // (e.g. optimistic pending message or sync_ message).
       if (existingSeq == null) {
         for (final entry in _idToSeq.entries) {
           if (!entry.key.startsWith('${MsgRole.user.name}:')) continue;
@@ -1236,9 +1237,12 @@ class SyncService extends Service {
           if (raw == null) continue;
           final rec = MessageRecord.fromJson(_coerce(raw));
           if (rec.role == MsgRole.user && rec.text == text) {
-            existingSeq = entry.value;
-            _idToSeq[mapKey] = existingSeq;
-            break;
+            // Deduplicate if it's pending OR if it's the latest user message
+            if (rec.pending || entry.key.startsWith('${MsgRole.user.name}:sync_') || entry.value == _nextSeq - 1) {
+              existingSeq = entry.value;
+              _idToSeq[mapKey] = existingSeq;
+              break;
+            }
           }
         }
       }
