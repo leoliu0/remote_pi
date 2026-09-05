@@ -145,18 +145,7 @@ class AgentMarkdown extends StatelessWidget {
       child: GptMarkdown(
         data,
         style: baseMono,
-        useDollarSignsForLatex: true,
-        latexBuilder: (context, tex, textStyle, inline) {
-          // If flutter_math fails or KaTeX font crashes on complex macros, render clean math text
-          return Text(
-            inline ? '\$$tex\$' : '\$\$\n$tex\n\$\$',
-            style: textStyle.copyWith(
-              fontFamily: 'CommitMono',
-              fontStyle: FontStyle.italic,
-              color: colors.accent,
-            ),
-          );
-        },
+        useDollarSignsForLatex: false,
         onLinkTap: (url, _) => _openLink(context, url),
         highlightBuilder: (context, text, style) => Text(
           text,
