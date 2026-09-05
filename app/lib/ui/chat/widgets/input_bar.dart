@@ -662,7 +662,15 @@ class _InputBarState extends State<InputBar> {
                   const SizedBox(width: 6),
                   _GoalModeQuickButton(
                     enabled: !widget.disabled,
-                    onTap: () => widget.onSend('/goal'),
+                    onTap: () {
+                      // Prefill, don't send: Goal Mode takes a goal phrase,
+                      // so drop "/goal " into the composer and focus the field.
+                      _controller.text = '/goal ';
+                      _controller.selection = TextSelection.collapsed(
+                        offset: _controller.text.length,
+                      );
+                      _focusNode.requestFocus();
+                    },
                   ),
                   const SizedBox(width: 4),
                   if (widget.onOpenQuickActions != null)

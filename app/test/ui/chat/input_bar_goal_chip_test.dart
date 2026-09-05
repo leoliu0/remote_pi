@@ -5,7 +5,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  testWidgets('goal button sends /goal on tap', (tester) async {
+  testWidgets('goal button prefills composer with /goal instead of sending',
+      (tester) async {
     String? sent;
     await tester.pumpWidget(
       MaterialApp(
@@ -22,7 +23,9 @@ void main() {
     final goalKey = find.byKey(const Key('input-bar-goal-mode'));
     expect(goalKey, findsOneWidget);
     await tester.tap(goalKey);
-    expect(sent, '/goal');
+    await tester.pump();
+    expect(sent, isNull);
+    expect(find.widgetWithText(TextField, '/goal '), findsOneWidget);
   });
 
   testWidgets('status chip shows model and thinking, opens quick actions',
