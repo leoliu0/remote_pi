@@ -70,6 +70,8 @@ class InputBar extends StatefulWidget {
   final List<String> messageHistory;
   /// Initial draft text to populate in the composer.
   final String initialText;
+  final String? activeModel;
+  final String? activeThinking;
 
   /// Fired whenever the typed composer text changes.
   final void Function(String text)? onDraftChanged;
@@ -91,6 +93,8 @@ class InputBar extends StatefulWidget {
     this.dynamicSkills = const [],
     this.streaming = false,
     this.initialText = '',
+    this.activeModel,
+    this.activeThinking,
     this.onDraftChanged,
   });
 
@@ -663,6 +667,8 @@ class _InputBarState extends State<InputBar> {
                   const SizedBox(width: 4),
                   if (widget.onOpenQuickActions != null)
                     _QuickActionsChip(
+                      model: widget.activeModel,
+                      thinking: widget.activeThinking,
                       onTap: widget.onOpenQuickActions!,
                     ),
                   const Spacer(),
@@ -943,14 +949,27 @@ class _GoalModeQuickButton extends StatelessWidget {
 }
 
 class _QuickActionsChip extends StatelessWidget {
-  const _QuickActionsChip({required this.onTap});
-
+  final String? model;
+  final String? thinking;
   final VoidCallback onTap;
+
+  const _QuickActionsChip({
+    this.model,
+    this.thinking,
+    required this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
     final typo = context.typo;
+
+    String label = 'Actions';
+    if (model != null && model!.isNotEmpty) {
+      final clean = model!.split('/').last;
+      final shortModel = clean.length > 12 ? clean.substring(0, 10) + '..' : clean;
+      label = thinking != null ? '$shortModel · $thinking' : shortModel;
+    }
 
     return Material(
       color: Colors.transparent,
@@ -970,7 +989,7 @@ class _QuickActionsChip extends StatelessWidget {
               Icon(LucideIcons.slidersHorizontal, size: 12, color: colors.muted),
               const SizedBox(width: 4),
               Text(
-                'Actions',
+                label,
                 style: typo.monoSmall.copyWith(
                   fontSize: 11,
                   color: colors.text,

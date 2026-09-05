@@ -544,6 +544,8 @@ class _ChatPageState extends State<ChatPage> {
       streaming: isWorking,
       messageHistory: messageHistory,
       dynamicSkills: vm.dynamicSkills,
+      activeModel: vm.activeRoom?.model,
+      activeThinking: vm.activeRoom?.thinking?.name,
       onCancel: cancelId != null ? () => vm.cancel(cancelId) : null,
       queuedMessages: isReady ? state.queuedMessages : const [],
       onSetQueued: (text) {
@@ -562,6 +564,7 @@ class _ChatPageState extends State<ChatPage> {
       // empty) caption. Attach-button gating by vision / already-attached is
       // internal to InputBar; the host only gates by channel availability.
       attachment: context.read<AttachmentViewModel>(),
+      onOpenQuickActions: actionsEnabled ? () => showQuickActionsSheet(context) : null,
       onOpenAttach: actionsEnabled
           ? () => _openAttach(context, context.read<AttachmentViewModel>())
           : null,
