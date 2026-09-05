@@ -146,8 +146,18 @@ class AgentMarkdown extends StatelessWidget {
         data,
         style: baseMono,
         useDollarSignsForLatex: true,
+        latexBuilder: (context, tex, textStyle, inline) {
+          // If flutter_math fails or KaTeX font crashes on complex macros, render clean math text
+          return Text(
+            inline ? '\$$tex\$' : '\$\$\n$tex\n\$\$',
+            style: textStyle.copyWith(
+              fontFamily: 'CommitMono',
+              fontStyle: FontStyle.italic,
+              color: colors.accent,
+            ),
+          );
+        },
         onLinkTap: (url, _) => _openLink(context, url),
-        // Inline `code` — subtle highlight, keeps the baseline.
         highlightBuilder: (context, text, style) => Text(
           text,
           style: baseMono.copyWith(
