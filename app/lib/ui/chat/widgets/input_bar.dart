@@ -655,6 +655,16 @@ class _InputBarState extends State<InputBar> {
                     enabled: _combinedHistory.isNotEmpty && !widget.disabled,
                     onTap: _recallPreviousMessage,
                   ),
+                  const SizedBox(width: 6),
+                  _GoalModeQuickButton(
+                    enabled: !widget.disabled,
+                    onTap: () => widget.onSend('/goal'),
+                  ),
+                  const SizedBox(width: 4),
+                  if (widget.onOpenQuickActions != null)
+                    _QuickActionsChip(
+                      onTap: widget.onOpenQuickActions!,
+                    ),
                   const Spacer(),
                   if (showQueueButton) ...[
                     _QueueButton(onTap: _queue),
@@ -896,6 +906,80 @@ class _HistoryRecallButton extends StatelessWidget {
               : context.colors.muted.withValues(alpha: 0.35),
         ),
         onPressed: enabled ? onTap : null,
+      ),
+    );
+  }
+}
+class _GoalModeQuickButton extends StatelessWidget {
+  const _GoalModeQuickButton({
+    required this.enabled,
+    required this.onTap,
+  });
+
+  final bool enabled;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 38,
+      height: 38,
+      child: IconButton(
+        key: const Key('input-bar-goal-mode'),
+        padding: EdgeInsets.zero,
+        iconSize: 18,
+        splashRadius: 18,
+        tooltip: 'Goal mode (/goal)',
+        icon: Icon(
+          LucideIcons.target,
+          color: enabled
+              ? context.colors.accent
+              : context.colors.muted.withValues(alpha: 0.35),
+        ),
+        onPressed: enabled ? onTap : null,
+      ),
+    );
+  }
+}
+
+class _QuickActionsChip extends StatelessWidget {
+  const _QuickActionsChip({required this.onTap});
+
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final typo = context.typo;
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(14),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          decoration: BoxDecoration(
+            color: colors.surface,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: colors.border),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(LucideIcons.slidersHorizontal, size: 12, color: colors.muted),
+              const SizedBox(width: 4),
+              Text(
+                'Actions',
+                style: typo.monoSmall.copyWith(
+                  fontSize: 11,
+                  color: colors.text,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
