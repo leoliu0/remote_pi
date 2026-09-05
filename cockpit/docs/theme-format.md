@@ -1,15 +1,15 @@
-# Formato de tema do Cockpit (`cockpit-theme-1`)
+# Cockpit theme format (`cockpit-theme-1`)
 
-Um tema é **um arquivo JSON**. Ele pinta as três camadas de uma vez: a UI do
-app, o realce de código do viewer e a paleta do terminal.
+A theme is **one JSON file**. It paints all three layers at once: the app UI,
+the code-viewer syntax highlight, and the terminal palette.
 
-- Importar: Configurações → Aparência → Tema → **Importar…**
-- A pasta é `<pasta de dados>/themes/` (mesma raiz do "Storage"), um arquivo por
-  tema, nomeado pelo `id`. Copiar um `.json` pra lá também instala.
-- Exportar gera arquivo **completo** (todos os tokens, sem `extends`): serve de
-  ponto de partida pra editar à mão.
+- Import: Settings → Appearance → Theme → **Import…**
+- Folder is `<data folder>/themes/` (same root as "Storage"), one file per
+  theme, named by `id`. Copying a `.json` there also installs it.
+- Export writes a **complete** file (every token, no `extends`): a starting
+  point for hand-editing.
 
-## Estrutura
+## Structure
 
 ```json
 {
@@ -26,62 +26,62 @@ app, o realce de código do viewer e a paleta do terminal.
 }
 ```
 
-| Campo | Obrigatório | O quê |
+| Field | Required | What |
 |---|---|---|
-| `id` | sim | Identidade estável, namespaced (`publisher.nome`). É o que fica salvo nas preferências — renomear o `name` não perde a escolha do usuário. Não pode colidir com um built-in (`cockpit`, `cockpit.2`, `violet`, `violet.2`, `midnight`, `rose`, `sun`, `flexoki`, `pantera`). |
-| `name` | sim | O que aparece no seletor. |
-| `author`, `version` | não | Metadados. |
-| `extends` | não | Id de um tema built-in do qual herdar. Hoje existem `cockpit`, `cockpit.2`, `violet`, `violet.2`, `midnight`, `rose`, `sun`, `flexoki` e `pantera`. Ausente = herda de `cockpit`. |
-| `variants` | sim | Pelo menos um de `dark` / `light`. |
+| `id` | yes | Stable namespaced identity (`publisher.name`). This is what preferences store — renaming `name` does not lose the user's choice. Must not collide with a built-in (`cockpit`, `cockpit.2`, `violet`, `violet.2`, `midnight`, `rose`, `sun`, `flexoki`, `pantera`). |
+| `name` | yes | What appears in the picker. |
+| `author`, `version` | no | Metadata. |
+| `extends` | no | Id of a built-in theme to inherit from. Today: `cockpit`, `cockpit.2`, `violet`, `violet.2`, `midnight`, `rose`, `sun`, `flexoki`, and `pantera`. Absent = inherit from `cockpit`. |
+| `variants` | yes | At least one of `dark` / `light`. |
 
-**Herança é o ponto.** Todo token não declarado vem da base, então um tema útil
-pode ter cinco linhas. Um tema com só `dark` é aplicado também no modo claro
-(melhor que misturar meio-claro com meio-escuro).
+**Inheritance is the point.** Every undeclared token comes from the base, so a
+useful theme can be five lines. A theme with only `dark` is also applied in
+light mode (better than mixing half-light with half-dark).
 
-## Cores
+## Colors
 
-Hex no estilo CSS: `#RGB`, `#RRGGBB` ou `#RRGGBBAA` — **alpha no fim**. Não é o
-`0xAARRGGBB` do Dart.
+CSS-style hex: `#RGB`, `#RRGGBB`, or `#RRGGBBAA` — **alpha at the end**. Not
+Dart's `0xAARRGGBB`.
 
 ## Tokens
 
-### `ui` (25) — a interface
+### `ui` (25) — the interface
 
-| Grupo | Tokens |
+| Group | Tokens |
 |---|---|
-| Superfícies | `bg` (fundo mais profundo) · `panel` (pane/rail) · `panel2` (elevado: composer, cards) · `panel3` (hover / código embutido) |
-| Traços | `border` (fio de cabelo) · `border2` (divisor forte) |
-| Texto | `text` (primário) · `text2` (secundário) · `text3` (terciário/placeholder) · `text4` (fraco, ícone em repouso) |
-| Marca | `accent` · `accentSoft` (fundo de seleção, translúcido) · `accentText` (texto na cor da marca) |
-| Estado | `online` · `ok` · `error` · `warn` |
-| Edição | `edited` · `editedBg` |
+| Surfaces | `bg` (deepest background) · `panel` (pane/rail) · `panel2` (elevated: composer, cards) · `panel3` (hover / inline code) |
+| Strokes | `border` (hairline) · `border2` (strong divider) |
+| Text | `text` (primary) · `text2` (secondary) · `text3` (tertiary/placeholder) · `text4` (weak, idle icon) |
+| Brand | `accent` · `accentSoft` (selection background, translucent) · `accentText` (text in the brand color) |
+| State | `online` · `ok` · `error` · `warn` |
+| Editing | `edited` · `editedBg` |
 | Git | `gitStaged` · `gitUntracked` · `gitDeleted` · `gitConflict` |
-| Overlay | `scrim` (fundo de dialog, translúcido) · `shadow` (sombra projetada) |
+| Overlay | `scrim` (dialog backdrop, translucent) · `shadow` (drop shadow) |
 
-> O texto **sobre** `accent` e `error` não é um token: é derivado da luminância
-> da cor. Accent claro recebe texto escuro automaticamente.
+> Text **on** `accent` and `error` is not a token: it is derived from the color
+> luminance. A light accent automatically gets dark text.
 
-### `syntax` (12) — o realce de código
+### `syntax` (12) — code highlighting
 
 `background` · `base` · `comment` · `keyword` · `string` · `number` · `class` ·
 `builtin` · `function` · `variable` · `meta` · `deletion`
 
-> **`background` tem um default especial.** Viewer de código, editor e terminal
-> são conteúdo dentro da aba, então os três compartilham o campo: quando o tema
-> **não** declara `syntax.background` (nem `terminal.background`), eles seguem o
-> `ui.panel` **deste** tema — e não o da base. Declare o campo para escapar
-> disso, se a paleta de código precisar de fundo próprio.
+> **`background` has a special default.** The code viewer, editor, and terminal
+> are content inside the tab, so the three share the field: when the theme
+> **does not** declare `syntax.background` (nor `terminal.background`), they
+> follow **this** theme's `ui.panel` — not the base. Declare the field to
+> escape that, if the code palette needs its own background.
 
-### `terminal` (23) — a paleta ANSI
+### `terminal` (23) — the ANSI palette
 
-`cursor` · `selection` · `foreground` · `background`, as 8 cores normais
-(`black` `red` `green` `yellow` `blue` `magenta` `cyan` `white`), as 8 `bright*`
-correspondentes, e `searchHitBackground` · `searchHitBackgroundCurrent` ·
+`cursor` · `selection` · `foreground` · `background`, the 8 normal colors
+(`black` `red` `green` `yellow` `blue` `magenta` `cyan` `white`), the matching
+8 `bright*`, and `searchHitBackground` · `searchHitBackgroundCurrent` ·
 `searchHitForeground`.
 
-## Exemplo mínimo real
+## Minimal real example
 
-Troca só a marca e mantém tudo do tema nativo:
+Swap only the brand and keep everything else from the native theme:
 
 ```json
 {
@@ -95,32 +95,32 @@ Troca só a marca e mantém tudo do tema nativo:
 }
 ```
 
-Ver [`theme.example.json`](./theme.example.json) para um arquivo comentado com
-todos os grupos preenchidos.
+See [`theme.example.json`](./theme.example.json) for a commented file with
+every group filled in.
 
-## O `$schema`
+## `$schema`
 
-O schema fica **no repositório**, não num domínio nosso:
+The schema lives **in the repository**, not on our own domain:
 
 ```
 https://raw.githubusercontent.com/jacobaraujo7/remote_pi/main/cockpit/docs/theme.schema.json
 ```
 
-Versionado junto do código que o implementa, então não existe o caso de o site
-servir uma versão e o app entender outra. Fixado em `main` de propósito: quem
-escreve tema quer o autocomplete do formato atual.
+Versioned with the code that implements it, so the site never serves one
+version while the app understands another. Pinned to `main` on purpose: theme
+authors want autocomplete for the current format.
 
-Ao contrário do `tasks.json` (que mora no repo e pode usar caminho relativo), um
-tema vive numa pasta de dados qualquer e é copiado entre máquinas — por isso a
-URL absoluta.
+Unlike `tasks.json` (which lives in the repo and can use a relative path), a
+theme lives in an arbitrary data folder and is copied between machines — hence
+the absolute URL.
 
-O app **ignora** `$schema` ao ler o tema; o campo só serve ao editor. O CI trava
-o desencontro: `test/ui/theme_codec_test.dart` compara os tokens do schema com
-os que o codec serializa, o `enum` de `extends` com os built-in registrados, e
-valida o `theme.example.json` deste diretório.
+The app **ignores** `$schema` when reading the theme; the field is only for the
+editor. CI catches drift: `test/ui/theme_codec_test.dart` compares schema
+tokens with what the codec serializes, the `extends` enum with registered
+built-ins, and validates `theme.example.json` in this directory.
 
-## Erros de importação
+## Import errors
 
-O parser aponta o **caminho do campo** que quebrou
-(`variants.dark.ui.accent`), então o diagnóstico não é "arquivo inválido" seco.
-Arquivo inválido nunca chega à pasta de temas: a validação roda antes da cópia.
+The parser points at the **field path** that broke (`variants.dark.ui.accent`),
+so the diagnosis is never a bare "invalid file". An invalid file never reaches
+the themes folder: validation runs before the copy.

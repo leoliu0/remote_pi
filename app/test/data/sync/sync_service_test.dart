@@ -50,7 +50,6 @@ late Directory _dir;
 
 Future<void> _settle() =>
     Future<void>.delayed(const Duration(milliseconds: 30));
-
 void main() {
   setUpAll(() async {
     _dir = Directory.systemTemp.createTempSync('rp_v2_sync_');
@@ -367,8 +366,7 @@ void main() {
     s.ch.push(AgentChunk(inReplyTo: 'r1', delta: 'done text'));
     await _settle();
     s.ch.push(AgentDone(inReplyTo: 'r1'));
-    await _settle();
-
+    await Future<void>.delayed(const Duration(milliseconds: 120));
     final assistant = messages(
       s.epk,
     ).where((m) => m.role == MsgRole.assistant).toList();
@@ -395,7 +393,7 @@ void main() {
     expect(index(s.epk)?.status, SessionActivity.working);
 
     s.ch.push(ToolResult(toolCallId: 't1', result: 'ok'));
-    await _settle();
+    await Future<void>.delayed(const Duration(milliseconds: 120));
     expect(s.sync.isWorking, isFalse);
     expect(index(s.epk)?.status, SessionActivity.idle);
     s.conn.dispose();
@@ -526,7 +524,7 @@ void main() {
     expect(s.sync.isWorking, isTrue, reason: 'working from the echo');
 
     s.ch.push(AgentDone(inReplyTo: 'u1'));
-    await _settle();
+    await Future<void>.delayed(const Duration(milliseconds: 120));
     expect(s.sync.isWorking, isFalse, reason: 'idle after agent_done');
     expect(flags, [true, false]);
 
@@ -1062,5 +1060,122 @@ void main() {
         s.sync.dispose();
       },
     );
+  });
+
+  group('Regression guards (2026-08-29 fixes)', () {
+    test('AgentMessage after multi-segment tool turn does not overwrite earlier segments with full turn text', () async {
+      final s = await setup();
+      // Segment 1: prose before tool
+      s.ch.push(AgentChunk(inReplyTo: 'u1', delta: 'First segment prose.'));
+      await _settle();
+      s.ch.push(ToolRequest(toolCallId: 't1', tool: 'bash', args: {'cmd': 'ls'}));
+      await _settle();
+
+      // Segment 2: prose after tool
+      s.ch.push(ToolResult(toolCallId: 't1', result: 'file.txt'));
+      await _settle();
+      s.ch.push(AgentChunk(inReplyTo: 'u1', delta: 'Second segment prose.'));
+      await _settle();
+      s.ch.push(AgentDone(inReplyTo: 'u1'));
+      await _settle();
+
+      // Pi broadcasts full concatenated text for the whole turn
+      s.ch.push(AgentMessage(
+        inReplyTo: 'u1',
+        text: 'First segment prose.\n\nSecond segment prose.',
+      ));
+      await _settle();
+
+      final assistantMsgs = messages(s.epk).where((m) => m.role == MsgRole.assistant).toList();
+      expect(assistantMsgs, hasLength(2));
+      expect(assistantMsgs[0].text, 'First segment prose.');
+      expect(assistantMsgs[1].text, 'Second segment prose.');
+
+      s.conn.dispose();
+      s.sync.dispose();
+    });
+
+    test('SessionHistory with empty events does not wipe existing local history', () async {
+      final s = await setup();
+      // Populate local message history
+      s.ch.push(UserInput(id: 'u1', text: 'Important user question'));
+      await _settle();
+      s.ch.push(AgentChunk(inReplyTo: 'u1', delta: 'Important assistant answer'));
+      await _settle();
+      s.ch.push(AgentDone(inReplyTo: 'u1'));
+      await _settle();
+      expect(messages(s.epk), hasLength(2));
+
+      // Pi reconnects with empty history buffer (e.g. unhydrated state)
+      s.ch.push(SessionHistory(
+        inReplyTo: 'sync-1',
+        sessionStartedAt: 0,
+        events: const [],
+        eos: true,
+      ));
+      await _settle();
+
+      // Local messages must be preserved, not wiped to zero
+      final current = messages(s.epk);
+      expect(current, hasLength(2));
+      expect(current[0].text, 'Important user question');
+      expect(current[1].text, 'Important assistant answer');
+
+      s.conn.dispose();
+      s.sync.dispose();
+    });
+
+    test('UserInput echo deduplicates against existing message with identical text', () async {
+      final s = await setup();
+      // History populated a message with a sync_ timestamp ID
+      s.ch.push(SessionHistory(
+        inReplyTo: 'sync-1',
+        sessionStartedAt: 1000,
+        events: const [
+          UserInputEvt(id: 'sync_1000', text: 'same user query', ts: 1000),
+        ],
+        eos: true,
+      ));
+      await _settle();
+      expect(messages(s.epk), hasLength(1));
+
+      // A late echo arrives with a client cli_ ID for the same text
+      s.ch.push(UserInput(id: 'cli_user_query_1', text: 'same user query'));
+      await _settle();
+
+      // Must dedupe to single message, not create a duplicate row
+      final userMsgs = messages(s.epk).where((m) => m.role == MsgRole.user).toList();
+      expect(userMsgs, hasLength(1));
+      expect(userMsgs.first.pending, isFalse);
+
+      s.conn.dispose();
+      s.sync.dispose();
+    });
+
+    test('intermediate tool boundaries stay working without flapping to false', () async {
+      final s = await setup();
+      final workingEvents = <bool>[];
+      final sub = s.sync.workingStream.listen(workingEvents.add);
+
+      s.ch.push(UserInput(id: 'u1', text: 'start tool turn'));
+      await _settle();
+      s.ch.push(AgentChunk(inReplyTo: 'u1', delta: 'running tool'));
+      await _settle();
+      s.ch.push(ToolRequest(toolCallId: 't1', tool: 'bash', args: {'cmd': 'date'}));
+      await _settle();
+      s.ch.push(ToolResult(toolCallId: 't1', result: 'Fri Aug 29'));
+      // Immediately after tool result, next chunk arrives within 50ms
+      await Future<void>.delayed(const Duration(milliseconds: 40));
+      s.ch.push(AgentChunk(inReplyTo: 'u1', delta: 'next segment'));
+      await _settle();
+
+      // Working state must stay true throughout, never emitting false between tool result and chunk
+      expect(workingEvents, contains(true));
+      expect(workingEvents.where((w) => !w), isEmpty, reason: 'must not emit false mid-turn');
+
+      await sub.cancel();
+      s.conn.dispose();
+      s.sync.dispose();
+    });
   });
 }

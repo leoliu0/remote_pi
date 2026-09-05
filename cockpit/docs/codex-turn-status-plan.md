@@ -1,213 +1,211 @@
-# Plano — status de turno para o Codex CLI
+# Plan — turn status for Codex CLI
 
-Estender o indicador de turno das abas (spinner / badge / chime / notificação),
-hoje exclusivo do Claude Code, para sessões do **Codex CLI**.
+Extend the tab turn indicator (spinner / badge / chime / notification), today
+exclusive to Claude Code, to **Codex CLI** sessions.
 
-> **Status: implementado (2026-08-11), pendente E2E no app.** As waves 0–4 estão
-> fechadas; falta rodar o app de verdade e ver os quatro estados numa aba (é o
-> que o usuário vai testar). A documentação de referência do resultado final
-> mora em [`turn-status-hooks.md`](turn-status-hooks.md) — este arquivo fica
-> como registro do caminho percorrido e dos achados da investigação.
+> **Status: implemented (2026-08-11), pending in-app E2E.** Waves 0–4 are
+> closed; what remains is running the real app and seeing the four states on
+> a tab (that is what the user will test). Reference docs for the final
+> result live in [`turn-status-hooks.md`](turn-status-hooks.md) — this file
+> stays as a record of the path taken and the investigation findings.
 
-## Contexto
+## Context
 
-O Cockpit já sabe quando um agente está trabalhando, terminou o turno ou precisa
-de ação do usuário. O mecanismo (ver `project_cockpit_claude_turn_status`):
+Cockpit already knows when an agent is working, finished the turn, or needs
+user action. The mechanism (see `project_cockpit_claude_turn_status`):
 
-1. `ClaudeHookInstallerImpl` materializa a CLI interna em `~/.cockpit/bin/` e faz
-   append idempotente de um entry marcado (`_cockpit: v1`) em cada evento de
-   `~/.claude/settings.json`, sem tocar nos hooks do usuário.
-2. O Claude executa `<cli> hook` a cada evento, passando um JSON por stdin.
-3. `cli/src/hook.rs` traduz o evento num status (`working` / `waiting` / `idle`)
-   e manda pro app por socket Unix (TCP + token no Windows), roteando pela env
-   `COCKPIT_PANE_ID` que o app injeta na PTY da aba.
-4. Sessão de agente fora do Cockpit não tem essas envs → o hook é no-op. Gate
-   natural, sem configuração.
+1. `ClaudeHookInstallerImpl` materializes the internal CLI in `~/.cockpit/bin/`
+   and idempotently appends a marked entry (`_cockpit: v1`) on each event in
+   `~/.claude/settings.json`, without touching the user's hooks.
+2. Claude runs `<cli> hook` on each event, passing JSON on stdin.
+3. `cli/src/hook.rs` maps the event to a status (`working` / `waiting` / `idle`)
+   and sends it to the app over a Unix socket (TCP + token on Windows), routing
+   by the `COCKPIT_PANE_ID` env the app injects into the tab PTY.
+4. An agent session outside Cockpit does not have those envs → the hook is a
+   no-op. Natural gate, no configuration.
 
-O Codex CLI 0.147.0 ganhou um sistema de hooks **espelhado no do Claude Code**,
-o que torna a extensão majoritariamente reuso.
+Codex CLI 0.147.0 gained a hooks system **mirrored on Claude Code's**, which
+makes the extension mostly reuse.
 
-### O que foi apurado no binário (0.147.0)
+### What was found in the binary (0.147.0)
 
-- `codex features list` → `hooks · stable · true`. Ligado por padrão, sem flag.
-- Eventos (nomes iguais aos do Claude, em PascalCase no arquivo de config):
+- `codex features list` → `hooks · stable · true`. On by default, no flag.
+- Events (same names as Claude, PascalCase in the config file):
   `PreToolUse`, `PermissionRequest`, `PostToolUse`, `PreCompact`, `PostCompact`,
   `SessionStart`, `SessionEnd`, `UserPromptSubmit`, `SubagentStart`,
   `SubagentStop`, `Stop`.
-- Envelope de entrada (schemas embutidos, ex. `post-tool-use.command.input`):
+- Input envelope (embedded schemas, e.g. `post-tool-use.command.input`):
   `hook_event_name`, `session_id`, `transcript_path`, `cwd`, `model`,
   `permission_mode`, `tool_name`, `tool_input`, `tool_response`, `tool_use_id`,
-  e um `turn_id` que o Claude não manda.
-- Config em `hooks.json` (global sob `~/.codex/`, project-local sob `.codex/`),
-  com a mesma forma `{ matcher, hooks: [{ type, command, timeout }] }`.
-  Handlers possíveis: `command` | `prompt` | `agent` — usamos `command`.
-- Existe `hooks.state` com `enabled` / `trusted_hash`: há um **gate de
-  confiança** sobre hooks. Era a principal incógnita do plano; a Wave 0
-  resolveu (ver "Resultado da Wave 0" abaixo).
-- O `notify` legado (`agent-turn-complete`) continua existindo, mas só cobre fim
-  de turno. Fica como plano B se o gate de confiança inviabilizar os hooks.
+  plus a `turn_id` that Claude does not send.
+- Config in `hooks.json` (global under `~/.codex/`, project-local under
+  `.codex/`), same shape `{ matcher, hooks: [{ type, command, timeout }] }`.
+  Possible handlers: `command` | `prompt` | `agent` — we use `command`.
+- There is `hooks.state` with `enabled` / `trusted_hash`: a **trust gate**
+  over hooks. That was the plan's main unknown; Wave 0 resolved it (see
+  "Wave 0 result" below).
+- The legacy `notify` (`agent-turn-complete`) still exists, but only covers
+  turn end. It remains plan B if the trust gate made hooks unusable.
 
-### Mapeamento de eventos → status
+### Event → status mapping
 
-| Evento Codex | Status | Nota |
+| Codex event | Status | Note |
 |---|---|---|
-| `UserPromptSubmit` | `working` | início de turno |
-| `PreToolUse` / `PostToolUse` | `working` | atividade mid-turn |
-| `PermissionRequest` | `waiting` | **melhor que no Claude**: evento explícito, sem heurística de texto |
-| `Stop` | `idle` | fim de turno (chime/notificação) |
-| `SessionStart` / `SessionEnd` | `idle` | também amarra aba → sessão |
-| `SubagentStart` / `SubagentStop` | — | ignorados na v1 (subagente não deve mexer no indicador da aba) |
-| `PreCompact` / `PostCompact` | — | ignorados |
+| `UserPromptSubmit` | `working` | turn start |
+| `PreToolUse` / `PostToolUse` | `working` | mid-turn activity |
+| `PermissionRequest` | `waiting` | **better than Claude**: explicit event, no text heuristic |
+| `Stop` | `idle` | turn end (chime/notification) |
+| `SessionStart` / `SessionEnd` | `idle` | also binds tab → session |
+| `SubagentStart` / `SubagentStop` | — | ignored in v1 (subagent must not move the tab indicator) |
+| `PreCompact` / `PostCompact` | — | ignored |
 
-O desvio do `PreToolUse` bloqueante (`AskUserQuestion` / `ExitPlanMode` →
-`waiting`) **não tem equivalente aqui**: no Codex a aprovação tem evento próprio.
-Não replicar a heurística.
+The blocking `PreToolUse` special case (`AskUserQuestion` / `ExitPlanMode` →
+`waiting`) **has no equivalent here**: in Codex approval has its own event.
+Do not replicate the heuristic.
 
-## Estrutura esperada
+## Expected layout
 
 ```
-cli/src/hook.rs                     # status_for ganha os eventos do Codex
+cli/src/hook.rs                     # status_for gains Codex events
 lib/app/cockpit/domain/contracts/
-  hook_installer.dart               # contrato genérico (renomeia claude_hook_installer)
+  hook_installer.dart               # generic contract (renames claude_hook_installer)
 lib/app/cockpit/data/hooks/
-  hook_installer_base.dart          # materialização da CLI + append idempotente
-  claude_hook_installer_impl.dart   # alvo ~/.claude/settings.json
-  codex_hook_installer_impl.dart    # alvo ~/.codex/hooks.json
-lib/app/bootstrapper.dart           # instala os dois no boot
+  hook_installer_base.dart          # CLI materialization + idempotent append
+  claude_hook_installer_impl.dart   # target ~/.claude/settings.json
+  codex_hook_installer_impl.dart    # target ~/.codex/hooks.json
+lib/app/bootstrapper.dart           # installs both on boot
 ```
 
 ## Waves
 
-### Wave 0 — Spike: confirmar formato e gate de confiança
+### Wave 0 — Spike: confirm format and trust gate
 
-Antes de escrever código de produção, provar o caminho na mão.
+Before writing production code, prove the path by hand.
 
-1. Escrever um `~/.codex/hooks.json` apontando pra um script que faz `cat` do
-   stdin num arquivo, registrado em `UserPromptSubmit`, `PermissionRequest`,
-   `Stop`, `SessionStart`, `SessionEnd`.
-2. Rodar um `codex exec` curto num diretório de teste.
-3. Capturar: caminho real do arquivo de config, forma exata do JSON aceito,
-   payload cru de cada evento, e **se o Codex pediu confirmação de confiança**
-   (o `trusted_hash`).
+1. Write a `~/.codex/hooks.json` pointing at a script that `cat`s stdin into
+   a file, registered on `UserPromptSubmit`, `PermissionRequest`, `Stop`,
+   `SessionStart`, `SessionEnd`.
+2. Run a short `codex exec` in a test directory.
+3. Capture: real config file path, exact accepted JSON shape, raw payload of
+   each event, and **whether Codex asked for a trust confirmation**
+   (`trusted_hash`).
 
-**Aceite**: um arquivo de exemplo commitável em `docs/` com o `hooks.json` que
-funciona e um payload real de cada um dos 5 eventos. Resposta escrita para: o
-gate de confiança bloqueia instalação por fora? Se sim, qual é o fluxo (aprovar
-uma vez, pré-computar o hash, ou variável de ambiente)?
+**Accept**: a commit-able example file in `docs/` with a working `hooks.json`
+and a real payload for each of the 5 events. Written answer to: does the
+trust gate block out-of-band install? If so, what is the flow (approve once,
+precompute the hash, or env var)?
 
-**Gate**: se o gate de confiança exigir interação a cada mudança do arquivo,
-reavaliar antes das waves seguintes — possivelmente cair pro `notify` legado
-(cobertura menor: só fim de turno) e documentar a limitação.
+**Gate**: if the trust gate requires interaction on every file change,
+reassess before later waves — possibly fall back to legacy `notify` (smaller
+coverage: turn end only) and document the limitation.
 
-#### Resultado da Wave 0
+#### Wave 0 result
 
-Melhor que o esperado: **o trust é pré-computável**, o plano B não foi
-necessário.
+Better than expected: **trust is precomputable**, plan B was not needed.
 
-- Arquivo: `~/.codex/hooks.json` (só a raiz do `CODEX_HOME`; `~/.codex/hooks/`
-  não é lido). Forma igual à do Claude, com os eventos em PascalCase.
-- Sem trust, o hook é ignorado **em silêncio** — nem aviso, nem log. Foi o que
-  fez a primeira tentativa parecer "formato errado".
-- O trust vive em `[hooks.state."<path>:<evento_snake>:<grupo>:<handler>"]` no
-  `config.toml`, com `trusted_hash = "sha256:…"` sobre o JSON canônico da
-  identidade normalizada do handler. Como deriva da config e não do binário,
-  computamos e gravamos junto — sem interação do usuário.
-- Campos extras no handler (nosso marcador `_cockpit`) são ignorados pelo
-  parser e **não** entram no hash.
-- Ciclo observado numa sessão real: `SessionStart` → `UserPromptSubmit` →
+- File: `~/.codex/hooks.json` (only the `CODEX_HOME` root; `~/.codex/hooks/`
+  is not read). Same shape as Claude, events in PascalCase.
+- Without trust, the hook is ignored **silently** — no warning, no log. That
+  is what made the first attempt look like "wrong format".
+- Trust lives in `[hooks.state."<path>:<event_snake>:<group>:<handler>"]` in
+  `config.toml`, with `trusted_hash = "sha256:…"` over the canonical JSON of
+  the normalized handler identity. Because it is derived from config, not the
+  binary, we compute and write it together — no user interaction.
+- Extra handler fields (our `_cockpit` marker) are ignored by the parser and
+  **do not** enter the hash.
+- Cycle observed in a real session: `SessionStart` → `UserPromptSubmit` →
   `PreToolUse` (`tool_name: "Bash"`) → `PostToolUse` → `Stop` → `SessionEnd`.
 
-Detalhes do algoritmo e das limitações em
+Algorithm details and limitations in
 [`turn-status-hooks.md`](turn-status-hooks.md).
 
-### Wave 1 — CLI: `status_for` entende os eventos do Codex
+### Wave 1 — CLI: `status_for` understands Codex events
 
-`cli/src/hook.rs` é agnóstico de harness: lê `hook_event_name` e roteia pelo env.
-Mudanças:
+`cli/src/hook.rs` is harness-agnostic: it reads `hook_event_name` and routes
+via env. Changes:
 
 1. `PermissionRequest` → `waiting`.
 2. `SubagentStart` / `SubagentStop` / `PreCompact` / `PostCompact` → `None`
-   (explícito, com teste, pra não mexerem no indicador).
-3. Manter o desvio do `PreToolUse` bloqueante como está (é do Claude; no Codex
-   `tool_name` não bate com `AskUserQuestion`/`ExitPlanMode`, então é inerte).
-4. Repassar `turn_id` no payload quando presente — o app hoje usa `ev`/`sid` pra
-   descartar `working` fora de ordem, e o `turn_id` torna isso mais preciso
-   (opcional na v1: só transportar, sem consumir).
+   (explicit, with a test, so they do not move the indicator).
+3. Keep the blocking `PreToolUse` special case as-is (it is Claude's; in Codex
+   `tool_name` does not match `AskUserQuestion`/`ExitPlanMode`, so it is inert).
+4. Forward `turn_id` in the payload when present — the app today uses `ev`/`sid`
+   to drop out-of-order `working`, and `turn_id` makes that more precise
+   (optional in v1: transport only, do not consume).
 
-**Aceite**: testes unitários no `hook.rs` cobrindo os eventos novos; `cargo test`
-verde. O hook do Claude continua com o comportamento atual (nenhum teste
-existente muda).
+**Accept**: unit tests in `hook.rs` covering the new events; `cargo test`
+green. The Claude hook keeps current behavior (no existing test changes).
 
-### Wave 2 — Instalador genérico
+### Wave 2 — Generic installer
 
-`ClaudeHookInstallerImpl` já contém tudo o que o Codex precisa: materialização da
-CLI (`_ensureCli`, `_sameContent`, `_chmodExec`), resolução do comando
-(`_resolveHookCommand`, `_shellQuote`, `_hookPath` com as barras normais do
-Windows) e o append idempotente marcado (`_isOurs`).
+`ClaudeHookInstallerImpl` already contains everything Codex needs: CLI
+materialization (`_ensureCli`, `_sameContent`, `_chmodExec`), command
+resolution (`_resolveHookCommand`, `_shellQuote`, `_hookPath` with Windows
+normal slashes) and the marked idempotent append (`_isOurs`).
 
-1. Extrair a parte comum para uma base, deixando nas subclasses só: caminho do
-   arquivo de config, lista de eventos e a chave onde os hooks moram (`hooks` nos
-   dois casos, a confirmar pelo spike).
-2. `CodexHookInstallerImpl` escreve em `~/.codex/hooks.json` com os eventos:
+1. Extract the common part into a base, leaving in subclasses only: config
+   file path, event list, and the key where hooks live (`hooks` in both
+   cases, to confirm via the spike).
+2. `CodexHookInstallerImpl` writes `~/.codex/hooks.json` with events:
    `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PermissionRequest`, `Stop`,
    `SessionStart`, `SessionEnd`.
-3. Preservar as garantias atuais: nunca reescrever a lista de hooks do usuário,
-   remover o entry antigo nosso antes de readicionar, tolerar arquivo ausente ou
-   ilegível sem derrubar o boot.
-4. Renomear o contrato para `HookInstaller` (mantendo `ClaudeHookInstaller` como
-   alias se algo externo depender do nome).
+3. Keep current guarantees: never rewrite the user's hook list, remove our
+   previous entry before re-adding, tolerate a missing or unreadable file
+   without crashing boot.
+4. Rename the contract to `HookInstaller` (keep `ClaudeHookInstaller` as an
+   alias if anything external depends on the name).
 
-**Aceite**: rodar o app duas vezes seguidas não duplica entries em nenhum dos
-dois arquivos; hooks pré-existentes do usuário em `~/.codex/hooks.json`
-sobrevivem; sem `~/.codex/`, a instalação do Codex falha em silêncio e a do
-Claude segue normal.
+**Accept**: running the app twice in a row does not duplicate entries in
+either file; pre-existing user hooks in `~/.codex/hooks.json` survive;
+without `~/.codex/`, Codex install fails silently and Claude install
+continues normally.
 
-### Wave 3 — Ligar no boot e E2E
+### Wave 3 — Wire on boot and E2E
 
-1. `bootstrapper.dart` chama os dois instaladores (falha de um não impede o
-   outro).
-2. E2E manual, com build `.debug` (bundle id isolado, memória
-   `project_cockpit_debug_flavor`): abrir aba, rodar `codex`, mandar um prompt
-   que use ferramenta e peça aprovação, e conferir na aba: spinner ao enviar,
-   badge de "precisa de ação" na aprovação, chime/notificação no fim do turno,
-   indicador limpo ao sair.
-3. Conferir que uma sessão `codex` **fora** do Cockpit não emite nada (gate por
-   env).
+1. `bootstrapper.dart` calls both installers (failure of one does not block
+   the other).
+2. Manual E2E, with a `.debug` build (isolated bundle id,
+   `project_cockpit_debug_flavor` memory): open a tab, run `codex`, send a
+   prompt that uses a tool and asks for approval, and check the tab: spinner
+   on send, "needs action" badge on approval, chime/notification at turn end,
+   clean indicator on exit.
+3. Confirm that a `codex` session **outside** Cockpit emits nothing (env gate).
 
-**Aceite**: os quatro estados observados numa sessão real de Codex, e o Claude
-sem regressão na mesma build.
+**Accept**: the four states observed in a real Codex session, and Claude with
+no regression on the same build.
 
-### Wave 4 — Documentação
+### Wave 4 — Documentation
 
-1. Seção no `CLAUDE.md` do cockpit (ou em `docs/`) descrevendo que o status de
-   turno cobre Claude Code **e** Codex CLI, e onde cada arquivo de config mora.
-2. Nota no CHANGELOG na release que levar isso (em inglês, user-facing).
+1. Section in cockpit `CLAUDE.md` (or in `docs/`) describing that turn status
+   covers Claude Code **and** Codex CLI, and where each config file lives.
+2. CHANGELOG note in the release that ships this (English, user-facing).
 
 ## Definition of Done
 
-- [x] Wave 0: `hooks.json` validado + payloads reais capturados
-- [x] Wave 0: resposta escrita sobre o gate de confiança (`trusted_hash`)
-- [x] Wave 1: `status_for` cobre os eventos do Codex, com testes
-- [x] Wave 2: instalador genérico + `CodexHookInstallerImpl`, idempotente
-- [x] Wave 3: instalação no boot
-- [ ] Wave 3: E2E dos quatro estados numa aba do app **(a testar)**
-- [ ] Wave 3: sessão de Codex fora do Cockpit não emite status **(a testar)**
-- [x] Wave 4: documentação (`turn-status-hooks.md`)
-- [ ] Wave 4: CHANGELOG — a seção é escrita no `/deploy` (o guard reprova
-      `## [Unreleased]` no topo, então não dá pra adiantar aqui)
+- [x] Wave 0: `hooks.json` validated + real payloads captured
+- [x] Wave 0: written answer on the trust gate (`trusted_hash`)
+- [x] Wave 1: `status_for` covers Codex events, with tests
+- [x] Wave 2: generic installer + `CodexHookInstallerImpl`, idempotent
+- [x] Wave 3: install on boot
+- [ ] Wave 3: E2E of the four states on an app tab **(to test)**
+- [ ] Wave 3: Codex session outside Cockpit does not emit status **(to test)**
+- [x] Wave 4: docs (`turn-status-hooks.md`)
+- [ ] Wave 4: CHANGELOG — the section is written at `/deploy` (the guard
+      rejects `## [Unreleased]` at the top, so it cannot be done here)
 
-### O que sobrou para o teste manual
+### What remains for the manual test
 
-O `PermissionRequest` não apareceu nas capturas porque `codex exec` roda com
-aprovação desligada. Ele é o evento que vira o badge de "precisa de ação", então
-vale conferir explicitamente: numa aba, com o Codex em modo interativo, pedir
-algo que exija aprovação e ver a aba mudar para `waiting` (badge + chime).
+`PermissionRequest` did not appear in the captures because `codex exec` runs
+with approval off. It is the event that becomes the "needs action" badge, so
+it is worth checking explicitly: in a tab, with Codex in interactive mode,
+ask for something that requires approval and see the tab move to `waiting`
+(badge + chime).
 
-## Fora de escopo
+## Out of scope
 
-- Subagentes do Codex movendo o indicador da aba (só a sessão principal).
-- Usar os handlers `prompt` / `agent` do Codex — só `command`.
-- Bloquear ou modificar comportamento do agente pelo hook (nosso hook é
-  observador puro: nunca escreve no stdout, nunca falha barulhento).
-- Outros harnesses (`pi`, Gemini CLI): o instalador genérico abre o caminho, mas
-  cada um exige investigação própria.
+- Codex subagents moving the tab indicator (main session only).
+- Using Codex `prompt` / `agent` handlers — `command` only.
+- Blocking or changing agent behavior via the hook (ours is a pure observer:
+  never writes to stdout, never fails loudly).
+- Other harnesses (`pi`, Gemini CLI): the generic installer opens the path,
+  but each one needs its own investigation.

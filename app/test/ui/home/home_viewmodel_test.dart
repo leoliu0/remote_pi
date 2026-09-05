@@ -382,6 +382,50 @@ void main() {
       conn.dispose();
     });
 
+    test('a working agent counts as online even when not in the live set',
+        () async {
+      final ch = _ControllableChannel();
+      final storage = _FakeStorage([_peerA]);
+      final conn = ConnectionManager(
+        factory: (_, _) async => ch,
+        storage: storage,
+        emitDebounce: Duration.zero,
+      );
+      final prefs = Preferences(_FakeSecureStorage());
+      final vm = HomeViewModel(storage, prefs, conn);
+      await conn.connectTo(_peerA);
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+
+      ch.pushControl(
+        const RoomAnnounced(peer: 'epk_A', roomId: 'r1', startedAt: 1),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      expect(vm.counts, (all: 1, online: 1, offline: 0));
+
+      // Agent starts a turn, then the live set lags (snapshot drops the
+      // room). Working keeps the tile in the Online tab.
+      ch.pushControl(
+        const RoomMetaUpdated(
+          peer: 'epk_A',
+          roomId: 'r1',
+          working: true,
+          hasModel: false,
+          hasThinking: false,
+        ),
+      );
+      ch.pushControl(const RoomsSnapshot(peer: 'epk_A', rooms: []));
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+
+      expect(vm.isRoomLive('epk_A', 'r1'), isFalse);
+      expect(vm.isRoomWorking('epk_A', 'r1'), isTrue);
+      expect(vm.counts, (all: 1, online: 1, offline: 0));
+      expect(vm.visibleItems.map((i) => i.room.roomId).toList(), ['r1']);
+
+      vm.dispose();
+      await conn.disconnect();
+      conn.dispose();
+    });
+
     test(
       'setFilter is a no-op when the tab is unchanged, and emits exactly once '
       'when it changes',

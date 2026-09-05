@@ -2,8 +2,7 @@ import 'package:app/ui/core/themes/themes.dart';
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
-/// Onboarding step 1 — welcome. Static, no animations (per plan 14 D2 —
-/// "Welcome conservador (sem animações)").
+/// Onboarding step 1 — welcome. Static, no animations.
 class WelcomeStep extends StatelessWidget {
   final VoidCallback onNext;
   const WelcomeStep({super.key, required this.onNext});

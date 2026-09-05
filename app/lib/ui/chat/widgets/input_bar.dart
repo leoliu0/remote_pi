@@ -513,11 +513,9 @@ class _InputBarState extends State<InputBar> {
     final attachEnabled =
         widget.onOpenAttach != null &&
         canInteract &&
-        !widget.streaming &&
         !showStrip &&
         !visionBlocked &&
         !hasImage;
-
     final showQuickActions =
         _empty &&
         !hasImage &&
@@ -922,8 +920,17 @@ class _AttachmentPreview extends StatelessWidget {
         child: Stack(
           clipBehavior: Clip.none,
           children: [
-            ClipRRect(
-              borderRadius: BorderRadius.circular(10),
+            Container(
+              width: 72,
+              height: 72,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(
+                  color: context.colors.border.withValues(alpha: 0.95),
+                  width: 1.5,
+                ),
+              ),
+              clipBehavior: Clip.antiAlias,
               child: Image.memory(
                 image.bytes,
                 width: 72,
@@ -1219,10 +1226,9 @@ class _QueueButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
-    return Container(
+    return SizedBox(
       width: 38,
       height: 38,
-      margin: const EdgeInsets.only(right: 8),
       child: Tooltip(
         message: 'Queue for next turn',
         child: Material(

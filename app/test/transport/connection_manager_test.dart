@@ -1176,6 +1176,38 @@ void _registerRoomsTests() {
       },
     );
 
+    test('reconnect drops cached rooms so Home shows the new relay', () async {
+      final ch1 = _ControllableChannel();
+      final ch2 = _ControllableChannel();
+      var n = 0;
+      final cm = ConnectionManager(
+        factory: (_, _) async => n++ == 0 ? ch1 : ch2,
+        storage: _FakeStorage([_fakePeer()]),
+        emitDebounce: Duration.zero,
+      );
+      await cm.connectTo(_fakePeer());
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      ch1.pushControl(const RoomsSnapshot(peer: 'epk_test', rooms: [
+        RoomInfo(roomId: 'old', startedAt: 1),
+      ]));
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+      expect(cm.liveRoomsKnown, isTrue);
+      expect(cm.roomsFor('epk_test'), isNotEmpty);
+
+      await cm.reconnect();
+      expect(cm.liveRoomsKnown, isFalse);
+      expect(cm.roomsSnapshot, isEmpty);
+
+      ch2.pushControl(const RoomsSnapshot(peer: 'epk_test', rooms: [
+        RoomInfo(roomId: 'new', startedAt: 2),
+      ]));
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+      expect(cm.liveRoomsKnown, isTrue);
+      expect(cm.roomsFor('epk_test').single.roomId, 'new');
+
+      cm.dispose();
+    });
+
     test(
       '_connect adopts peer.roomId (plan 17 fix — bind room on the '
       'first frame so the relay routes correctly)',

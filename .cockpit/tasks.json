@@ -42,11 +42,10 @@
       ]
     },
     {
-      // NextJS dev server em "modo server" (serve, sem build/export) e SEM abrir
-      // navegador: `next dev` já não abre por si; `BROWSER=none` garante que
-      // nenhum wrapper abra. Envolto num shell só pra fixar o env sem depender de
-      // suporte a `env` na task; `exec` faz o pnpm ser o filho direto do PTY
-      // (stop/restart batem nele).
+      // NextJS dev server in "server mode" (serve without build/export) without opening
+      // browser: `next dev` doesn't open by itself; `BROWSER=none` ensures no wrapper opens.
+      // Wrapped in a shell to set env without depending on task `env` support;
+      // `exec` makes pnpm the direct child of the PTY (stop/restart hit it directly).
       "label": "Site",
       "cwd": "site",
       "command": "sh",

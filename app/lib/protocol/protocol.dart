@@ -596,8 +596,8 @@ enum ActionName {
   sessionNew('session_new'),
   sessionCompact('session_compact'),
   modelSet('model_set'),
-  thinkingSet('thinking_set');
-
+  thinkingSet('thinking_set'),
+  reloadPlugins('reload_plugins');
   final String wire;
   const ActionName(this.wire);
 
@@ -614,13 +614,14 @@ enum ActionName {
 /// select models — the app surfaces every level and the SDK falls back
 /// when the active model doesn't support the requested one.
 enum ThinkingLevel {
+  auto('auto'),
   off('off'),
   minimal('minimal'),
   low('low'),
   medium('medium'),
   high('high'),
-  xhigh('xhigh');
-
+  xhigh('xhigh'),
+  max('max');
   final String wire;
   const ThinkingLevel(this.wire);
 
@@ -657,6 +658,12 @@ class WireModel {
   /// button's enabled state (#9): a text-only model greys it out.
   final bool vision;
 
+  /// Thinking levels this model supports (from the Pi's
+  /// `Model.thinkingLevelMap`; `null` marks a level unsupported and the
+  /// level is omitted). `null` when the daemon's catalog predates
+  /// per-model maps — the picker then shows every level.
+  final List<ThinkingLevel>? thinkingLevels;
+
   const WireModel({
     required this.id,
     required this.name,
@@ -664,6 +671,7 @@ class WireModel {
     required this.reasoning,
     required this.contextWindow,
     this.vision = false,
+    this.thinkingLevels,
   });
 
   factory WireModel.fromJson(Map<String, dynamic> j) => WireModel(
@@ -673,6 +681,10 @@ class WireModel {
     reasoning: (j['reasoning'] as bool?) ?? false,
     contextWindow: (j['context_window'] as num?)?.toInt() ?? 0,
     vision: (j['vision'] as bool?) ?? false,
+    thinkingLevels: (j['thinking_levels'] as List<dynamic>?)
+        ?.map((e) => ThinkingLevel.fromWire(e as String))
+        .whereType<ThinkingLevel>()
+        .toList(),
   );
 
   Map<String, dynamic> toJson() => {
@@ -682,6 +694,8 @@ class WireModel {
     'reasoning': reasoning,
     'context_window': contextWindow,
     'vision': vision,
+    if (thinkingLevels != null)
+      'thinking_levels': thinkingLevels!.map((l) => l.wire).toList(),
   };
 
   @override
@@ -749,6 +763,14 @@ class ListModels extends ClientMessage {
 
   @override
   Map<String, dynamic> toJson() => {'type': 'list_models', 'id': id};
+}
+
+class ReloadPlugins extends ClientMessage {
+  final String id;
+  ReloadPlugins({required this.id});
+
+  @override
+  Map<String, dynamic> toJson() => {'type': 'reload_plugins', 'id': id};
 }
 
 // --- ServerMessage (extension → app) ---

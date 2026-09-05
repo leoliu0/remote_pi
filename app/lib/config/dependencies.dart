@@ -54,10 +54,7 @@ Future<void> setupDependencies() async {
 
   final prefs = Preferences();
   try {
-    await prefs.load().timeout(
-      const Duration(seconds: 4),
-      onTimeout: () {},
-    );
+    await prefs.load();
   } catch (_) {}
   _injector.addInstance<Preferences>(prefs);
 
@@ -98,18 +95,10 @@ Future<void> setupDependencies() async {
   // cannot be resolved by auto_injector via Type.new).
   _injector.addService<ConnectionManager>(
     () {
-      final conn = ConnectionManager(
+      return ConnectionManager(
         factory: _productionConnectionFactory,
         storage: _injector.get<PairingStorage>(),
       );
-      String? lastRelay = prefs.relayUrl;
-      prefs.addListener(() {
-        if (prefs.relayUrl != lastRelay) {
-          lastRelay = prefs.relayUrl;
-          unawaited(conn.reconnect(preferredEpk: prefs.selectedPeerEpk));
-        }
-      });
-      return conn;
     },
   );
 

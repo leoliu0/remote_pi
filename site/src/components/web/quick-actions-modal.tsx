@@ -80,12 +80,14 @@ export function QuickActionsModal({
   ];
 
   const thinkingLevels = [
+    { id: "auto", label: "auto" },
     { id: "off", label: "off" },
     { id: "minimal", label: "min" },
     { id: "low", label: "low" },
     { id: "medium", label: "med" },
     { id: "high", label: "high" },
-    { id: "xhigh", label: "x" },
+    { id: "xhigh", label: "xh" },
+    { id: "max", label: "max" },
   ];
   const toolDisplayOptions: Array<{ id: ToolDisplayMode; label: string; desc: string }> = [
     { id: "brief", label: "Brief", desc: "Compact pill" },
@@ -246,7 +248,7 @@ export function QuickActionsModal({
                 {selectedThinking}
               </span>
             </div>
-            <div className="grid grid-cols-6 gap-1">
+            <div className="grid grid-cols-4 sm:grid-cols-8 gap-1">
               {thinkingLevels.map((t) => (
                 <button
                   key={t.id}

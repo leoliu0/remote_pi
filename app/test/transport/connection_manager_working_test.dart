@@ -73,6 +73,7 @@ Future<ConnectionManager> _connected(_ControllableChannel ch) async {
     factory: (_, _) async => ch,
     storage: _FakeStorage([_fakePeer()]),
     emitDebounce: Duration.zero,
+    workingOffDebounce: Duration.zero,
   );
   await cm.connectTo(_fakePeer());
   await Future<void>.delayed(const Duration(milliseconds: 10));
@@ -205,6 +206,131 @@ void main() {
       // Dropping the connection → no fresh signal → report not-working.
       await cm.disconnect();
       expect(cm.isRoomWorking('epk_test', 'r1'), isFalse);
+
+      cm.dispose();
+    });
+
+    test(
+        'rapid working false/true updates within debounce window keep room working state continuously true without flapping',
+        () async {
+      final ch = _ControllableChannel();
+      final cm = ConnectionManager(
+        factory: (_, _) async => ch,
+        storage: _FakeStorage([_fakePeer()]),
+        emitDebounce: Duration.zero,
+        workingOffDebounce: const Duration(milliseconds: 100),
+      );
+      await cm.boot();
+      ch.pushControl(const RoomAnnounced(
+        peer: 'epk_test',
+        roomId: 'r1',
+        startedAt: 1,
+        working: true,
+      ));
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+      expect(cm.isRoomWorking('epk_test', 'r1'), isTrue);
+
+      // Rapid intermediate tool finish: working=false arrives
+      ch.pushControl(const RoomMetaUpdated(
+        peer: 'epk_test',
+        roomId: 'r1',
+        working: false,
+        hasModel: false,
+        hasThinking: false,
+      ));
+      // Within 40ms (< 100ms debounce)
+      await Future<void>.delayed(const Duration(milliseconds: 40));
+      expect(cm.isRoomWorking('epk_test', 'r1'), isTrue,
+          reason: 'must stay true during debounce window');
+
+      // Next tool starts within window: working=true arrives
+      ch.pushControl(const RoomMetaUpdated(
+        peer: 'epk_test',
+        roomId: 'r1',
+        working: true,
+        hasModel: false,
+        hasThinking: false,
+      ));
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+      expect(cm.isRoomWorking('epk_test', 'r1'), isTrue);
+
+      // Now turn ends completely and stays idle for 120ms (> 100ms debounce)
+      ch.pushControl(const RoomMetaUpdated(
+        peer: 'epk_test',
+        roomId: 'r1',
+        working: false,
+        hasModel: false,
+        hasThinking: false,
+      ));
+      await Future<void>.delayed(const Duration(milliseconds: 40));
+      expect(cm.isRoomWorking('epk_test', 'r1'), isTrue,
+          reason: 'still debouncing before window expires');
+
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+      expect(cm.isRoomWorking('epk_test', 'r1'), isFalse,
+          reason: 'cleanly commits off after debounce expires');
+
+      cm.dispose();
+    });
+    test(
+        'isRoomUnreadFinished is NOT set during intermediate tool debounce and only set when turn truly finishes',
+        () async {
+      final ch = _ControllableChannel();
+      final cm = ConnectionManager(
+        factory: (_, _) async => ch,
+        storage: _FakeStorage([_fakePeer()]),
+        emitDebounce: Duration.zero,
+        workingOffDebounce: const Duration(milliseconds: 100),
+      );
+      await cm.boot();
+      ch.pushControl(const RoomAnnounced(
+        peer: 'epk_test',
+        roomId: 'r1',
+        startedAt: 1,
+        working: true,
+      ));
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+      expect(cm.isRoomWorking('epk_test', 'r1'), isTrue);
+      expect(cm.isRoomUnreadFinished('epk_test', 'r1'), isFalse);
+
+      // Tool 1 ends -> working: false arrives
+      ch.pushControl(const RoomMetaUpdated(
+        peer: 'epk_test',
+        roomId: 'r1',
+        working: false,
+        hasModel: false,
+        hasThinking: false,
+      ));
+      await Future<void>.delayed(const Duration(milliseconds: 40));
+      expect(cm.isRoomUnreadFinished('epk_test', 'r1'), isFalse,
+          reason: 'must not mark Done during debounce');
+
+      // Tool 2 starts within window
+      ch.pushControl(const RoomMetaUpdated(
+        peer: 'epk_test',
+        roomId: 'r1',
+        working: true,
+        hasModel: false,
+        hasThinking: false,
+      ));
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+      expect(cm.isRoomUnreadFinished('epk_test', 'r1'), isFalse);
+
+      // Turn truly finishes -> working: false and window expires
+      ch.pushControl(const RoomMetaUpdated(
+        peer: 'epk_test',
+        roomId: 'r1',
+        working: false,
+        hasModel: false,
+        hasThinking: false,
+      ));
+      await Future<void>.delayed(const Duration(milliseconds: 40));
+      expect(cm.isRoomUnreadFinished('epk_test', 'r1'), isFalse,
+          reason: 'still not Done before debounce expires');
+
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+      expect(cm.isRoomUnreadFinished('epk_test', 'r1'), isTrue,
+          reason: 'marked Done only when turn truly ends');
 
       cm.dispose();
     });

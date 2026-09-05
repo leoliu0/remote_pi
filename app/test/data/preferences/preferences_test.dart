@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:app/data/preferences/preferences.dart';
 import 'package:app/ui/core/themes/app_font_family.dart';
 import 'package:app/ui/core/themes/app_font_scale.dart';
@@ -5,7 +7,8 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 class _FakeSecureStorage implements FlutterSecureStorage {
   final Map<String, String> _store = {};
-
+  final bool emptyReadAll;
+  _FakeSecureStorage({this.emptyReadAll = false});
   @override
   Future<String?> read({
     required String key,
@@ -57,7 +60,7 @@ class _FakeSecureStorage implements FlutterSecureStorage {
     MacOsOptions? mOptions,
     WindowsOptions? wOptions,
   }) async =>
-      Map<String, String>.from(_store);
+      emptyReadAll ? <String, String>{} : Map<String, String>.from(_store);
 
   @override
   dynamic noSuchMethod(Invocation i) => super.noSuchMethod(i);
@@ -123,6 +126,36 @@ void main() {
       await p.setRelayUrl('wss://x');
       await p.setRelayUrl('');
       expect(p.relayUrl, isNull);
+    });
+
+    test('relayUrl survives load when readAll returns empty', () async {
+      final store = _FakeSecureStorage(emptyReadAll: true);
+      final p = Preferences(store);
+      await p.setRelayUrl('https://custom.example.com');
+      final p2 = Preferences(store);
+      await p2.load();
+      expect(p2.relayUrl, 'https://custom.example.com');
+    });
+
+    test('relayUrl survives load via file layer when secure store is empty',
+        () async {
+      final dir = Directory.systemTemp.createTempSync('rp_prefs_test');
+      addTearDown(() => dir.deleteSync(recursive: true));
+      final file = File('${dir.path}/relay_url.txt');
+      final p = Preferences(_FakeSecureStorage(emptyReadAll: true), file);
+      await p.setRelayUrl('http://192.168.1.10:8787');
+      expect(file.readAsStringSync(), 'http://192.168.1.10:8787');
+
+      // Cold start with both secure store and Hive unavailable -> the file
+      // still carries the relay URL.
+      final p2 = Preferences(_FakeSecureStorage(emptyReadAll: true), file);
+      await p2.load();
+      expect(p2.relayUrl, 'http://192.168.1.10:8787');
+
+      // Clearing removes the file too.
+      await p2.setRelayUrl(null);
+      expect(file.existsSync(), isFalse);
+      expect(p2.relayUrl, isNull);
     });
 
     test(

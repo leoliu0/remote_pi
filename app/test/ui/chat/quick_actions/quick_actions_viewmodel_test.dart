@@ -10,6 +10,8 @@ class _FakeActionsRepository implements IActionsRepository {
   int compactCalls = 0;
   int newSessionCalls = 0;
   String? lastProvider;
+  int reloadPluginsCalls = 0;
+  Object? reloadPluginsError;
   String? lastModelId;
   ThinkingLevel? lastThinking;
   bool forceRefreshAsked = false;
@@ -32,8 +34,10 @@ class _FakeActionsRepository implements IActionsRepository {
   }
 
   @override
-  ActiveRoomMeta get activeRoomMeta => meta;
+  WireModel? get cachedCurrentModel => catalogue.current;
 
+  @override
+  ActiveRoomMeta get activeRoomMeta => meta;
   @override
   Stream<ActiveRoomMeta> get activeRoomMetaStream =>
       _metaController.stream;
@@ -47,6 +51,12 @@ class _FakeActionsRepository implements IActionsRepository {
   @override
   Future<void> newSession() async {
     newSessionCalls++;
+  }
+
+  @override
+  Future<void> reloadPlugins() async {
+    reloadPluginsCalls++;
+    if (reloadPluginsError != null) throw reloadPluginsError!;
   }
 
   @override

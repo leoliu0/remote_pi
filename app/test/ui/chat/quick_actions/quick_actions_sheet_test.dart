@@ -20,14 +20,18 @@ class _FakeRepo implements IActionsRepository {
   ThinkingLevel? thinking;
   WireModel? modelArg;
 
+  int reloadPluginsCalls = 0;
+  bool failReloadPlugins = false;
   /// When set, the matching action throws [ActionFailure] to exercise the
   /// failure path (error toast + sheet stays open).
   bool failCompact = false;
   bool failNewSession = false;
 
   @override
-  ActiveRoomMeta get activeRoomMeta => const ActiveRoomMeta();
+  WireModel? get cachedCurrentModel => currentModel;
 
+  @override
+  ActiveRoomMeta get activeRoomMeta => const ActiveRoomMeta();
   @override
   Stream<ActiveRoomMeta> get activeRoomMetaStream =>
       const Stream<ActiveRoomMeta>.empty();
@@ -42,6 +46,12 @@ class _FakeRepo implements IActionsRepository {
   Future<void> newSession() async {
     newSessionCalls++;
     if (failNewSession) throw const ActionFailure('new boom');
+  }
+
+  @override
+  Future<void> reloadPlugins() async {
+    reloadPluginsCalls++;
+    if (failReloadPlugins) throw const ActionFailure('reload boom');
   }
 
   @override
@@ -60,9 +70,13 @@ class _FakeRepo implements IActionsRepository {
     thinking = level;
   }
 
+  /// When set, `listModels` reports this as the catalogue's current model —
+  /// drives the per-model thinking-level filter in the sheet.
+  WireModel? currentModel;
+
   @override
   Future<ModelsCatalogue> listModels({bool forceRefresh = false}) async {
-    return const ModelsCatalogue(models: [], current: null);
+    return ModelsCatalogue(models: const [], current: currentModel);
   }
 
   @override
@@ -75,10 +89,12 @@ Future<({_FakeRepo repo, List<int> resetCalls})> _openSheet(
   WidgetTester tester, {
   bool failCompact = false,
   bool failNewSession = false,
+  WireModel? currentModel,
 }) async {
   final repo = _FakeRepo()
     ..failCompact = failCompact
-    ..failNewSession = failNewSession;
+    ..failNewSession = failNewSession
+    ..currentModel = currentModel;
   final vm = QuickActionsViewModel(repo);
   final resetCalls = <int>[];
 
@@ -263,6 +279,29 @@ void main() {
     await tester.tap(find.byKey(const Key('qa-thinking-medium')));
     await tester.pumpAndSettle();
     expect(s.repo.thinking, ThinkingLevel.medium);
+
+    await tester.tap(find.byKey(const Key('qa-thinking-auto')));
+    await tester.pumpAndSettle();
+    expect(s.repo.thinking, ThinkingLevel.auto);
+  });
+  testWidgets('thinking picker hides levels the current model lacks',
+      (tester) async {
+    await _openSheet(
+      tester,
+      currentModel: const WireModel(
+        id: 'm1',
+        name: 'M1',
+        provider: 'p',
+        reasoning: true,
+        contextWindow: 0,
+        thinkingLevels: [ThinkingLevel.off, ThinkingLevel.low, ThinkingLevel.high],
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('qa-thinking-max')), findsNothing);
+    expect(find.byKey(const Key('qa-thinking-xhigh')), findsNothing);
+    expect(find.byKey(const Key('qa-thinking-high')), findsOneWidget);
+    expect(find.byKey(const Key('qa-thinking-low')), findsOneWidget);
   });
 
   test('QuickActionsState equality covers idle + busy', () {

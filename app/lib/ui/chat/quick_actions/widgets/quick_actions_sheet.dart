@@ -154,6 +154,15 @@ class _QuickActionsSheetBodyState extends State<QuickActionsSheetBody> {
               onTap: () => _onNewSession(vm),
             ),
             const _Divider(),
+            _ActionTile(
+              key: const Key('qa-reload-plugins'),
+              icon: LucideIcons.plug2,
+              label: 'Reload plugins',
+              subtitle: 'Reload extensions, skills, and tools on the Pi.',
+              busy: busyAction == ActionName.reloadPlugins,
+              onTap: () => _onReloadPlugins(vm),
+            ),
+            const _Divider(),
             _ModelRow(
               currentLabel: vm.currentModel?.name ?? vm.currentModelName,
               busy: busyAction == ActionName.modelSet,
@@ -163,6 +172,8 @@ class _QuickActionsSheetBodyState extends State<QuickActionsSheetBody> {
             _ThinkingRow(
               current: vm.currentThinking,
               busy: busyAction == ActionName.thinkingSet,
+              disabled: vm.currentModel?.reasoning == false,
+              levels: vm.supportedThinkingLevels,
               onPick: (level) => _onThinking(vm, level),
             ),
             const SizedBox(height: 18),
@@ -182,6 +193,17 @@ class _QuickActionsSheetBodyState extends State<QuickActionsSheetBody> {
     }
     // action_ok — just close the sheet (no success toast: compacting is a
     // quiet, frequent action and the toast was noise).
+    if (!mounted) return;
+    Navigator.of(context).pop();
+  }
+
+  Future<void> _onReloadPlugins(QuickActionsViewModel vm) async {
+    try {
+      await vm.reloadPlugins();
+    } catch (_) {
+      return;
+    }
+    _toast('Plugins and skills reloaded', widget.messenger.context.colors.text);
     if (!mounted) return;
     Navigator.of(context).pop();
   }
@@ -460,15 +482,21 @@ class _ModelRow extends StatelessWidget {
     );
   }
 }
-
 class _ThinkingRow extends StatelessWidget {
   final ThinkingLevel? current;
   final bool busy;
+  final bool disabled;
   final ValueChanged<ThinkingLevel> onPick;
+
+  /// Levels the current model supports (from its `thinkingLevelMap` via
+  /// the daemon). Null = unknown catalog → show every level.
+  final List<ThinkingLevel>? levels;
   const _ThinkingRow({
     required this.current,
     required this.busy,
     required this.onPick,
+    this.disabled = false,
+    this.levels,
   });
 
   @override
@@ -504,7 +532,12 @@ class _ThinkingRow extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 10),
-          _ThinkingSegmented(current: current, disabled: busy, onPick: onPick),
+          _ThinkingSegmented(
+            current: current,
+            disabled: busy || disabled,
+            levels: levels,
+            onPick: onPick,
+          ),
         ],
       ),
     );
@@ -515,25 +548,35 @@ class _ThinkingSegmented extends StatelessWidget {
   final ThinkingLevel? current;
   final bool disabled;
   final ValueChanged<ThinkingLevel> onPick;
+
+  /// Levels the current model supports. Null/empty = show every level.
+  final List<ThinkingLevel>? levels;
   const _ThinkingSegmented({
     required this.current,
     required this.disabled,
     required this.onPick,
+    this.levels,
   });
 
   // Short label shown in the segmented buttons. Matches the SDK's
-  // ThinkingLevel order (off → xhigh).
+  // ThinkingLevel order (off → max).
   static const _labels = <ThinkingLevel, String>{
+    ThinkingLevel.auto: 'auto',
     ThinkingLevel.off: 'off',
     ThinkingLevel.minimal: 'min',
     ThinkingLevel.low: 'low',
     ThinkingLevel.medium: 'med',
     ThinkingLevel.high: 'high',
-    ThinkingLevel.xhigh: 'x',
+    ThinkingLevel.xhigh: 'xh',
+    ThinkingLevel.max: 'max',
   };
 
   @override
   Widget build(BuildContext context) {
+    final shown = [
+      for (final level in ThinkingLevel.values)
+        if (levels == null || levels!.contains(level)) level,
+    ];
     return Container(
       decoration: BoxDecoration(
         border: Border.all(color: context.colors.border),
@@ -541,7 +584,7 @@ class _ThinkingSegmented extends StatelessWidget {
       ),
       child: Row(
         children: [
-          for (final level in ThinkingLevel.values)
+          for (final level in shown)
             Expanded(
               child: _SegButton(
                 key: Key('qa-thinking-${level.wire}'),

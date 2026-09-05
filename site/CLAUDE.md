@@ -1,67 +1,38 @@
-# Remote Pi — Site (NextJS)
+# Remote Pi — Site (Next.js)
 
-Landing page institucional do Remote Pi. Apresenta projeto, links pro GitHub,
-documentação do MVP. **Apenas apresentação — não tem lógica de produto.**
+Official website for Remote Pi. Presents project, GitHub links, and documentation.
 
 ## Stack
 
-- NextJS 16 (App Router)
+- Next.js 16 (App Router)
 - React 19
 - TypeScript 5
 - Tailwind 4 (via `@tailwindcss/postcss`)
 - ESLint 9
-- Package manager: **pnpm** (com `allowBuilds` para `sharp` e `unrs-resolver` em `pnpm-workspace.yaml`)
+- Package manager: **pnpm**
 
-## Comandos
+## Commands
 
-- `pnpm install` — instala deps
-- `pnpm dev` — dev server em :3000
-- `pnpm build` — build de produção
-- `pnpm start` — serve build
+- `pnpm install` — install dependencies
+- `pnpm dev` — dev server on :3000
+- `pnpm build` — production build
+- `pnpm start` — serve production build
 - `pnpm lint` — ESLint
+- `pnpm test` — tests
 
-## Convenções
+## Conventions
 
-- **Server Components por padrão** — só usar `"use client"` quando necessário (state, events, hooks)
-- **Pasta de rotas**: `src/app/` (App Router)
-- **Estilos**: Tailwind utility-first. Sem CSS modules / styled-components
-- **Imagens**: `next/image` com fallback estático onde possível
-- **Tipagem**: props de componentes sempre tipadas, sem `any`
+- **Server Components by default** — only use `"use client"` when necessary (state, events, hooks)
+- **Routes folder**: `src/app/` (App Router)
+- **Styles**: Tailwind utility-first. No CSS modules / styled-components
+- **Images**: `next/image` with static fallback where applicable
+- **Typing**: strictly typed component props without `any`
 
-## NÃO fazer
+## Deployment
 
-- Não adicionar features de produto (chat, pareamento, etc) — isso vai no `app/`
-- Não comitar `.next/`, `out/`, `node_modules/` (já no .gitignore raiz)
-- Não desabilitar lint pra fazer passar — corrigir o erro
-- Não introduzir backend (API routes) sem registrar plano
-
-## Publicação (deploy)
-
-O site roda em produção (`remote-pi.jacobmoura.work`) como **imagem Docker** no
-Docker Hub: `jacobmoura7/remote-pi-site`. O host de produção puxa a tag
-`:latest` — então **publicar = buildar e dar push da imagem**.
+The site runs in production as a Docker image on Docker Hub: `jacobmoura7/remote-pi-site`.
 
 ```bash
-./push-docker.sh            # build multi-plataforma + push, tag :latest
-./push-docker.sh v1.2.3     # tag :v1.2.3 E :latest
+./push-docker.sh            # multi-platform build + push, tag :latest
+./push-docker.sh v1.2.3     # tag :v1.2.3 AND :latest
 ```
-
-O que o script faz: cria (idempotente) um builder buildx `multiarch`
-(`docker-container`), builda para `linux/amd64,linux/arm64` a partir do
-`Dockerfile` (multi-stage → `next build` com `output: "standalone"`, runtime
-`node:22-alpine` na porta 3000 com healthcheck em `/`) e dá `--push` pro Docker
-Hub.
-
-Pré-requisitos: **`docker login`** (Docker Hub) feito antes, e `docker buildx`
-(vem no Docker moderno). Sem login, o push falha no fim do build.
-
-Fluxo típico de publicação: commit + push no git → `pnpm lint && pnpm build`
-verdes → `./push-docker.sh` → o host redeploya da `:latest`. Passe uma versão
-(`vX.Y.Z`) quando quiser uma tag fixada além da `:latest`.
-
-## Modo orquestrado
-
-Se receber um prompt começando com `[ORCH:<task-id>]`, leia
-`../.orchestration/INSTRUCTIONS.md` antes de qualquer outra ação. Esse marker
-indica que outro agente está coordenando o trabalho e tem regras específicas
-(onde escrever resultado, não comitar, etc).

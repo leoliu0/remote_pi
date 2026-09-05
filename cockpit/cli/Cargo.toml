@@ -7,8 +7,7 @@ description = "Cockpit's internal CLI (and the Claude Code hook helper)"
 license = "MIT"
 publish = false
 
-# O binário chama `cockpit` — é o nome que o app materializa em
-# ~/.cockpit/bin/cockpit e que aparece no PATH das abas.
+# Binary named `cockpit`, materialized at ~/.cockpit/bin/cockpit.
 [[bin]]
 name = "cockpit"
 path = "src/main.rs"
@@ -17,8 +16,7 @@ path = "src/main.rs"
 serde_json = "1"
 base64 = "0.22"
 
-# Binário pequeno: ele é empacotado DUAS vezes no macOS (arm64 + x86_64, unidos
-# com lipo) e uma vez em cada outra plataforma.
+# Small binary optimized for universal lipo packaging.
 [profile.release]
 opt-level = "z"
 lto = true

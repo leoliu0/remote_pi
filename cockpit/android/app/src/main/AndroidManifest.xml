@@ -1,6 +1,5 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-    <!-- SSH (dartssh2) + webview do navegador embutido precisam de rede em
-         release (debug/profile já tinham; o main vale pra todos os builds). -->
+    <!-- SSH + embedded webview need internet permission in release builds. -->
     <uses-permission android:name="android.permission.INTERNET"/>
     <application
         android:label="Cockpit Remote"

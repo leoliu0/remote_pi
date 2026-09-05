@@ -16,7 +16,7 @@ publish_to: "none" # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.2.4+12
+version: 1.2.28+40
 
 environment:
   sdk: ^3.11.5
@@ -46,6 +46,9 @@ dependencies:
   # Local session cache (per-peer chat history)
   hive: ^2.2.3
   hive_flutter: ^1.1.0
+  # App-support dir for the file-backed relay-URL backup (survives
+  # secure-store/keystore resets on Android).
+  path_provider: ^2.1.5
 
   # Owner-key sync (plan 23) — Ed25519 keypair persisted in iCloud
   # Keychain / Android Block Store. Local path dep, not pub.dev.

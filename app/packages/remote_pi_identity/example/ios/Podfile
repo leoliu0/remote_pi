@@ -1,4 +1,4 @@
-# plan/23 § "Versão mínima iOS" — example app standardizes on iOS 26
+# plan/23 § "Minimum iOS version" — example app standardizes on iOS 26
 # so we can use modern Keychain/CryptoKit APIs without fallback paths.
 platform :ios, '26.0'
 

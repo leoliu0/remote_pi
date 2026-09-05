@@ -219,17 +219,20 @@ class _CompactionBubbleState extends State<CompactionBubble> {
 
 class AssistantBubble extends StatelessWidget {
   final AssistantMsg message;
-  const AssistantBubble(this.message, {super.key});
+  final bool brief;
+  const AssistantBubble(this.message, {super.key, this.brief = false});
 
   @override
   Widget build(BuildContext context) {
+    final text = brief ? stripThinkingTrace(message.text) : message.text;
+    if (text.isEmpty) return const SizedBox.shrink();
     // Plan/32b — agent output is rendered as Markdown (GFM + code blocks),
     // spanning the FULL content width (the message list already pads 16px on
     // each side) — unlike the user's right-aligned chat bubble, which stays
     // capped. Selectable so prose/code can be copied.
     return SizedBox(
       width: double.infinity,
-      child: AgentMarkdown(message.text, selectable: true),
+      child: AgentMarkdown(text, selectable: true),
     );
   }
 }

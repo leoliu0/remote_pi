@@ -76,6 +76,11 @@ import {
 } from "./extension_ui_bridge.js";
 import { roomIdFor } from "./rooms.js";
 import { registerAgentTools } from "./session/tools.js";
+import {
+  registerAskWrapperTool,
+  handleAskResponse,
+  getPendingAskRequests,
+} from "./session/ask_tool.js";
 import { formatPeerInventory } from "./session/peer_inventory.js";
 import { MeshNode } from "./session/mesh_node.js";
 import {
@@ -83,6 +88,7 @@ import {
   handleModelSet,
   handleThinkingSet,
   handleListModels,
+  handleReloadPlugins,
   type ActionCtx,
 } from "./actions/handlers.js";
 import { ensureModelRegistry } from "./actions/registry.js";
@@ -108,7 +114,7 @@ import {
 } from "./session/local_config.js";
 import { runSetupWizard, type WizardUI } from "./session/setup_wizard.js";
 import { updateFooter, type FooterState } from "./ui/footer.js";
-import { join, dirname, resolve, extname, isAbsolute } from "node:path";
+import { join, dirname, resolve, extname, isAbsolute, basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chmodSync, mkdtempSync, mkdirSync, copyFileSync, existsSync, unlinkSync, readFileSync, writeFileSync, realpathSync, readdirSync, statSync } from "node:fs";
 import { createInterface } from "node:readline";
@@ -228,6 +234,16 @@ let _myRoomId: string | null = null;   // this Pi's room id (derived from cwd)
 let _myRoomMeta: { name: string; cwd: string; model?: string; thinking?: ThinkingLevel; working?: boolean } | null = null;
 let _currentModel: string | undefined = undefined;  // last-known model name
 let _currentThinking: ThinkingLevel | undefined = undefined;  // last-known thinking level
+/** True while the user's selected "auto" is the effective source of truth.
+ * While set, clamped SDK `thinking_level_select` echoes must not overwrite
+ * the persisted/displayed "auto". Cleared when a concrete level is picked. */
+let _autoSelected = false;
+
+// Streaming block phase for the current turn. The SDK's delta stream carries
+// no block separators, so message_update injects "\n\n" between consecutive
+// text blocks and wraps thinking blocks in <think>…</think> (the app's brief
+// mode strips those; same handling as native think-tag models).
+let _streamPhase: "text" | "thinking" | "tool" | null = null;
 
 // ── Agent-network session (plano 19) ──────────────────────────────────────────
 // MeshNode owns both the local UDS mesh (SessionPeer) and the optional
@@ -288,7 +304,7 @@ function _refreshSessionPeerCount(
 }
 
 /** Friendly model name for room_meta (plano 18). undefined when SDK has none yet. */
-function _currentModelName(): string | undefined {
+export function _currentModelName(): string | undefined {
   return _currentModel;
 }
 
@@ -308,6 +324,7 @@ function _setCurrentModel(name: string): void {
     _relay.sendControl({ type: "room_meta_update", room_id: _myRoomId, meta: { model: name } });
   }
 }
+
 
 /**
  * Plan/32: publish the `working` flag as room_meta (raw, no debounce — the
@@ -854,8 +871,175 @@ type AndroidQueuedItem = QueuedMessageItem & { editable: true };
 let _queuedItems: AndroidQueuedItem[] = [];
 
 /**
- * Hydrate _messageBuffer from the active Pi sessionManager so existing
- * turns (messages, tool calls, compactions) from before remote-pi connected
+ * Scans known agent session directories (~/.omp, ~/.pi, ~/.claude) for the most
+ * recently modified .jsonl session file corresponding to a given cwd.
+ */
+export function _findMostRecentSessionFile(cwd: string): string | null {
+  try {
+    const home = homedir();
+    const resolvedCwd = resolve(cwd);
+    const isOmp = existsSync(join(home, ".omp", "agent"));
+    const roots = isOmp
+      ? [
+          join(home, ".omp", "agent", "sessions"),
+          join(home, ".pi", "agent", "sessions"),
+          join(home, ".claude", "projects"),
+        ]
+      : [
+          join(home, ".pi", "agent", "sessions"),
+          join(home, ".omp", "agent", "sessions"),
+          join(home, ".claude", "projects"),
+        ];
+    if (process.env["PI_AGENT_DIR"]) {
+      roots.push(join(process.env["PI_AGENT_DIR"], "sessions"));
+    }
+    if (process.env["OMP_DIR"]) {
+      roots.push(join(process.env["OMP_DIR"], "agent", "sessions"));
+    }
+
+    const dirNames = [
+      `--${resolvedCwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`,
+      `-${resolvedCwd.replace(home, "").replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}`,
+      `-${resolvedCwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}`,
+      basename(resolvedCwd),
+    ];
+
+    const candidateFiles: Array<{ path: string; mtime: number; size: number }> = [];
+
+    for (const root of roots) {
+      if (!existsSync(root)) continue;
+      for (const d of dirNames) {
+        const dirPath = join(root, d);
+        if (!existsSync(dirPath)) continue;
+        try {
+          const entries = readdirSync(dirPath);
+          for (const f of entries) {
+            if (!f.endsWith(".jsonl")) continue;
+            const filePath = join(dirPath, f);
+            try {
+              const st = statSync(filePath);
+              if (st.size > 0) {
+                candidateFiles.push({ path: filePath, mtime: st.mtimeMs, size: st.size });
+              }
+            } catch {}
+          }
+        } catch {}
+      }
+    }
+
+    if (candidateFiles.length === 0) return null;
+
+    // Prefer files with populated conversation history (> 20KB) over blank startup stubs (< 5KB)
+    candidateFiles.sort((a, b) => {
+      const aRich = a.size > 20480;
+      const bRich = b.size > 20480;
+      if (aRich && !bRich) return -1;
+      if (!aRich && bRich) return 1;
+      return b.mtime - a.mtime;
+    });
+
+    return candidateFiles[0]?.path || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Parses messages from a .jsonl session file into BufferMsg[] format,
+ * handling omp/pi/claude session formats, compaction events, and custom messages.
+ */
+export function _loadMessagesFromJsonlFile(filePath: string): BufferMsg[] {
+  try {
+    const content = readFileSync(filePath, "utf8");
+    const lines = content.split("\n");
+    const msgs: BufferMsg[] = [];
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try {
+        const e = JSON.parse(line) as Record<string, unknown>;
+        const ts = typeof e.timestamp === "number"
+          ? e.timestamp
+          : typeof e.timestamp === "string"
+          ? new Date(e.timestamp).getTime()
+          : Date.now();
+
+        if (e.type === "message" && e.message && typeof e.message === "object") {
+          const m = e.message as BufferMsg;
+          msgs.push({
+            ...m,
+            timestamp: typeof m.timestamp === "number" ? m.timestamp : ts,
+          });
+        } else if (e.type === "compaction" || e.type === "branch_summary") {
+          msgs.push({
+            role: "compaction",
+            content: typeof e.summary === "string" ? e.summary : "",
+            timestamp: ts,
+            tokensBefore: typeof e.tokensBefore === "number" ? e.tokensBefore : 0,
+          });
+        } else if (e.type === "custom_message" && e.content) {
+          if (e.display !== false && !String(e.customType ?? "").startsWith("remote-pi:")) {
+            msgs.push({
+              role: "user",
+              content: e.content as any,
+              timestamp: ts,
+            });
+          }
+        } else if (e.role === "user" || e.role === "assistant" || e.role === "toolResult") {
+          msgs.push({
+            ...e as unknown as BufferMsg,
+            timestamp: ts,
+          });
+        }
+      } catch {
+        // Skip malformed line
+      }
+    }
+    return msgs;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Returns true when `ctx` belongs to a subagent/child session (e.g. `task`).
+ * Subagent sessions in Oh My Pi inherit parent extensions but run headlessly
+ * without an interactive UI (`hasUI: false`), have a `session_init` entry with a task,
+ * or have session files inside a parent session folder.
+ * Subagents MUST NOT take over or tear down the parent's relay room or cwd lock.
+ */
+export function _isSubagentSession(ctx?: unknown): boolean {
+  if (!ctx || typeof ctx !== "object") return false;
+  const c = ctx as Record<string, unknown>;
+  // Check explicit hasUI flag (ExtensionContext in runner.ts sets hasUI: false for subagents)
+  if (c["hasUI"] === false) return true;
+  const sm = c["sessionManager"] as {
+    getSessionFile?: () => string | undefined;
+    getEntries?: () => Array<{ type?: string; task?: unknown }>;
+  } | undefined;
+  if (sm) {
+    const file = sm.getSessionFile?.();
+    if (file) {
+      const normalized = file.replace(/\\/g, "/");
+      // Subagent session files are nested: `<parent-session-dir>/<subagent-id>.jsonl`
+      // where `<parent-session-dir>` is `<timestamp>_<parent-id>` without `.jsonl`.
+      const parts = normalized.split("/");
+      if (parts.length >= 2) {
+        const parentDir = parts[parts.length - 2];
+        if (parentDir && parentDir.includes("_")) return true;
+      }
+    }
+    const entries = sm.getEntries?.();
+    if (Array.isArray(entries)) {
+      for (const e of entries) {
+        if (e && e.type === "session_init" && e.task !== undefined) return true;
+      }
+    }
+  }
+  return false;
+}
+/**
+ * Hydrate _messageBuffer from the active Pi sessionManager or from disk session files
+ * so existing turns (messages, tool calls, compactions) from before remote-pi connected
  * or started are immediately available to the mobile app on session_sync.
  */
 export function _hydrateMessageBufferFromSession(sessionManager?: unknown, fallbackCwd?: string): void {
@@ -872,16 +1056,23 @@ export function _hydrateMessageBufferFromSession(sessionManager?: unknown, fallb
       // Non-fatal
     }
   }
-  if (!sm) return;
   try {
     const msgs: BufferMsg[] = [];
-    if (typeof sm.getBranch === "function" || typeof sm.getEntries === "function") {
+    let lastSessionModel: string | undefined;
+    if (sm && (typeof sm.getBranch === "function" || typeof sm.getEntries === "function")) {
       const branch = (typeof sm.getBranch === "function" ? sm.getBranch() : null) ??
                      (typeof sm.getEntries === "function" ? sm.getEntries() : null);
       if (Array.isArray(branch) && branch.length > 0) {
         for (const entry of branch) {
           if (!entry || typeof entry !== "object") continue;
           const e = entry as Record<string, unknown>;
+          if (e.type === "model_change" && typeof e.model === "string") {
+            lastSessionModel = e.model;
+          } else if (e.model && typeof e.model === "string") {
+            lastSessionModel = e.model;
+          } else if (e.message && typeof e.message === "object" && typeof (e.message as any).model === "string") {
+            lastSessionModel = (e.message as any).model;
+          }
           const ts = typeof e.timestamp === "number"
             ? e.timestamp
             : typeof e.timestamp === "string"
@@ -902,11 +1093,13 @@ export function _hydrateMessageBufferFromSession(sessionManager?: unknown, fallb
               tokensBefore: typeof e.tokensBefore === "number" ? e.tokensBefore : 0,
             });
           } else if (e.type === "custom_message" && e.content) {
-            msgs.push({
-              role: "user",
-              content: e.content,
-              timestamp: ts,
-            });
+            if (e.display !== false && !String(e.customType ?? "").startsWith("remote-pi:")) {
+              msgs.push({
+                role: "user",
+                content: e.content,
+                timestamp: ts,
+              });
+            }
           } else if (e.role === "user" || e.role === "assistant" || e.role === "toolResult") {
             msgs.push({
               ...e as unknown as BufferMsg,
@@ -916,7 +1109,10 @@ export function _hydrateMessageBufferFromSession(sessionManager?: unknown, fallb
         }
       }
     }
-    if (msgs.length === 0 && typeof sm.buildSessionContext === "function") {
+    if (lastSessionModel) {
+      _setCurrentModel(lastSessionModel);
+    }
+    if (msgs.length === 0 && sm && typeof sm.buildSessionContext === "function") {
       const built = sm.buildSessionContext();
       if (built && Array.isArray(built.messages)) {
         for (const m of built.messages) {
@@ -926,10 +1122,19 @@ export function _hydrateMessageBufferFromSession(sessionManager?: unknown, fallb
         }
       }
     }
-    if (msgs.length === 0 && Array.isArray(sm.messages)) {
+    if (msgs.length === 0 && sm && Array.isArray(sm.messages)) {
       for (const m of sm.messages) {
         if (m && typeof m === "object") {
           msgs.push(m as BufferMsg);
+        }
+      }
+    }
+    if (msgs.length === 0 && fallbackCwd) {
+      const diskFile = _findMostRecentSessionFile(fallbackCwd);
+      if (diskFile) {
+        const diskMsgs = _loadMessagesFromJsonlFile(diskFile);
+        if (diskMsgs.length > 0) {
+          msgs.push(...diskMsgs);
         }
       }
     }
@@ -939,7 +1144,7 @@ export function _hydrateMessageBufferFromSession(sessionManager?: unknown, fallb
         _sessionStartedAt = msgs[0]?.timestamp ?? Date.now();
       }
     }
-  } catch (_err) {
+  } catch {
     // Non-fatal fallback
   }
 }
@@ -997,28 +1202,35 @@ let _turnActive = false;
 let _agentActive = false;
 
 function _isBusyForQueueDrain(): boolean {
-  return _turnActive || _agentActive || _currentTurnId !== null || _myRoomMeta?.working === true;
+  return _turnActive || _agentActive || _currentTurnId !== null;
 }
 
 function _maybeFinalizeTurn(): void {
   if (_turnActive || _agentActive) return;
-  if (_anyPeerActive() && _currentTurnId) {
-    const turnId = _currentTurnId;
-    _broadcastToActive({ type: "agent_done", in_reply_to: turnId });
-    for (let i = _messageBuffer.length - 1; i >= 0; i--) {
-      const last = _messageBuffer[i];
-      if (last?.role !== "assistant") continue;
-      const fullText = _extractAssistantText(last.content);
-      if (fullText) {
-        _broadcastToActive({
-          type: "agent_message",
-          in_reply_to: turnId,
-          text: fullText,
-        });
-      }
-      break;
+  if (_anyPeerActive()) {
+    const turnId = _currentTurnId ?? "turn";
+    // Close a dangling <think> wrapper before the client finalizes the turn.
+    if (_streamPhase === "thinking") {
+      _broadcastToActive({ type: "agent_chunk", in_reply_to: turnId, delta: "</think>" });
     }
-    _currentTurnId = null;
+    _streamPhase = null;
+    _broadcastToActive({ type: "agent_done", in_reply_to: turnId });
+    if (_currentTurnId) {
+      for (let i = _messageBuffer.length - 1; i >= 0; i--) {
+        const last = _messageBuffer[i];
+        if (last?.role !== "assistant") continue;
+        const fullText = _extractAssistantText(last.content);
+        if (fullText) {
+          _broadcastToActive({
+            type: "agent_message",
+            in_reply_to: turnId,
+            text: fullText,
+          });
+        }
+        break;
+      }
+      _currentTurnId = null;
+    }
   }
   _maybeDrainQueuedItem();
 }
@@ -1215,6 +1427,68 @@ function _persistModelDefault(provider: string, modelId: string): void {
   }
 }
 
+function _persistThinkingDefault(level: string): void {
+  const jsonPaths = [
+    join(homedir(), ".pi", "agent", "settings.json"),
+    join(process.cwd(), ".pi", "settings.json"),
+  ];
+  for (const path of jsonPaths) {
+    try {
+      let obj: Record<string, unknown> = {};
+      try {
+        const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
+        if (parsed && typeof parsed === "object") obj = parsed as Record<string, unknown>;
+      } catch {}
+      obj["defaultThinkingLevel"] = level;
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, JSON.stringify(obj, null, 2));
+    } catch {}
+  }
+
+  const ompConfigPath = join(homedir(), ".omp", "agent", "config.yml");
+  try {
+    if (existsSync(ompConfigPath)) {
+      let content = readFileSync(ompConfigPath, "utf8");
+      if (content.includes("defaultThinkingLevel:")) {
+        content = content.replace(/defaultThinkingLevel:\s*.+/g, `defaultThinkingLevel: ${level}`);
+      } else {
+        content += `\ndefaultThinkingLevel: ${level}\n`;
+      }
+      writeFileSync(ompConfigPath, content);
+    }
+  } catch {}
+}
+
+function _mapOmpThinkingToPi(raw: string | undefined): ThinkingLevel | undefined {
+  if (!raw) return undefined;
+  const normalized = raw.trim().toLowerCase();
+  if (normalized === "auto" || normalized === "inherit") return "auto";
+  if (
+    normalized === "off" ||
+    normalized === "minimal" ||
+    normalized === "low" ||
+    normalized === "medium" ||
+    normalized === "high" ||
+    normalized === "xhigh" ||
+    normalized === "max"
+  ) {
+    return normalized;
+  }
+  return undefined;
+}
+
+function _readOmpThinkingLevel(): ThinkingLevel | undefined {
+  try {
+    const ompConfigPath = join(homedir(), ".omp", "agent", "config.yml");
+    if (!existsSync(ompConfigPath)) return undefined;
+    const content = readFileSync(ompConfigPath, "utf8");
+    const match = content.match(/defaultThinkingLevel:\s*([^\s#]+)/);
+    return _mapOmpThinkingToPi(match?.[1]);
+  } catch {
+    return undefined;
+  }
+}
+
 type ClientUserMessage = Extract<ClientMessage, { type: "user_message" }>;
 
 // Per-turn messaging state
@@ -1258,7 +1532,7 @@ let _lockedName: string | null = null;
 // Read on every session_sync so QA can `export REMOTE_PI_SYNC_LIMIT=N` between
 // runs without restarting the extension. The value is also clamped against
 // the client-provided `limit` (server is authoritative).
-const SYNC_LIMIT_DEFAULT = 50000;
+const SYNC_LIMIT_DEFAULT = 200;
 function _getSyncLimit(): number {
   const raw = process.env["REMOTE_PI_SYNC_LIMIT"];
   const parsed = raw ? parseInt(raw, 10) : NaN;
@@ -2221,6 +2495,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   // session network natively. Getter captures `_meshNode` live so the
   // tool always sees the current state.
   registerAgentTools(pi, () => _meshNode?.peer() ?? null);
+  registerAskWrapperTool(pi, _broadcastToActive, () => _anyPeerActive());
   _registerReceivedImageRenderer(pi);
 
   // Received-image preview entries are for local TUI display only. Pi's custom
@@ -2277,11 +2552,20 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   // of starting null. SDK fires `thinking_level_select` on settings load
   // AND on every user toggle (matching `model_select`'s behavior), so
   // late-pairing apps see the current level via `room_meta_updated`.
+  //
+  // "auto" (app-level) maps to clearing the SDK override; the SDK then
+  // clamps to the model's lowest supported level and emits THAT level
+  // here. We must NOT let that resolved level overwrite the user's
+  // "auto" choice — otherwise the app's "auto" highlight flips to e.g.
+  // "min" and `_persistThinkingDefault` bakes the resolved level to disk,
+  // permanently replacing "auto". `_autoSelected` tracks the window.
   pi.on("thinking_level_select", (event) => {
     const level = event?.level as ThinkingLevel | undefined;
     if (!level) return;
+    if (_autoSelected) return;
     _currentThinking = level;
     if (_myRoomMeta) _myRoomMeta = { ..._myRoomMeta, thinking: level };
+    try { _persistThinkingDefault(level); } catch {}
     if (!_relay || !_myRoomId) return;
     _relay.sendControl({
       type: "room_meta_update",
@@ -2309,6 +2593,14 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     if (_emittedToolRequests.has(toolCallId)) return;
     _emittedToolRequests.add(toolCallId);
     if (!_anyPeerActive()) return;
+    // A tool call ends the current text/thinking block. Close a dangling
+    // <think> wrapper BEFORE the tool_request so the client finalizes a
+    // well-formed segment. The next block starts a fresh bubble (the app
+    // splits at tool boundaries), so no separator is needed here.
+    if (_streamPhase === "thinking") {
+      _broadcastToActive({ type: "agent_chunk", in_reply_to: _currentTurnId ?? "turn", delta: "</think>" });
+    }
+    if (_streamPhase !== null) _streamPhase = "tool";
     _broadcastToActive({
       type: "tool_request",
       tool_call_id: toolCallId,
@@ -2321,12 +2613,49 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     if (!_anyPeerActive() || !_currentTurnId) return;
     const ae = event.assistantMessageEvent as Record<string, unknown> | undefined;
     if (!ae) return;
-    if (ae.type === "text_delta" && typeof ae.delta === "string") {
-      _broadcastToActive({ type: "agent_chunk", in_reply_to: _currentTurnId, delta: ae.delta });
+    const turnId = _currentTurnId;
+    const emit = (delta: string) =>
+      _broadcastToActive({ type: "agent_chunk", in_reply_to: turnId, delta });
+    if (ae.type === "start") {
+      // New assistant message (e.g. a post-steer continuation): close a
+      // dangling thinking wrapper so it can't leak into the next message.
+      // Keep the phase otherwise: "text" still separates the two messages
+      // with a paragraph break; "tool" needs none (the app splits bubbles
+      // at tool boundaries).
+      if (_streamPhase === "thinking") {
+        emit("</think>");
+        _streamPhase = "text";
+      }
+    } else if (ae.type === "text_start") {
+      // The SDK's delta stream carries no block separators — inject the
+      // paragraph break between consecutive text blocks here, or they fuse
+      // into one line on the client ("…rest.The user wants…"). After a tool
+      // boundary the app already splits bubbles, so no separator.
+      if (_streamPhase === "thinking") emit("</think>\n\n");
+      else if (_streamPhase === "text") emit("\n\n");
+      _streamPhase = "text";
+    } else if (ae.type === "thinking_start" || ae.type === "thought_start" || ae.type === "reasoning_start") {
+      if (_streamPhase === "text") emit("\n\n");
+      // Wrap reasoning in <think> so the app's brief mode strips it (same
+      // handling as models that emit native think tags).
+      emit("<think>");
+      _streamPhase = "thinking";
+    } else if (ae.type === "thinking_end" || ae.type === "thought_end" || ae.type === "reasoning_end") {
+      if (_streamPhase === "thinking") emit("</think>");
+      _streamPhase = "text";
+    } else if (ae.type === "text_delta" && typeof ae.delta === "string") {
+      emit(ae.delta);
     } else if (ae.type === "thinking_delta" || ae.type === "thought_delta" || ae.type === "reasoning_delta") {
       const delta = (ae.delta ?? ae.thinking ?? ae.thought) as string | undefined;
       if (delta && typeof delta === "string") {
-        _broadcastToActive({ type: "agent_chunk", in_reply_to: _currentTurnId, delta });
+        // Defensive: some providers stream thinking deltas without a
+        // thinking_start — open the wrapper lazily.
+        if (_streamPhase !== "thinking") {
+          if (_streamPhase === "text") emit("\n\n");
+          emit("<think>");
+          _streamPhase = "thinking";
+        }
+        emit(delta);
       }
     } else if (ae.type === "tool_call" || ae.type === "tool_use" || ae.type === "tool_call_delta") {
       const tcid = (ae.toolCallId ?? ae.id ?? ae.tool_call_id) as string | undefined;
@@ -2408,6 +2737,28 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     }
   });
 
+  let _workingOffTimer: NodeJS.Timeout | null = null;
+  function _scheduleWorkingMetaOff(delayMs = 150): void {
+    clearTimeout(_workingOffTimer ?? undefined);
+    if (delayMs <= 0) {
+      _workingOffTimer = null;
+      if (_agentActive || _turnActive) return;
+      if (_myRoomMeta) _myRoomMeta = { ..._myRoomMeta, working: false };
+      if (_relay && _myRoomId) {
+        _relay.sendControl({ type: "room_meta_update", room_id: _myRoomId, meta: { working: false } });
+      }
+      return;
+    }
+    _workingOffTimer = setTimeout(() => {
+      _workingOffTimer = null;
+      if (_agentActive || _turnActive) return;
+      if (_myRoomMeta) _myRoomMeta = { ..._myRoomMeta, working: false };
+      if (_relay && _myRoomId) {
+        _relay.sendControl({ type: "room_meta_update", room_id: _myRoomId, meta: { working: false } });
+      }
+    }, delayMs);
+  }
+
   pi.on("agent_end", () => {
     _agentActive = false;
     for (const steer of _pendingSteers) {
@@ -2416,6 +2767,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     _pendingSteers = [];
     _flushPendingReceivedImagePreviews();
     _lastConsumedSteerText = null;
+    _scheduleWorkingMetaOff(_turnActive ? 150 : 0);
     _maybeFinalizeTurn();
 
     // agent_end listeners finish before pi-agent-core clears its active run.
@@ -2438,6 +2790,9 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   pi.on("turn_start", (_event, ctx) => {
     _turnActive = true;
     _agentActive = true;
+    _streamPhase = null;
+    clearTimeout(_workingOffTimer ?? undefined);
+    _workingOffTimer = null;
     _lastEventCtx = ctx as unknown as typeof _lastEventCtx;
     if (ctx && (ctx as { sessionManager?: unknown }).sessionManager) {
       _hydrateMessageBufferFromSession((ctx as { sessionManager?: unknown }).sessionManager);
@@ -2460,16 +2815,9 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   });
   pi.on("turn_end", () => {
     _turnActive = false;
-    // Plan/32 Part B: publish working=false as room_meta (raw, no debounce).
-    if (_myRoomMeta) _myRoomMeta = { ..._myRoomMeta, working: false };
-    if (_relay && _myRoomId) {
-      _relay.sendControl({ type: "room_meta_update", room_id: _myRoomId, meta: { working: false } });
-    }
+    _scheduleWorkingMetaOff(_agentActive ? 150 : 0);
     _maybeFinalizeTurn();
   });
-
-  // Plan/32: compaction feedback. compact() doesn't run a turn, so bracket it
-  // with working=true/false here. Returning void = no veto → default
   // compaction proceeds.
   pi.on("session_before_compact", (event) => {
     if (event.preparation) {
@@ -2504,6 +2852,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   // New session. Fires on startup/new/fork/reload/resume; the ctx is always
   // bound to the current session.
   pi.on("session_start", (_event, ctx) => {
+    if (_isSubagentSession(ctx)) return;
     _lastEventCtx = ctx;
     if (ctx && (ctx as { sessionManager?: unknown }).sessionManager) {
       _hydrateMessageBufferFromSession((ctx as { sessionManager?: unknown }).sessionManager);
@@ -2600,7 +2949,8 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   // up exactly ONE connection bound to the restored session. Idempotent +
   // best-effort: every step is guarded so a partially-initialised instance
   // (e.g. shutdown lands mid-`_cmdRoot`) tears down without throwing.
-  pi.on("session_shutdown", async () => {
+  pi.on("session_shutdown", async (_event, ctx) => {
+    if (_isSubagentSession(ctx)) return;
     // Revoke async authority synchronously, before any teardown await. `_disposed`
     // blocks the outgoing continuation immediately; the root and candidate
     // generations keep queued work stale even if a same-module session_start
@@ -3179,13 +3529,26 @@ async function _cmdStart(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<voi
     } catch { /* defensive — never block start on a model lookup */ }
   }
 
-  // Plan/28 Wave D.1: seed thinking from the SDK's current level so the
-  // first room_meta hello already carries it. `pi.getThinkingLevel()` is
-  // safe at this point — extension factory has been bound by the SDK
-  // before any command handler fires. Future toggles go through the
-  // `thinking_level_select` event handler above.
+  // Seed thinking from OMP config.yml first so the phone matches the CLI,
+  // then fall back to the SDK's current level.
+  // "auto" on the wire means "no override" — pass `undefined` to the SDK
+  // so the model runs at its native default, and raise `_autoSelected` so
+  // the SDK's clamped echo (thinking_level_select) can't overwrite the
+  // persisted/displayed "auto".
   try {
-    _currentThinking = _pi?.getThinkingLevel() as ThinkingLevel | undefined;
+    const ompThinking = _readOmpThinkingLevel();
+    const sdkThinking = _pi?.getThinkingLevel() as ThinkingLevel | undefined;
+    _currentThinking = ompThinking ?? sdkThinking;
+    _autoSelected = ompThinking === "auto";
+    if (ompThinking && _pi && typeof _pi.setThinkingLevel === "function") {
+      // Bundled SDK types (0.79) predate "max"; the runtime pi (≥0.84)
+      // accepts it. Cast across the version gap.
+      try {
+        _pi.setThinkingLevel(
+          (ompThinking === "auto" ? undefined : ompThinking) as never,
+        );
+      } catch {}
+    }
   } catch { /* defensive — never block /remote-pi start on this */ }
 
   const roomMeta: { name: string; cwd: string; model?: string; thinking?: ThinkingLevel } = { name: sessionName, cwd };
@@ -4661,7 +5024,9 @@ export function _routeClientMessageFrom(
     return;
   }
   if (msg.type === "extension_ui_response") {
-    _extensionUiBridge?.respond(msg);
+    if (!handleAskResponse(msg)) {
+      _extensionUiBridge?.respond(msg);
+    }
     return;
   }
   if (!_pi) return;
@@ -4870,7 +5235,9 @@ export function _routeClientMessageFrom(
       try {
         handleThinkingSet(_pi, sender, msg, (lvl) => {
           _currentThinking = lvl;
+          _autoSelected = lvl === "auto";
           if (_myRoomMeta) _myRoomMeta = { ..._myRoomMeta, thinking: lvl };
+          try { _persistThinkingDefault(lvl); } catch {}
           if (_relay && _myRoomId) {
             _relay.sendControl({
               type: "room_meta_update",
@@ -4903,6 +5270,22 @@ export function _routeClientMessageFrom(
           in_reply_to: msg.id,
           code: "internal_error",
           message: err instanceof Error ? err.message : String(err),
+        });
+      }
+      break;
+    case "reload_plugins":
+      try {
+        void handleReloadPlugins(
+          ((_lastEventCtx ?? _lastCtx) as ActionCtx | null),
+          sender,
+          msg,
+        );
+      } catch (err: any) {
+        sender.send({
+          type: "action_error",
+          in_reply_to: msg.id,
+          action: "reload_plugins",
+          error: err instanceof Error ? err.message : String(err),
         });
       }
       break;
@@ -4974,6 +5357,9 @@ function _handleSessionSync(
   // pop a modal on owner B. Flows past FLOW_TTL_MS are already gone from the
   // bridge, so an abandoned flow is never resurrected.
   for (const req of _extensionUiBridge?.pendingRequests() ?? []) {
+    sender.send(req);
+  }
+  for (const req of getPendingAskRequests()) {
     sender.send(req);
   }
 
@@ -5163,14 +5549,32 @@ function _stringArg(args: ToolArgs, keys: string[]): string {
   return "";
 }
 
-function _stringifyContent(content: unknown): string {
+function _stringifyContent(content: unknown, includeImages = false): string {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return "";
   return content
     .map((c) => {
       if (!c || typeof c !== "object") return "";
-      const block = c as { type?: string; text?: unknown };
-      return block.type === "text" ? String(block.text ?? "") : "";
+      const block = c as Record<string, unknown>;
+      if (block.type === "text") return String(block.text ?? "");
+      if (includeImages) {
+        if (block.type === "image") {
+          if (typeof block.data === "string" && block.data) {
+            const mime = typeof block.mimeType === "string" ? block.mimeType : "image/png";
+            return `\n![image](data:${mime};base64,${block.data})\n`;
+          }
+          if (block.source && typeof block.source === "object" && typeof (block.source as Record<string, unknown>).data === "string") {
+            const src = block.source as Record<string, unknown>;
+            const mime = typeof src.media_type === "string" ? src.media_type : "image/png";
+            return `\n![image](data:${mime};base64,${src.data})\n`;
+          }
+        }
+        if (block.type === "image_url") {
+          const url = typeof block.image_url === "string" ? block.image_url : (block.image_url as Record<string, unknown>)?.url;
+          if (url) return `\n![image](${url})\n`;
+        }
+      }
+      return "";
     })
     .join("");
 }
@@ -5186,14 +5590,10 @@ function _stringifyContent(content: unknown): string {
  */
 function _stringifyToolResult(value: unknown): string {
   if (typeof value === "string") return value;
-  if (Array.isArray(value)) return _stringifyContent(value);
+  if (Array.isArray(value)) return _stringifyContent(value, true);
   if (value !== null && typeof value === "object") {
-    // The LIVE `tool_execution_end` result is a WRAPPER object
-    // `{ content: [{type:"text",...}], details:{} }` — not the bare
-    // content-array the history path (`m.content`) carries. Unwrap `content`
-    // (or a plain `text`) so live == re-sync; JSON is only the last fallback.
     const obj = value as { content?: unknown; text?: unknown };
-    if (Array.isArray(obj.content)) return _stringifyContent(obj.content);
+    if (Array.isArray(obj.content)) return _stringifyContent(obj.content, true);
     if (typeof obj.text === "string") return obj.text;
     try { return JSON.stringify(value); } catch { return ""; }
   }
@@ -5221,12 +5621,17 @@ function _imagesFromContent(content: unknown): WireImage[] {
 
 /**
  * Inlines local markdown image references as data URIs (e.g. `data:image/png;base64,...`)
- * when the referenced file exists on disk and is under 8MB.
+ * when the referenced file exists on disk and is under 16MB.
  */
 export function _inlineLocalMarkdownImages(text: string, baseDir?: string): string {
   if (!text || typeof text !== "string") return text;
+  const cwd = baseDir ??
+    (_lastEventCtx && "cwd" in _lastEventCtx && typeof _lastEventCtx.cwd === "string" ? _lastEventCtx.cwd : null) ??
+    (_lastCtx && "cwd" in _lastCtx && typeof _lastCtx.cwd === "string" ? _lastCtx.cwd : null) ??
+    process.cwd();
+
   const imgRegex = /!\[([\s\S]*?)\]\((<?)([^\s\)>]+)(>?)(?:\s+["']([\s\S]*?)["'])?\)/g;
-  return text.replace(imgRegex, (match, alt, _openAngle, rawUrl, _closeAngle, title) => {
+  let result = text.replace(imgRegex, (match, alt, _openAngle, rawUrl, _closeAngle, title) => {
     let url = String(rawUrl ?? "").trim();
     if (!url) return match;
     if (url.startsWith("data:") || url.startsWith("http://") || url.startsWith("https://")) {
@@ -5242,17 +5647,14 @@ export function _inlineLocalMarkdownImages(text: string, baseDir?: string): stri
     }
     try {
       filePath = decodeURIComponent(filePath);
-    } catch {
-      // Keep as-is if decoding fails
-    }
-    const cwd = baseDir ?? process.cwd();
+    } catch {}
     if (!isAbsolute(filePath)) {
       filePath = resolve(cwd, filePath);
     }
     try {
       if (existsSync(filePath)) {
         const stat = statSync(filePath);
-        if (stat.isFile() && stat.size > 0 && stat.size <= 8 * 1024 * 1024) {
+        if (stat.isFile() && stat.size > 0 && stat.size <= 16 * 1024 * 1024) {
           const ext = extname(filePath).toLowerCase();
           let mime: string | undefined;
           if (ext === ".png") mime = "image/png";
@@ -5270,19 +5672,80 @@ export function _inlineLocalMarkdownImages(text: string, baseDir?: string): stri
           }
         }
       }
-    } catch {
-      // Ignore filesystem errors and keep original match
-    }
+    } catch {}
     return match;
   });
+
+  // Also inline HTML <img src="..."> tags
+  const htmlImgRegex = /<img\s+([^>]*?)src=["']([^"']+)["']([^>]*?)\/?>/gi;
+  result = result.replace(htmlImgRegex, (match, before, src, after) => {
+    let url = String(src ?? "").trim();
+    if (!url || url.startsWith("data:") || url.startsWith("http://") || url.startsWith("https://")) {
+      return match;
+    }
+    let filePath = url;
+    if (filePath.startsWith("file://")) {
+      try { filePath = fileURLToPath(filePath); } catch { filePath = filePath.substring(7); }
+    }
+    try { filePath = decodeURIComponent(filePath); } catch {}
+    if (!isAbsolute(filePath)) {
+      filePath = resolve(cwd, filePath);
+    }
+    try {
+      if (existsSync(filePath)) {
+        const stat = statSync(filePath);
+        if (stat.isFile() && stat.size > 0 && stat.size <= 16 * 1024 * 1024) {
+          const ext = extname(filePath).toLowerCase();
+          let mime: string | undefined;
+          if (ext === ".png") mime = "image/png";
+          else if (ext === ".jpg" || ext === ".jpeg") mime = "image/jpeg";
+          else if (ext === ".webp") mime = "image/webp";
+          else if (ext === ".gif") mime = "image/gif";
+          else if (ext === ".svg") mime = "image/svg+xml";
+          else if (ext === ".bmp") mime = "image/bmp";
+          if (mime) {
+            const buf = readFileSync(filePath);
+            const b64 = buf.toString("base64");
+            const dataUri = `data:${mime};base64,${b64}`;
+            return `<img ${before}src="${dataUri}"${after} />`;
+          }
+        }
+      }
+    } catch {}
+    return match;
+  });
+
+  return result;
 }
 
-export function _extractAssistantText(content: unknown): string {
-  if (typeof content === "string") return content;
+export function _extractAssistantText(content: unknown, cwd?: string): string {
+  if (typeof content === "string") return _inlineLocalMarkdownImages(content, cwd);
   if (Array.isArray(content)) {
     return content
-      .filter((b) => b && typeof b === "object" && (b as Record<string, unknown>).type === "text")
-      .map((b) => String((b as Record<string, unknown>).text ?? ""))
+      .map((b) => {
+        if (!b || typeof b !== "object") return "";
+        const block = b as Record<string, unknown>;
+        if (block.type === "text" && block.text !== undefined) {
+          return _inlineLocalMarkdownImages(String(block.text ?? ""), cwd);
+        }
+        if (block.type === "image") {
+          if (typeof block.data === "string" && block.data) {
+            const mime = typeof block.mimeType === "string" ? block.mimeType : "image/png";
+            return `\n![image](data:${mime};base64,${block.data})\n`;
+          }
+          if (block.source && typeof block.source === "object" && typeof (block.source as Record<string, unknown>).data === "string") {
+            const src = block.source as Record<string, unknown>;
+            const mime = typeof src.media_type === "string" ? src.media_type : "image/png";
+            return `\n![image](data:${mime};base64,${src.data})\n`;
+          }
+        }
+        if (block.type === "image_url") {
+          const url = typeof block.image_url === "string" ? block.image_url : (block.image_url as Record<string, unknown>)?.url;
+          if (url) return `\n![image](${url})\n`;
+        }
+        return "";
+      })
+      .filter((s) => s.length > 0)
       .join("\n");
   }
   return "";
@@ -5299,6 +5762,7 @@ export function _extractAssistantText(content: unknown): string {
  */
 export function _mapAgentMessagesToEvents(
   messages: BufferMsg[],
+  sessionCwd?: string,
 ): SessionHistoryEvent[] {
   const events: SessionHistoryEvent[] = [];
   let lastUserId: string | null = null;
@@ -5339,14 +5803,14 @@ export function _mapAgentMessagesToEvents(
             ts,
             type: "agent_message",
             in_reply_to: lastUserId ?? `sync_${ts}`,
-            text: _inlineLocalMarkdownImages(m.content),
+            text: _inlineLocalMarkdownImages(m.content, sessionCwd),
             ...(usage ? { usage } : {}),
           });
         }
       } else if (Array.isArray(m.content)) {
         for (const raw of m.content) {
           if (!raw || typeof raw !== "object") continue;
-          const block = raw as { type?: string; text?: unknown; id?: unknown; name?: unknown; arguments?: unknown };
+          const block = raw as { type?: string; text?: unknown; id?: unknown; name?: unknown; arguments?: unknown; data?: unknown; mimeType?: unknown; source?: unknown; image_url?: unknown };
           if (block.type === "text") {
             const text = String(block.text ?? "");
             if (!text) continue;
@@ -5354,9 +5818,41 @@ export function _mapAgentMessagesToEvents(
               ts,
               type: "agent_message",
               in_reply_to: lastUserId ?? `sync_${ts}`,
-              text: _inlineLocalMarkdownImages(text),
+              text: _inlineLocalMarkdownImages(text, sessionCwd),
               ...(usage ? { usage } : {}),
             });
+          } else if (block.type === "image") {
+            let imgData = "";
+            let imgMime = "image/png";
+            if (typeof block.data === "string") {
+              imgData = block.data;
+              if (typeof block.mimeType === "string") imgMime = block.mimeType;
+            } else if (block.source && typeof block.source === "object" && typeof (block.source as Record<string, unknown>).data === "string") {
+              imgData = (block.source as Record<string, unknown>).data as string;
+              if (typeof (block.source as Record<string, unknown>).media_type === "string") {
+                imgMime = (block.source as Record<string, unknown>).media_type as string;
+              }
+            }
+            if (imgData) {
+              events.push({
+                ts,
+                type: "agent_message",
+                in_reply_to: lastUserId ?? `sync_${ts}`,
+                text: `![image](data:${imgMime};base64,${imgData})`,
+                ...(usage ? { usage } : {}),
+              });
+            }
+          } else if (block.type === "image_url") {
+            const url = typeof block.image_url === "string" ? block.image_url : (block.image_url as Record<string, unknown>)?.url;
+            if (url) {
+              events.push({
+                ts,
+                type: "agent_message",
+                in_reply_to: lastUserId ?? `sync_${ts}`,
+                text: `![image](${url})`,
+                ...(usage ? { usage } : {}),
+              });
+            }
           } else if (block.type === "toolCall") {
             events.push({
               ts,

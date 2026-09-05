@@ -1,10 +1,5 @@
-//! Transporte: uma requisição por conexão, uma linha JSON em cada direção.
-//!
-//! Mesmo socket do hook, discriminado por `type` no wire (`"cmd"` aqui,
-//! status no hook). POSIX usa socket Unix (`COCKPIT_STATUS_SOCK`); Windows usa
-//! TCP no loopback (`COCKPIT_STATUS_PORT` + `COCKPIT_STATUS_TOKEN`), porque lá
-//! não há UDS. O token só importa no TCP: o loopback é acessível por qualquer
-//! processo local, enquanto no UDS a permissão do arquivo já protege.
+//! Transport layer: single request per connection, single JSON line per direction.
+//! Uses local Unix socket on POSIX, TCP loopback with token on Windows.
 
 use std::io::{Read, Write};
 use std::time::Duration;
@@ -13,7 +8,7 @@ use serde_json::{json, Value};
 
 use crate::util::{die, env_non_empty};
 
-/// Conexão aberta com o app, abstraindo UDS x TCP.
+/// Active connection to the app, abstracting Unix vs TCP streams.
 enum Conn {
     #[cfg(unix)]
     Unix(std::os::unix::net::UnixStream),
@@ -57,25 +52,10 @@ impl Write for Conn {
     }
 }
 
-/// Abre a conexão com o app pelo transporte da plataforma. `Ok(None)` = as envs
-/// não estão setadas (não estamos dentro de um terminal do Cockpit).
-/// Flavor assado no binário pelo build (ver `build.rs`). `Some("debug")` no
-/// build de desenvolvimento.
+/// Connects to the app over platform transport.
 const FLAVOR: Option<&str> = option_env!("COCKPIT_FLAVOR");
 
-/// Sockets a tentar, em ordem: o do ambiente (injetado pelo app na PTY da aba)
-/// e, como fallback, os caminhos bem conhecidos.
-///
-/// O fallback é o que permite usar a CLI **de fora** de um terminal do Cockpit
-/// (ex.: uma ferramenta de ditado chamando `cockpit send --focused`), onde não
-/// existe env nenhuma herdada.
-///
-/// Release e debug têm sockets separados de propósito (um Cockpit de dev e um
-/// instalado rodam lado a lado), então a ordem importa: **o socket do próprio
-/// flavor vem primeiro**. Com os dois apps abertos, a CLI de dev era atendida
-/// pelo app instalado, que pode ser bem mais velho — deu "tab @focused does not
-/// exist" porque aquele app nem conhecia o sentinela. O outro flavor continua
-/// como fallback: melhor falar com o app errado do que não falar com nenhum.
+/// Candidate sockets to probe in priority order.
 #[cfg(unix)]
 fn candidate_sockets() -> Vec<String> {
     let mut out = Vec::new();
@@ -104,8 +84,7 @@ fn connect() -> Result<Option<Conn>, String> {
         let candidates = candidate_sockets();
         let mut last_err: Option<String> = None;
         for path in &candidates {
-            // Socket órfão (app fechado sem limpar) existe no disco mas recusa
-            // conexão — por isso quem decide é o connect, não o exists.
+            // Orphan socket exists on disk but refuses connection -> check connect result
             match std::os::unix::net::UnixStream::connect(path) {
                 Ok(s) => return Ok(Some(Conn::Unix(s))),
                 Err(e) => last_err = Some(e.to_string()),
@@ -127,8 +106,7 @@ fn connect() -> Result<Option<Conn>, String> {
     Ok(None)
 }
 
-/// `true` quando há algum caminho possível até o app (env de socket, porta, ou
-/// um socket bem conhecido no disco).
+/// Returns `true` when a transport path to the app is configured.
 pub fn transport_configured() -> bool {
     if env_non_empty("COCKPIT_STATUS_SOCK").is_some()
         || env_non_empty("COCKPIT_STATUS_PORT")
@@ -147,11 +125,7 @@ pub fn transport_configured() -> bool {
     false
 }
 
-/// Envia uma requisição e devolve a resposta decodificada.
-///
-/// Fora de um terminal do Cockpit, encerra com exit 3 (mesma mensagem da CLI
-/// Dart). Falha de rede também é exit 3; resposta ausente/malformada vira um
-/// `{"ok": false, "error": …}` pro chamador tratar como erro de aplicação.
+/// Sends a request and returns the decoded JSON response.
 pub fn request(mut req: Value, timeout: Duration) -> Value {
     if !transport_configured() {
         die(
@@ -184,8 +158,7 @@ no socket found in ~/.cockpit). Is the app running?",
         die(&format!("cockpit: could not connect to app: {e}"), 3);
     }
 
-    // O servidor responde UMA linha e fecha. Lemos até a primeira quebra (ou
-    // até o EOF), o que também nos protege se ele mantiver a conexão aberta.
+    // Server responds with a single line and closes. Read until EOF so a held-open connection still completes.
     let mut buf: Vec<u8> = Vec::with_capacity(4096);
     let mut chunk = [0u8; 4096];
     loop {
@@ -197,7 +170,7 @@ no socket found in ~/.cockpit). Is the app running?",
                     break;
                 }
             }
-            Err(_) => break, // timeout ou erro: trata como resposta ausente
+            Err(_) => break, // timeout or error: treat as missing response
         }
     }
 
@@ -226,7 +199,7 @@ pub fn is_ok(resp: &Value) -> bool {
     resp.get("ok") == Some(&Value::Bool(true))
 }
 
-/// Mensagem de erro da resposta, com o mesmo fallback da CLI Dart.
+/// Returns error message from response.
 pub fn error_text(resp: &Value) -> String {
     match resp.get("error") {
         Some(Value::String(s)) => s.clone(),
@@ -235,7 +208,7 @@ pub fn error_text(resp: &Value) -> String {
     }
 }
 
-/// Encerra com o erro da resposta (exit 1) — padrão dos comandos "simples".
+/// Exits with response error (exit code 1).
 pub fn fail_with(resp: &Value) -> ! {
     die(&format!("cockpit: {}", error_text(resp)), 1)
 }

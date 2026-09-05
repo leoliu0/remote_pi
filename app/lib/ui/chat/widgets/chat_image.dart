@@ -150,15 +150,25 @@ class ChatImage extends StatelessWidget {
 
     final constrained = ConstrainedBox(
       constraints: BoxConstraints(
-        maxHeight: height ?? 360,
-        maxWidth: width ?? double.infinity,
+        maxHeight: height ?? 220,
+        maxWidth: width ?? 320,
       ),
       child: Container(
         margin: const EdgeInsets.symmetric(vertical: 6),
         decoration: BoxDecoration(
           color: colors.surface,
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: colors.border.withValues(alpha: 0.8)),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: colors.border.withValues(alpha: 0.95),
+            width: 1.5,
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.25),
+              blurRadius: 6,
+              offset: const Offset(0, 2),
+            ),
+          ],
         ),
         clipBehavior: Clip.antiAlias,
         child: imageWidget,

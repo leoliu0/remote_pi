@@ -1,59 +1,32 @@
-# Camada `domain/`
+# Layer `domain/`
 
-## Propósito
+## Purpose
 
-Materializar o conhecimento do negócio. Aqui vivem modelos, casos de uso e
-validadores com regras determinísticas, **independentes de UI, banco ou rede**.
-Esta camada é o núcleo — todas as outras dependem dela; ela não depende de
-nenhuma.
+Encapsulates pure business knowledge. Models, use cases, and validators with deterministic rules live here, **independent of UI, database, or network**. This layer is the core — other layers depend on it; it depends on none.
 
-## Deve fazer
+## Must Do
 
-1. **Modelar entidades e value objects** com imutabilidade e igualdade
-   consistente (`==` / `hashCode`).
-2. **Orquestrar regras via Use Cases**: cada `*UseCase` expõe um único verbo do
-   domínio e delega integrações aos contratos (`repositories/`, `services/`).
-3. **Validar invariantes** em `validators/`, lançando exceções tipadas
-   (`ValidationException`, `DomainException`).
-4. **Manter pureza**: código síncrono ou assíncrono previsível, sem side
-   effects além de chamadas a contratos.
-5. **Expor contratos**: interfaces (abstratas) de repositórios e serviços moram
-   aqui — implementações concretas vivem em `data/`.
+1. **Model entities and value objects** with immutability and consistent equality (`==` / `hashCode`).
+2. **Orchestrate rules via Use Cases**: each `*UseCase` exposes a single domain operation and delegates integrations to contracts (`repositories/`, `services/`).
+3. **Validate invariants** with typed exceptions (`ValidationException`, `DomainException`).
+4. **Maintain purity**: predictable synchronous or asynchronous code, without side effects beyond contract invocations.
+5. **Expose contracts**: abstract interfaces for repositories and services live here — concrete implementations live in `data/`.
 
-## Não deve fazer
+## Must NOT Do
 
-1. **Importar Flutter** — nada de `BuildContext`, widgets, `Material`,
-   `Cupertino`. Use Dart puro.
-2. **Acessar infraestrutura diretamente** — bancos, HTTP, mDNS, platform
-   channels pertencem a `data/services/`.
-3. **Guardar estado mutável global** — evite singletons; objetos vêm pelo
-   injector quando necessário.
-4. **Duplicar lógica** — reutilize validators e models existentes em vez de
-   recriar regras em cada use case.
-5. **Conhecer detalhes de transporte** — se uma regra precisa decidir entre
-   "buscar do cache ou da rede", essa decisão é de `data/`, não daqui.
+1. **Import Flutter UI** — no `BuildContext`, widgets, `Material`, or `Cupertino`. Pure Dart only.
+2. **Access infrastructure directly** — databases, HTTP, and platform channels belong in `data/`.
+3. **Store global mutable state** — avoid stateful singletons.
+4. **Duplicate logic** — reuse existing models and validators.
 
-## Estrutura sugerida
+## Structure
 
 ```
 domain/
-├── entities/           # objetos com identidade (id + ciclo de vida)
-│   └── <agregado>/
-├── value_objects/      # valores imutáveis sem identidade (Email, CPF, ...)
-├── dtos/               # objetos de transferência entre camadas
-├── contracts/          # interfaces de baixo nível (clients, gateways)
-├── repositories/       # interfaces de repositório
-├── services/           # interfaces de serviço de domínio
-├── usecases/           # operações unitárias (1 verbo cada)
-├── validators/         # invariantes e regras de validação
-└── exceptions/         # exceções tipadas do domínio
+├── contracts/          # Low-level interfaces (clients, gateways)
+├── entities/           # Objects with identity and lifecycle
+├── repositories/       # Repository interfaces
+├── services/           # Domain service interfaces
+├── usecases/           # Unitary operations (1 verb each)
+└── value_objects/      # Immutable values without identity (e.g. SemVer)
 ```
-
-## Vocabulário
-
-- **Entidade** — objeto com identidade (`id`) e ciclo de vida próprio.
-- **Value Object** — valor imutável sem identidade (ex.: `Email`, `Hostname`).
-- **Use Case** — operação unitária do domínio exposta à aplicação.
-- **Invariante** — regra que sempre precisa ser verdadeira para o domínio
-  continuar consistente.
-- **Contrato** — interface declarada no domínio e implementada em `data/`.

@@ -42,11 +42,19 @@ class _ModelPickerBody extends StatefulWidget {
 class _ModelPickerBodyState extends State<_ModelPickerBody> {
   late Future<ModelsCatalogue> _future;
   String? _providerFilter;
+  String _searchQuery = '';
+  final TextEditingController _searchController = TextEditingController();
 
   @override
   void initState() {
     super.initState();
     _future = _load(forceRefresh: true);
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
   }
 
   Future<ModelsCatalogue> _load({required bool forceRefresh}) {
@@ -86,7 +94,7 @@ class _ModelPickerBodyState extends State<_ModelPickerBody> {
   Widget build(BuildContext context) {
     final colors = context.colors;
     final mq = MediaQuery.of(context);
-    final maxHeight = mq.size.height * 0.78;
+    final maxHeight = mq.size.height * 0.85;
     return SafeArea(
       top: false,
       child: ConstrainedBox(
@@ -100,6 +108,54 @@ class _ModelPickerBodyState extends State<_ModelPickerBody> {
               _DragHandle(),
               const SizedBox(height: 8),
               _Header(onRefresh: _refresh),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+                child: Container(
+                  height: 38,
+                  decoration: BoxDecoration(
+                    color: colors.surface,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: colors.border),
+                  ),
+                  padding: const EdgeInsets.symmetric(horizontal: 10),
+                  child: Row(
+                    children: [
+                      Icon(LucideIcons.search, size: 16, color: colors.muted),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: TextField(
+                          controller: _searchController,
+                          onChanged: (v) => setState(() => _searchQuery = v.trim().toLowerCase()),
+                          style: TextStyle(
+                            fontFamily: kMonoFamily,
+                            fontSize: 12,
+                            color: colors.text,
+                          ),
+                          decoration: InputDecoration(
+                            hintText: 'Search models, providers, or IDs...',
+                            hintStyle: TextStyle(
+                              fontFamily: kMonoFamily,
+                              fontSize: 12,
+                              color: colors.muted,
+                            ),
+                            border: InputBorder.none,
+                            isDense: true,
+                            contentPadding: EdgeInsets.zero,
+                          ),
+                        ),
+                      ),
+                      if (_searchQuery.isNotEmpty)
+                        GestureDetector(
+                          onTap: () {
+                            _searchController.clear();
+                            setState(() => _searchQuery = '');
+                          },
+                          child: Icon(LucideIcons.x, size: 14, color: colors.muted),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
               Divider(color: colors.border, height: 1, thickness: 1),
               Flexible(
                 child: FutureBuilder<ModelsCatalogue>(
@@ -123,6 +179,7 @@ class _ModelPickerBodyState extends State<_ModelPickerBody> {
                     return _ProviderTabs(
                       catalogue: cat,
                       selectedProvider: _providerFilter,
+                      searchQuery: _searchQuery,
                       onProviderTap: (p) =>
                           setState(() => _providerFilter = p),
                       onModelPick: _onPick,
@@ -197,11 +254,13 @@ class _Header extends StatelessWidget {
 class _ProviderTabs extends StatelessWidget {
   final ModelsCatalogue catalogue;
   final String? selectedProvider;
+  final String searchQuery;
   final ValueChanged<String?> onProviderTap;
   final ValueChanged<WireModel> onModelPick;
   const _ProviderTabs({
     required this.catalogue,
     required this.selectedProvider,
+    required this.searchQuery,
     required this.onProviderTap,
     required this.onModelPick,
   });
@@ -209,13 +268,23 @@ class _ProviderTabs extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
-    final providers = <String>{
-      for (final m in catalogue.models) m.provider,
-    }.toList()
-      ..sort();
-    final filtered = selectedProvider == null
+    final providerCounts = <String, int>{};
+    for (final m in catalogue.models) {
+      providerCounts[m.provider] = (providerCounts[m.provider] ?? 0) + 1;
+    }
+    final providers = providerCounts.keys.toList()..sort();
+    final queryFiltered = searchQuery.isEmpty
         ? catalogue.models
-        : catalogue.models
+        : catalogue.models.where((m) {
+            final q = searchQuery;
+            return m.name.toLowerCase().contains(q) ||
+                m.id.toLowerCase().contains(q) ||
+                m.provider.toLowerCase().contains(q);
+          }).toList();
+
+    final filtered = selectedProvider == null
+        ? queryFiltered
+        : queryFiltered
             .where((m) => m.provider == selectedProvider)
             .toList();
     return Column(
@@ -224,18 +293,18 @@ class _ProviderTabs extends StatelessWidget {
         if (providers.length > 1)
           SingleChildScrollView(
             scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             child: Row(
               children: [
                 _Chip(
-                  label: 'all',
+                  label: 'all (${catalogue.models.length})',
                   selected: selectedProvider == null,
                   onTap: () => onProviderTap(null),
                 ),
                 const SizedBox(width: 6),
                 for (final p in providers) ...[
                   _Chip(
-                    label: p,
+                    label: '$p (${providerCounts[p]})',
                     selected: selectedProvider == p,
                     onTap: () => onProviderTap(p),
                   ),
@@ -244,25 +313,44 @@ class _ProviderTabs extends StatelessWidget {
               ],
             ),
           ),
-        Flexible(
-          child: ListView.separated(
-            padding: const EdgeInsets.only(bottom: 18),
-            shrinkWrap: true,
-            itemCount: filtered.length,
-            separatorBuilder: (_, _) =>
-                Divider(color: colors.border, height: 1, thickness: 1),
-            itemBuilder: (_, i) {
-              final m = filtered[i];
-              final isCurrent = catalogue.current?.id == m.id &&
-                  catalogue.current?.provider == m.provider;
-              return _ModelTile(
-                model: m,
-                current: isCurrent,
-                onTap: () => onModelPick(m),
-              );
-            },
+        if (filtered.isEmpty)
+          Padding(
+            padding: const EdgeInsets.all(32),
+            child: Center(
+              child: Text(
+                searchQuery.isNotEmpty
+                    ? 'No models match "$searchQuery"'
+                    : 'No models available',
+                style: TextStyle(
+                  fontFamily: kMonoFamily,
+                  fontSize: 12,
+                  color: colors.muted,
+                ),
+              ),
+            ),
+          )
+        else
+          Flexible(
+            child: ListView.separated(
+              padding: const EdgeInsets.only(bottom: 18),
+              shrinkWrap: true,
+              itemCount: filtered.length,
+              separatorBuilder: (_, _) =>
+                  Divider(color: colors.border, height: 1, thickness: 1),
+              itemBuilder: (_, i) {
+                final m = filtered[i];
+                final isCurrent = (catalogue.current?.id == m.id &&
+                        catalogue.current?.provider == m.provider) ||
+                    catalogue.current?.id.toLowerCase() == m.id.toLowerCase() ||
+                    catalogue.current?.name.toLowerCase() == m.name.toLowerCase();
+                return _ModelTile(
+                  model: m,
+                  current: isCurrent,
+                  onTap: () => onModelPick(m),
+                );
+              },
+            ),
           ),
-        ),
       ],
     );
   }
@@ -320,7 +408,8 @@ class _ModelTile extends StatelessWidget {
     final colors = context.colors;
     return InkWell(
       onTap: onTap,
-      child: Padding(
+      child: Container(
+        color: current ? colors.accent.withValues(alpha: 0.08) : Colors.transparent,
         padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
         child: Row(
           children: [
@@ -337,6 +426,7 @@ class _ModelTile extends StatelessWidget {
                           style: TextStyle(
                             fontFamily: kMonoFamily,
                             fontSize: 13,
+                            fontWeight: current ? FontWeight.w600 : FontWeight.w500,
                             color: current ? colors.accent : colors.text,
                           ),
                         ),
@@ -353,7 +443,7 @@ class _ModelTile extends StatelessWidget {
                     style: TextStyle(
                       fontFamily: kMonoFamily,
                       fontSize: 10,
-                      color: colors.muted,
+                      color: current ? colors.accent.withValues(alpha: 0.8) : colors.muted,
                     ),
                   ),
                 ],

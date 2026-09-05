@@ -67,4 +67,71 @@ void main() {
     expect(find.textContaining('inline_code'), findsOneWidget);
     expect(find.textContaining('bold summary'), findsOneWidget);
   });
+  testWidgets(r'renders LaTeX math equations ($...$ and $$...$$)', (tester) async {
+    await pump(tester, r'Formula inline $E = mc^2$ and display: $$\\sum_{i=1}^n x_i$$');
+    await tester.pump();
+    expect(find.byType(AgentMarkdown), findsOneWidget);
+  });
+
+  group('stripThinkingTrace', () {
+    test('strips closed <think>, <thought>, and <thinking> blocks', () {
+      expect(
+        stripThinkingTrace('<think>internal reasoning</think>Final answer'),
+        'Final answer',
+      );
+      expect(
+        stripThinkingTrace('<thought>\nline 1\nline 2\n</thought>\n\nHere is the result.'),
+        'Here is the result.',
+      );
+      expect(
+        stripThinkingTrace('<thinking>step 1\nstep 2</thinking>Output only'),
+        'Output only',
+      );
+    });
+
+    test('strips unclosed opening tag ONLY during live streaming', () {
+      expect(
+        stripThinkingTrace('<think>still thinking in progress...', isLiveStreaming: true),
+        '',
+      );
+      // Finalized messages with inline backticks or text must not truncate
+      expect(
+        stripThinkingTrace('Reasoning Density: Average 10,581 characters of `thinking` per prompt.'),
+        'Reasoning Density: Average 10,581 characters of `thinking` per prompt.',
+      );
+    });
+
+    test('leaves regular text and inline code untouched', () {
+      expect(
+        stripThinkingTrace('Normal text with `<thinking>` code tag'),
+        'Normal text with `<thinking>` code tag',
+      );
+    });
+    test('strips an unclosed think block that opens after visible text (live)', () {
+      // Daemon wraps streamed reasoning in <think>; a block opening mid-reply
+      // must hide while it grows, without eating the visible text before it.
+      expect(
+        stripThinkingTrace('Story end.\n\n<think>The user wants', isLiveStreaming: true),
+        'Story end.',
+      );
+      // Finalized mode keeps unclosed blocks untouched.
+      expect(
+        stripThinkingTrace('Story end.\n\n<think>The user wants'),
+        'Story end.\n\n<think>The user wants',
+      );
+    });
+
+    test('never truncates bullet points containing <think> mentions in finalized mode', () {
+      const fullMessage = '''
+• Progress: 1,924 traces generated on disk.
+• Reasoning Density: Average 10,581 characters of <think> chain-of-thought per prompt.
+• Hardware Load: 100% compute utilization.
+• Master Queue Status: queue_active.sh remains running.
+''';
+      final result = stripThinkingTrace(fullMessage, isLiveStreaming: false);
+      expect(result, contains('• Progress: 1,924 traces'));
+      expect(result, contains('• Hardware Load: 100% compute'));
+      expect(result, contains('• Master Queue Status: queue_active.sh'));
+    });
+  });
 }

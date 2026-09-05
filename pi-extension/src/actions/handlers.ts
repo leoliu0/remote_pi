@@ -45,6 +45,144 @@ export interface SdkModelLike {
    *  `("text" | "image")[]`; we read `includes("image")` for the `vision`
    *  flag. Optional here so tests can omit it (treated as text-only). */
   input?: ("text" | "image")[];
+  /** Per-model thinking map (pi ≥0.84). Missing keys = provider default
+   *  (supported); an explicit `null` marks the level unsupported. */
+  thinkingLevelMap?: Partial<Record<string, string | null>>;
+}
+
+/** All wire thinking levels in picker order. */
+const ALL_THINKING_LEVELS: ThinkingLevel[] = [
+  "auto", "off", "minimal", "low", "medium", "high", "xhigh", "max",
+];
+
+/** Levels a model supports, matching Pi-AI's getSupportedThinkingLevels:
+ *  - non-reasoning models only support ["off"]
+ *  - reasoning models support ["auto", ...]
+ *  - levels explicitly mapped to null are unsupported (e.g. "off": null in Gemini 3.7 Flash)
+ *  - "xhigh" and "max" require an explicit non-null mapping in thinkingLevelMap
+ *  - standard levels ("off", "minimal", "low", "medium", "high") are supported by default
+ */
+export function supportedThinkingLevels(
+  model: Pick<SdkModelLike, "reasoning" | "thinkingLevelMap">,
+): ThinkingLevel[] {
+  if (!model.reasoning) return ["off"];
+  const map = model.thinkingLevelMap;
+  return ALL_THINKING_LEVELS.filter((level) => {
+    if (level === "auto") return true;
+    const mapped = map?.[level];
+    if (mapped === null) return false;
+    if (level === "xhigh" || level === "max") return mapped !== undefined;
+    return true;
+  });
+}
+import { createRequire } from "node:module";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+
+const _nodeRequire = createRequire(import.meta.url);
+
+let _cachedBuiltinMaps: Map<string, Partial<Record<string, string | null>>> | null = null;
+
+function _loadBuiltinThinkingMaps(): Map<string, Partial<Record<string, string | null>>> {
+  if (_cachedBuiltinMaps) return _cachedBuiltinMaps;
+  const maps = new Map<string, Partial<Record<string, string | null>>>();
+  try {
+    const candidates = [
+      "/home/leo/.npm-global/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/providers/data",
+      join(homedir(), ".npm-global", "lib", "node_modules", "@earendil-works", "pi-coding-agent", "node_modules", "@earendil-works", "pi-ai", "dist", "providers", "data"),
+    ];
+    for (const p of candidates) {
+      if (existsSync(p)) {
+        for (const file of readdirSync(p)) {
+          if (!file.endsWith(".json")) continue;
+          try {
+            const content = JSON.parse(readFileSync(join(p, file), "utf8")) as Record<string, unknown>;
+            for (const val of Object.values(content)) {
+              if (val && typeof val === "object") {
+                for (const [mid, m] of Object.entries(val as Record<string, unknown>)) {
+                  if (m && typeof m === "object" && (m as { thinkingLevelMap?: unknown }).thinkingLevelMap) {
+                    const tmap = (m as { thinkingLevelMap: Partial<Record<string, string | null>> }).thinkingLevelMap;
+                    maps.set(mid.toLowerCase(), tmap);
+                    if (mid.includes("/")) {
+                      maps.set(mid.split("/").pop()!.toLowerCase(), tmap);
+                    }
+                  }
+                }
+              }
+            }
+          } catch {}
+        }
+        break;
+      }
+    }
+  } catch {}
+  _cachedBuiltinMaps = maps;
+  return maps;
+}
+
+export function _resolveThinkingLevelMap(
+  id?: string,
+  provider?: string,
+  explicitMap?: Partial<Record<string, string | null>>,
+): Partial<Record<string, string | null>> | undefined {
+  if (explicitMap) return explicitMap;
+  const cleanId = (id || "").toLowerCase();
+  const cleanBase = cleanId.includes("/") ? cleanId.split("/").pop()! : cleanId;
+  const builtin = _loadBuiltinThinkingMaps();
+  return builtin.get(cleanId) || builtin.get(cleanBase);
+}
+
+export function _loadOmpModels(): WireModel[] {
+  const models: WireModel[] = [];
+  try {
+    const home = homedir();
+    const dbPath = join(home, ".omp", "agent", "models.db");
+    if (existsSync(dbPath)) {
+      let DatabaseSync: (new (path: string) => {
+        prepare: (sql: string) => {
+          all: () => Array<{ provider_id: string; models: string }>;
+        };
+      }) | undefined;
+      try {
+        DatabaseSync = _nodeRequire("node:sqlite").DatabaseSync;
+      } catch {}
+      if (DatabaseSync) {
+        const db = new DatabaseSync(dbPath);
+        const rows = db.prepare("SELECT provider_id, models FROM model_cache").all();
+        for (const row of rows) {
+          try {
+            const list = JSON.parse(row.models);
+            if (Array.isArray(list)) {
+              for (const m of list) {
+                if (!m || typeof m !== "object") continue;
+                const reasoning = Boolean(m.reasoning || m.thinking);
+                const thinkingLevelMap = _resolveThinkingLevelMap(
+                  m.id,
+                  m.provider || row.provider_id,
+                  m.thinkingLevelMap as Partial<Record<string, string | null>> | undefined,
+                );
+                const levels = supportedThinkingLevels({
+                  reasoning,
+                  thinkingLevelMap,
+                });
+                models.push({
+                  id: m.id || "unknown",
+                  name: m.name || m.id || "unknown",
+                  provider: m.provider || row.provider_id || "unknown",
+                  reasoning,
+                  context_window: typeof m.contextWindow === "number" ? m.contextWindow : 128000,
+                  vision: Boolean(m.input && Array.isArray(m.input) && m.input.includes("image")),
+                  thinking_levels: levels,
+                });
+              }
+            }
+          } catch {}
+        }
+      }
+    }
+  } catch {}
+  return models;
 }
 // `Model` is the alias used throughout the file. Real SDK models structurally
 // satisfy this — `pi.setModel(model)` accepts them because TypeScript
@@ -67,7 +205,9 @@ export interface ActionReplySender {
  */
 export interface ActionPi {
   setModel(model: Model<any>): Promise<boolean>;
-  setThinkingLevel(level: import("../protocol/types.js").ThinkingLevel): void;
+  /** `undefined` clears the override ("auto") — the SDK's
+   * `thinkingLevel?: Effort` state member. */
+  setThinkingLevel(level: ThinkingLevel | undefined): void;
 }
 
 /**
@@ -113,13 +253,21 @@ export interface ActionModelRegistry {
 /** Project a SDK `Model<Api>` onto the wire schema. Shared by list_models
  *  and the `current` echo, so both stay in lockstep. */
 export function wireFromModel(model: Model<any>): WireModel {
+  const reasoning = Boolean(model?.reasoning);
+  const thinkingLevelMap = _resolveThinkingLevelMap(
+    model?.id,
+    model?.provider,
+    model?.thinkingLevelMap,
+  );
+  const levels = supportedThinkingLevels({ reasoning, thinkingLevelMap });
   return {
     id: model?.id || "unknown",
     name: model?.name || model?.id || "unknown",
     provider: model?.provider || "unknown",
-    reasoning: Boolean(model?.reasoning),
+    reasoning,
     context_window: typeof model?.contextWindow === "number" ? model.contextWindow : 128000,
     vision: Boolean(model?.input && Array.isArray(model.input) && model.input.includes("image")),
+    thinking_levels: levels,
   };
 }
 
@@ -231,8 +379,34 @@ export function handleThinkingSet(
   onThinkingChanged?: (level: ThinkingLevel) => void,
 ): void {
   runSync(sender, msg, "thinking_set", () => {
-    pi.setThinkingLevel(msg.level);
+    // "auto" = clear the override so the model runs at its native default.
+    // The SDK's ThinkingLevel union has no "inherit" member — the type is
+    // `"off" | ... | "max"` and the runtime `state.thinkingLevel?: Effort`
+    // stores `undefined` for "no override". Passing "inherit" through would
+    // fall into clampThinkingLevel's unknown-level branch and snap to the
+    // lowest supported level (e.g. "minimal" on Gemini 3.7 Flash).
+    pi.setThinkingLevel(msg.level === "auto" ? undefined : msg.level);
     onThinkingChanged?.(msg.level);
+  });
+}
+
+export async function handleReloadPlugins(
+  ctx: ActionCtx | null | undefined,
+  sender: ActionReplySender,
+  msg: { id: string },
+): Promise<void> {
+  await runAsync(sender, msg, "reload_plugins", async () => {
+    try {
+      ctx?.modelRegistry?.refresh();
+    } catch {}
+    try {
+      const anyCtx = ctx as any;
+      if (typeof anyCtx?.reloadExtensions === "function") {
+        await anyCtx.reloadExtensions();
+      } else if (typeof anyCtx?.discoverAndLoadExtensions === "function") {
+        await anyCtx.discoverAndLoadExtensions();
+      }
+    } catch {}
   });
 }
 
@@ -250,29 +424,52 @@ export async function handleModelSet(
       throw new Error("Pi agent runtime is not ready to change models");
     }
     const liveReg = ctx?.modelRegistry ?? reg;
+    liveReg.refresh();
+    const anyReg = liveReg as any;
+    let model: SdkModelLike | undefined;
     try {
-      liveReg.refresh();
+      model = liveReg.find(msg.provider, msg.model_id);
     } catch {}
-    let model = liveReg.find(msg.provider, msg.model_id);
-    if (!model) {
-      const available = liveReg.getAvailable();
-      model = available.find(
+    if (!model && typeof anyReg.getAll === "function") {
+      try {
+        const all: SdkModelLike[] = anyReg.getAll();
+        model = all.find(
+          (m: SdkModelLike) =>
+            (m.provider.toLowerCase() === msg.provider.toLowerCase() ||
+              (msg.provider === "google" && m.provider === "gemini") ||
+              (msg.provider === "gemini" && m.provider === "google")) &&
+            (m.id.toLowerCase() === msg.model_id.toLowerCase() ||
+              m.id.toLowerCase().includes(msg.model_id.toLowerCase()) ||
+              msg.model_id.toLowerCase().includes(m.id.toLowerCase()))
+        );
+      } catch {}
+    }
+    if (!model && process.env["VITEST"] !== "true") {
+      const ompModels = _loadOmpModels();
+      const match = ompModels.find(
         (m) =>
           (m.provider.toLowerCase() === msg.provider.toLowerCase() ||
-            (msg.provider === "google" && m.provider === "gemini") ||
-            (msg.provider === "gemini" && m.provider === "google")) &&
+            m.provider.toLowerCase().replace(/-/g, "") === msg.provider.toLowerCase().replace(/-/g, "")) &&
           (m.id.toLowerCase() === msg.model_id.toLowerCase() ||
-            m.id.toLowerCase().includes(msg.model_id.toLowerCase()) ||
-            msg.model_id.toLowerCase().includes(m.id.toLowerCase()))
+            m.name.toLowerCase() === msg.model_id.toLowerCase() ||
+            m.id.toLowerCase().includes(msg.model_id.toLowerCase()))
       );
-    }
-    if (!model) {
-      const available = liveReg.getAvailable();
-      model = available.find(
-        (m) =>
-          m.id.toLowerCase() === msg.model_id.toLowerCase() ||
-          (m.name && m.name.toLowerCase() === msg.model_id.toLowerCase())
-      );
+      if (match) {
+        model = {
+          id: match.id,
+          name: match.name || match.id,
+          provider: match.provider,
+          api: match.provider.includes("anthropic")
+            ? "anthropic-messages"
+            : match.provider.includes("google")
+              ? "google-generative-ai"
+              : "openai-completions",
+          reasoning: !!match.reasoning,
+          input: (match as any).input || ["text", "image"],
+          contextWindow: match.context_window || 200000,
+          maxTokens: (match as any).max_tokens || 8192,
+        } as SdkModelLike;
+      }
     }
     if (!model) {
       throw new Error(`model "${msg.provider}/${msg.model_id}" not in registry`);
@@ -304,10 +501,31 @@ export function handleListModels(
   try {
     const liveReg = ctx?.modelRegistry ?? reg;
     liveReg.refresh();
+    const anyReg = liveReg as any;
     let models: WireModel[] = [];
     try {
-      models = (liveReg.getAvailable() ?? []).map(wireFromModel);
+      const regModels =
+        typeof anyReg.getAvailable === "function"
+          ? anyReg.getAvailable()
+          : typeof anyReg.getAll === "function"
+            ? anyReg.getAll()
+            : [];
+      models = (regModels ?? []).map(wireFromModel);
     } catch {}
+
+    if (process.env["VITEST"] !== "true") {
+      const ompModels = _loadOmpModels();
+      if (ompModels.length > 0) {
+        const known = new Set(models.map((m) => `${m.provider}:${m.id}`));
+        for (const om of ompModels) {
+          if (!known.has(`${om.provider}:${om.id}`)) {
+            models.push(om);
+            known.add(`${om.provider}:${om.id}`);
+          }
+        }
+      }
+    }
+
     let current: SdkModelLike | undefined;
     try {
       current = ctx?.getModel?.();
@@ -317,8 +535,31 @@ export function handleListModels(
       currentWire = models.find(
         (m) =>
           m.name.toLowerCase() === currentModelName.toLowerCase() ||
-          m.id.toLowerCase() === currentModelName.toLowerCase()
+          m.id.toLowerCase() === currentModelName.toLowerCase() ||
+          `${m.provider}/${m.id}`.toLowerCase() === currentModelName.toLowerCase() ||
+          `${m.provider}:${m.id}`.toLowerCase() === currentModelName.toLowerCase() ||
+          currentModelName.toLowerCase().endsWith(`/${m.id.toLowerCase()}`)
       );
+    }
+    if (!currentWire && currentModelName) {
+      const parts = currentModelName.split("/");
+      const provider = parts.length > 1 ? parts[0] : "unknown";
+      const id = parts.length > 1 ? parts.slice(1).join("/") : parts[0];
+      const thinkingLevelMap = _resolveThinkingLevelMap(id, provider);
+      const reasoning =
+        Boolean(thinkingLevelMap) ||
+        /gemini|claude|gpt-4|gpt-5|k3|deepseek|qwen|o1|o3|r1/i.test(currentModelName);
+      const levels = supportedThinkingLevels({ reasoning, thinkingLevelMap });
+      currentWire = {
+        provider,
+        id,
+        name: currentModelName,
+        reasoning,
+        context_window: 200000,
+        vision: false,
+        thinking_levels: levels,
+      };
+      models.unshift(currentWire);
     }
     sender.send({
       type: "models_list",

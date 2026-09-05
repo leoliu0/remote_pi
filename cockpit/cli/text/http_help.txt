@@ -16,7 +16,7 @@ FLAGS:
 
 OUTPUT (single JSON line; exit 1 on error):
   {"ok":{"status":200,"reason":"OK","headers":{…},"elapsedMs":12,"sizeBytes":34,
-         "truncated":false,"request":"Listar usuários","json":{…}}}
+         "truncated":false,"request":"List users","json":{…}}}
   {"error":{"kind":"connection_failed","message":"…"}}
 
   The body comes back as "json" when it parses as JSON, otherwise as "body"

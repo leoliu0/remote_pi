@@ -10,7 +10,7 @@
   </defs>
   <circle cx="280" cy="320" r="280" fill="url(#accentGlow)"/>
 
-  <!-- Símbolo π — escala 0.41, posicionado em painel esquerdo -->
+  <!-- Pi symbol scale 0.41, positioned on left panel -->
   <g transform="translate(72, 96) scale(0.41)">
     <g fill="#FFFFFF">
       <rect x="290" y="368" width="444" height="68" rx="10"/>
@@ -21,7 +21,7 @@
     <circle cx="780" cy="332" r="58" fill="#4FC3F7"/>
   </g>
 
-  <!-- Painel direito começa em x=560, largura útil = 720px (com margem direita de 56px) -->
+  <!-- Right panel starts at x=560 -->
   <text x="560" y="288"
         font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
         font-size="104"

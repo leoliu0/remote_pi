@@ -114,7 +114,7 @@ Errors come back as a sealed `IdentityStoreError`:
 
 - `SyncUnavailable(reason)` — iCloud Keychain / Google Backup is off.
   The recommended UX is to block first-run with a platform-specific
-  instruction (see plan/23 § "Comportamento sem sync disponível").
+  instruction (see plan/23 § "Behavior without sync available").
 - `PlatformFailure(code, message)` — anything else from the native
   side. Treat as fatal.
 

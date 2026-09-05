@@ -8,6 +8,37 @@ import 'package:gpt_markdown/gpt_markdown.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+/// Strips `<think>...</think>`, `<thought>...</thought>`, and `<thinking>...</thinking>`
+/// blocks from text in brief mode so reasoning traces are omitted.
+/// For finalized text, it strictly removes closed blocks at block boundaries and
+/// never truncates trailing content.
+String stripThinkingTrace(String text, {bool isLiveStreaming = false}) {
+  var cleaned = text.replaceAll(
+    RegExp(
+      r'^\s*<(?:think|thought|thinking)>[\s\S]*?<\/(?:think|thought|thinking)>\s*',
+      caseSensitive: false,
+    ),
+    '',
+  );
+  cleaned = cleaned.replaceAll(
+    RegExp(
+      r'(?:^|\n)<(?:think|thought|thinking)>[\s\S]*?<\/(?:think|thought|thinking)>',
+      caseSensitive: false,
+    ),
+    '',
+  );
+  if (isLiveStreaming) {
+    // Drop an UNCLOSED think block wherever it starts — string start or after
+    // a newline. The daemon now wraps streamed reasoning in <think> tags; a
+    // block that opened after visible text must still hide while it grows.
+    cleaned = cleaned.replaceAll(
+      RegExp(r'(?:^|\n)\s*<(?:think|thought|thinking)>[\s\S]*$', caseSensitive: false),
+      '',
+    );
+  }
+  return cleaned.trim();
+}
+
 /// Plan/32b — renders the agent's Markdown reply (GFM + code) themed to the
 /// app's dark/mono look. Links open in the system browser (url_launcher);
 /// code blocks get a copy button. Tolerant of partial markdown so it can also
@@ -114,6 +145,7 @@ class AgentMarkdown extends StatelessWidget {
       child: GptMarkdown(
         data,
         style: baseMono,
+        useDollarSignsForLatex: true,
         onLinkTap: (url, _) => _openLink(context, url),
         // Inline `code` — subtle highlight, keeps the baseline.
         highlightBuilder: (context, text, style) => Text(

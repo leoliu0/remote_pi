@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:app/data/mesh/mesh_sync_service.dart';
 import 'package:app/data/preferences/preferences.dart';
 import 'package:app/data/transport/connection_manager.dart';
@@ -64,20 +65,36 @@ class SettingsViewModel extends ViewModel<SettingsState> {
   /// default endpoint [kDefaultRelayUrl].
   String get relayUrlOverride => _prefs.relayUrl ?? kDefaultRelayUrl;
 
-  Future<String?> saveRelayUrl(String? value) async {
+  Future<String?> saveRelayUrl(
+    String? value, {
+    bool alwaysReconnect = false,
+  }) async {
     if (value == null || value.trim().isEmpty) {
+      final changed = _prefs.relayUrl != null;
       await resetRelayUrl();
+      if (alwaysReconnect || changed) unawaited(_reconnectToRelay());
       return null;
     }
     final normalized = normalizeRelayUrl(value);
     final reason = relayUrlValidationMessage(normalized);
     if (reason != null) return reason;
+    final changed = _prefs.relayUrl != normalized;
     await _prefs.setRelayUrl(normalized);
+    // Reconnect in the background: the WS dial can take up to 10s when the
+    // new relay is unreachable, and Save must not look dead while that
+    // runs — the snackbar and "Current:" update as soon as the URL is
+    // persisted.
+    if (alwaysReconnect || changed) unawaited(_reconnectToRelay());
     return null;
   }
 
   Future<void> resetRelayUrl() async {
     await _prefs.setRelayUrl(null);
+  }
+
+  Future<void> _reconnectToRelay() async {
+    await _conn.reconnect(preferredEpk: _prefs.selectedPeerEpk);
+    await _meshSync?.pullOnDemand();
   }
 
   /// Revoke pairing locally. Drops the peer from the relay's presence

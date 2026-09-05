@@ -348,5 +348,29 @@ void main() {
         vm.dispose();
       },
     );
+
+    test('saveRelayUrl reconnects so the new relay is used immediately',
+        () async {
+      final storage = _FakeStorage([_peerA()]);
+      final conn = _conn(storage: storage);
+      final prefs = Preferences(_FakeSecureStorage());
+      await prefs.setSelectedPeerEpk('epk_A');
+      final vm = SettingsViewModel(storage, prefs, conn);
+      await Future<void>.delayed(Duration.zero);
+
+      final err = await vm.saveRelayUrl(
+        'https://custom.example',
+        alwaysReconnect: true,
+      );
+      expect(err, isNull);
+      expect(prefs.relayUrl, 'https://custom.example');
+      // Reconnect runs in the background (Save must not block on the WS
+      // dial) — let the fake connect land, then assert it left NoPeer.
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(conn.status, isNot(isA<StatusNoPeer>()));
+
+      vm.dispose();
+      conn.dispose();
+    });
   });
 }

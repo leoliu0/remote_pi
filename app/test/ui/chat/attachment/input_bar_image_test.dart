@@ -119,6 +119,32 @@ void main() {
     expect(btn.onPressed, isNull);
   });
 
+  testWidgets(
+    'attach button remains enabled while streaming to allow image attachment on steer/queue',
+    (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Align(
+              alignment: Alignment.bottomCenter,
+              child: InputBar(
+                onSend: (_) {},
+                attachment: vm,
+                streaming: true,
+                onOpenAttach: () {},
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      final btn = tester.widget<IconButton>(
+        find.byKey(const Key('input-bar-attach')),
+      );
+      expect(btn.onPressed, isNotNull, reason: 'attach button must be enabled even while working/streaming');
+    },
+  );
+
   testWidgets('picking shows the preview + send icon; X removes it', (
     tester,
   ) async {

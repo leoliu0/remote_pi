@@ -1,5 +1,4 @@
-//! Os verbos da CLI. Porte fiel do `tool/cockpit_cli.dart`: mesmos comandos de
-//! wire, mesmas mensagens de erro, mesmos exit codes e mesmo layout de saída.
+//! CLI commands implementation.
 
 use std::time::Duration;
 
@@ -12,14 +11,14 @@ use crate::transport::{self, fail_with, is_ok};
 use crate::util::{basename, die, pad, resolve_path, self_tab_id};
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
-/// Timeout folgado: o app corta a query em 30s; a folga cobre fila + IO.
+/// Query timeout with allowance for queue + IO.
 const DB_TIMEOUT: Duration = Duration::from_secs(60);
 
 fn b64() -> base64::engine::general_purpose::GeneralPurpose {
     base64::engine::general_purpose::STANDARD
 }
 
-/// Anexa `tabId` na requisição quando há alvo (flag ou tab emissora).
+/// Appends `tabId` to request when a target is specified.
 fn with_tab_id(req: &mut Value, tab_id: Option<String>) {
     if let Some(id) = tab_id {
         if !id.is_empty() {
@@ -38,13 +37,7 @@ pub fn send(args: &[String]) -> ! {
     }
     let tab_id = resolve_target(parsed.effective_tab_id());
     write_once(&tab_id, &text);
-    // `--enter` manda o Enter numa SEGUNDA escrita, não um `\r` colado no fim do
-    // texto. É de propósito: TUIs (o claude entre elas) distinguem "digitou e
-    // submeteu" de "colou um bloco com quebra de linha", e um write único com o
-    // CR embutido cai no segundo caso. Duas escritas é exatamente o que a gente
-    // já fazia à mão com `send` + `send-key Enter` — a flag só evita a segunda
-    // chamada. A resposta da primeira é aguardada antes da segunda, então a
-    // ordem é garantida.
+    // `--enter` sends Enter as a separate write so TUIs distinguish typed input from paste.
     if parsed.enter {
         write_once(&tab_id, "\r");
     }
@@ -72,9 +65,7 @@ fn write_to_tab(tab_id: Option<String>, text: &str) -> ! {
     std::process::exit(0)
 }
 
-/// Alvo efetivo, ou encerra explicando. Nunca chuta uma aba: sem `--tab-id` e
-/// fora de um terminal do Cockpit (onde o app injeta `COCKPIT_TAB_ID`), digitar
-/// num pane arbitrário seria pior que falhar.
+/// Resolves target tab ID.
 fn resolve_target(tab_id: Option<String>) -> String {
     match tab_id {
         Some(id) if !id.is_empty() => id,
@@ -86,7 +77,7 @@ terminal (COCKPIT_TAB_ID is unset). Use `cockpit list-tabs`.",
     }
 }
 
-/// Uma escrita na PTY da aba. Encerra com exit 1 se o app recusar.
+/// Single write to the tab's PTY.
 fn write_once(tab_id: &str, text: &str) {
     let resp = transport::request(
         json!({
@@ -108,8 +99,7 @@ pub fn open(args: &[String]) -> ! {
     if parsed.positionals.is_empty() {
         die("cockpit open: missing file path", 2);
     }
-    // O app tem cwd próprio — resolve pro caminho absoluto no cwd desta tab
-    // (onde a CLI está rodando) antes de mandar.
+    // Resolve to absolute path in the current tab's cwd before sending.
     let abs = resolve_path(&parsed.positionals[0]);
     let mut req = json!({"cmd": "open", "args": {"path": abs}});
     with_tab_id(&mut req, parsed.effective_tab_id());
@@ -375,9 +365,7 @@ fn join_list(data: &Value, key: &str) -> String {
 pub fn list(cmd: &str, args: &[String]) -> ! {
     let parsed = Flags::parse(args);
     let mut req = json!({"cmd": cmd});
-    // `list-tasks` lista as tasks do workspace da tab emissora (ou da
-    // `--tab-id` passada); os outros list-* ignoram o campo — mandar sempre é
-    // inofensivo.
+    // `list-tasks` lists tasks for the target workspace.
     with_tab_id(&mut req, parsed.effective_tab_id());
     let resp = transport::request(req, DEFAULT_TIMEOUT);
     if !is_ok(&resp) {
@@ -407,7 +395,7 @@ pub fn list(cmd: &str, args: &[String]) -> ! {
     std::process::exit(0)
 }
 
-/// Formata a lista pro olho humano. Separado do IO pra ser testável.
+/// Formats list for display.
 pub fn format_list(cmd: &str, data: &[Value]) -> Vec<String> {
     let mut out = Vec::with_capacity(data.len());
     for e in data {
@@ -415,24 +403,21 @@ pub fn format_list(cmd: &str, data: &[Value]) -> Vec<String> {
             continue;
         }
         match cmd {
-            // (comando de wire estável; a superfície é `list-tabs`)
+            // Stable wire command: `list-panes`
             "list-panes" => {
                 let flag = if e.get("working") == Some(&Value::Bool(true)) {
                     "●"
                 } else {
                     " "
                 };
-                // Rótulo manual (nome estável) vence o título dinâmico; `⚲`
-                // sinaliza que está travado. Sem rótulo, mostra o título
-                // automático.
+                // Manual label takes precedence over automatic title; `⚲` signals pinned.
                 let label = e.get("label").and_then(|v| v.as_str()).unwrap_or("");
                 let name = if !label.is_empty() {
                     format!("⚲ {label}")
                 } else {
                     field(e, "title")
                 };
-                // Workspace: basename do path (legível) — o `workspaceId` virou
-                // UUID opaco. `workspacePath` ausente = app antigo → mostra o id.
+                // Workspace path basename for human readability.
                 let ws_path = field(e, "workspacePath");
                 let ws = if !ws_path.is_empty() {
                     basename(&ws_path)
@@ -452,7 +437,7 @@ pub fn format_list(cmd: &str, data: &[Value]) -> Vec<String> {
                 } else {
                     " "
                 };
-                // `[output]` = já rodou neste boot → `read-task <id>` tem o que ler.
+                // `[output]` indicates output is available.
                 let has_output = if e.get("hasOutput") == Some(&Value::Bool(true)) {
                     "  [output]"
                 } else {
@@ -466,14 +451,13 @@ pub fn format_list(cmd: &str, data: &[Value]) -> Vec<String> {
                 ));
             }
             _ => {
-                // `tabs` é o campo novo; `panes` fica como fallback (app antigo).
+                // `tabs` is current field; `panes` is legacy fallback.
                 let n = e
                     .get("tabs")
                     .or_else(|| e.get("panes"))
                     .map(value_to_display)
                     .unwrap_or_else(|| "0".to_string());
-                // Nome + path (o `id` virou UUID opaco e não é endereçável pela
-                // CLI — no JSON ele continua íntegro pra quem precisar).
+                // Name + path representation.
                 out.push(format!(
                     "{} {} {}",
                     pad(&field(e, "name"), 18),
@@ -486,8 +470,7 @@ pub fn format_list(cmd: &str, data: &[Value]) -> Vec<String> {
     out
 }
 
-/// Campo do objeto como texto, com `""` quando ausente/nulo (igual ao
-/// `(x ?? '').toString()` do Dart).
+/// Returns field string or `""` if missing/null.
 fn field(v: &Value, key: &str) -> String {
     match v.get(key) {
         Some(Value::Null) | None => String::new(),
@@ -495,8 +478,7 @@ fn field(v: &Value, key: &str) -> String {
     }
 }
 
-/// Representação textual de um valor JSON como o Dart faria em `toString()`
-/// (string sem aspas; número/bool crus).
+/// Text representation of a JSON value.
 fn value_to_display(v: &Value) -> String {
     match v {
         Value::String(s) => s.clone(),
@@ -527,7 +509,7 @@ pub fn read(cmd: &str, args: &[String]) -> ! {
         cmd_args.insert("fromStart".into(), json!(true));
     }
     let mut req = json!({"cmd": cmd, "args": Value::Object(cmd_args)});
-    // Sem alvo posicional, o server cai na própria tab ($COCKPIT_TAB_ID).
+    // Without explicit positional target, falls back to own tab ($COCKPIT_TAB_ID).
     with_tab_id(&mut req, parsed.effective_tab_id());
 
     let resp = transport::request(req, DEFAULT_TIMEOUT);
@@ -552,10 +534,9 @@ pub fn read(cmd: &str, args: &[String]) -> ! {
     std::process::exit(0)
 }
 
-// ---- db (plano 51) ----------------------------------------------------------
+// ---- db ---------------------------------------------------------------------
 
-/// Kinds estáveis que o app devolve prefixados em `fail("<kind>: <msg>")` —
-/// reconstruímos o JSON `{"error":{kind,message}}` do contrato da CLI.
+/// Stable error kinds returned by the app.
 const DB_ERROR_KINDS: [&str; 7] = [
     "connection_failed",
     "query_failed",
@@ -568,7 +549,7 @@ const DB_ERROR_KINDS: [&str; 7] = [
 
 const DB_HELP: &str = include_str!("../text/db_help.txt");
 
-/// Encerra com o contrato de erro da CLI: uma linha JSON no **stdout**, exit 1.
+/// Prints the CLI error contract as one JSON line on stdout and exits 1.
 pub fn db_fail(kind: &str, message: &str) -> ! {
     println!("{}", json!({"error": {"kind": kind, "message": message}}));
     std::process::exit(1)
@@ -700,7 +681,7 @@ pub fn db(args: &[String]) -> ! {
 
 // ---- http -------------------------------------------------------------------
 
-/// Kinds estáveis que o app devolve prefixados em `fail("<kind>: <msg>")`.
+/// Stable HTTP error kinds returned by the app.
 const HTTP_ERROR_KINDS: [&str; 7] = [
     "no_request",
     "invalid_url",
@@ -942,9 +923,8 @@ pub fn mongo(args: &[String]) -> ! {
     nosql_request("mongo-cmd", cmd_args, tab_id)
 }
 
-/// `… browse` (plano 53): abre a view de browse no app. [wire] =
-/// `redis-browse` (`--pattern`) ou `mongo-browse` (posicional `<collection>` +
-/// `--filter`).
+/// `… browse`: opens the browse view in the app. Wire commands:
+/// `redis-browse` (`--pattern`) or `mongo-browse` (positional `<collection>` + `--filter`).
 fn browse(wire: &str, args: &[String]) -> ! {
     let mut db_name: Option<String> = None;
     let mut database: Option<String> = None;
@@ -1070,10 +1050,9 @@ pub fn install_skill(args: &[String]) -> ! {
     std::process::exit(0)
 }
 
-// ---- helpers de parsing -----------------------------------------------------
+// ---- parsing helpers --------------------------------------------------------
 
-/// Lê `--flag valor` ou `--flag=valor` na posição atual, avançando o índice
-/// quando consome o valor separado. Devolve `(flag, valor)` quando casa.
+/// Parses `--flag value` or `--flag=value` at current index.
 fn take<'a>(
     args: &[String],
     i: &mut usize,
@@ -1114,7 +1093,7 @@ mod tests {
     }
 
     #[test]
-    fn label_manual_vence_titulo() {
+    fn manual_label_overrides_title() {
         let data = vec![json!({"id": "t2", "label": "Cockpit", "title": "zsh"})];
         let lines = format_list("list-panes", &data);
         assert!(lines[0].ends_with("⚲ Cockpit"), "{}", lines[0]);

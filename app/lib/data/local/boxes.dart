@@ -15,6 +15,7 @@ import 'package:hive_flutter/hive_flutter.dart';
 const String _kNamespace = 'rp_v2';
 const String _kSessionsIndex = 'sessions_index';
 const String _kRuntime = 'runtime';
+const String kAppPrefsBox = 'app_prefs';
 
 /// Facade over the v2 Hive boxes. A single instance is shared by the
 /// [SyncService] (writer) and the read repositories (readers) so they observe
@@ -49,6 +50,7 @@ class LocalBoxes {
 
   static Future<void> _openCommon() async {
     await Hive.openBox<dynamic>(_kSessionsIndex);
+    await Hive.openBox<dynamic>(kAppPrefsBox);
     final runtime = await Hive.openBox<dynamic>(_kRuntime);
     await runtime.clear(); // VOLATILE — zero on boot (#3)
   }
@@ -56,6 +58,8 @@ class LocalBoxes {
   Box<dynamic> sessionsIndexBox() => Hive.box<dynamic>(_kSessionsIndex);
 
   Box<dynamic> runtimeBox() => Hive.box<dynamic>(_kRuntime);
+
+  Box<dynamic> appPrefsBox() => Hive.box<dynamic>(kAppPrefsBox);
 
   /// Per-session message box. Lazily opened; idempotent (returns the already
   /// open box on subsequent calls).

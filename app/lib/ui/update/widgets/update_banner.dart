@@ -6,12 +6,8 @@ import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:provider/provider.dart';
 
-/// Aviso de atualização in-app (plano 44, passo 3). Renderiza nada quando não
-/// há versão nova a anunciar (iOS, sem update, dispensada, manifest
-/// indisponível) — o gate Android-only vive no [UpdateBannerViewModel.enabled].
-///
-/// Dispara o check silencioso no primeiro mount (= startup da Home). Tocar
-/// baixa o `RemotePi.apk` direto; o X dispensa (persistido por versão).
+/// In-app update banner. Renders nothing when hidden.
+/// Triggers silent check on Home mount. Tapping downloads the update; X dismisses.
 class UpdateBanner extends StatefulWidget {
   const UpdateBanner({super.key});
 
@@ -23,8 +19,8 @@ class _UpdateBannerState extends State<UpdateBanner> {
   @override
   void initState() {
     super.initState();
-    // `context.read` é seguro no initState (não assina). Best-effort: o check
-    // se auto-silencia em qualquer falha e é no-op fora do Android.
+    // `context.read` is safe in initState (does not subscribe).
+    // Best-effort check silences all errors and is a no-op outside Android.
     context.read<UpdateBannerViewModel>().check();
   }
 
@@ -38,8 +34,7 @@ class _UpdateBannerState extends State<UpdateBanner> {
   }
 }
 
-/// Card discreto no topo da Home (abaixo do título, acima da lista). Tocar no
-/// corpo baixa; o X dispensa.
+/// Banner card at top of Home screen.
 class _UpdateCard extends StatelessWidget {
   const _UpdateCard({required this.info});
 

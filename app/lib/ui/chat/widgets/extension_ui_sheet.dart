@@ -76,7 +76,7 @@ class _ExtensionUiSheetState extends State<ExtensionUiSheet> {
 
   void _armSubmitTimeout() {
     _submitTimeout?.cancel();
-    _submitTimeout = Timer(const Duration(seconds: 25), () {
+    _submitTimeout = Timer(const Duration(seconds: 10), () {
       if (!mounted || !_submitting) return;
       setState(() {
         _submitting = false;
@@ -486,11 +486,11 @@ class _ExtensionUiSheetState extends State<ExtensionUiSheet> {
                 ),
               )
             else if (_awaitHint)
-              const Padding(
-                padding: EdgeInsets.only(bottom: 8),
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
                 child: Text(
-                  'No response from Pi yet — retry or cancel.',
-                  style: TextStyle(fontSize: 13),
+                  'Still waiting for desktop agent to confirm receipt. You can retry or cancel.',
+                  style: TextStyle(color: colors.warning, fontSize: 13),
                 ),
               ),
             Row(

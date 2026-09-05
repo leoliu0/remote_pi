@@ -705,6 +705,7 @@ class _MessageList extends StatelessWidget {
             child: StreamingBubble(
               streaming: streaming,
               isWorking: isWorking,
+              brief: briefToolCalls,
             ),
           );
         }
@@ -717,7 +718,7 @@ class _MessageList extends StatelessWidget {
           key: ValueKey('${msg.runtimeType}_${msg.id}_$msgIdx'),
           child: switch (msg) {
             UserMsg() => UserBubble(msg),
-            AssistantMsg() => AssistantBubble(msg),
+            AssistantMsg() => AssistantBubble(msg, brief: briefToolCalls),
             ToolEvent() => ToolRequestCard(
                 tool: msg,
                 onDecide: onDecide,

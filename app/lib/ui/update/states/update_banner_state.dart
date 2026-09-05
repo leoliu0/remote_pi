@@ -1,25 +1,23 @@
 import 'package:app/domain/entities/update_info.dart';
 
-/// Estado do aviso de atualização in-app (plano 44). Só dois casos: escondido
-/// (nada a mostrar — iOS, sem update, dispensado, manifest indisponível) ou
-/// visível com o [UpdateInfo] a anunciar.
+/// State of the in-app update banner. Two cases: hidden (no update to show,
+/// iOS, dismissed, or manifest unavailable) or visible with [UpdateInfo].
 sealed class UpdateBannerState {
   const UpdateBannerState();
 }
 
-/// Nada a mostrar. `const` → canonicalizado, então `emit` dedupe por
-/// identidade sem precisar de `==` manual.
+/// Hidden state (nothing to show).
 final class UpdateBannerHidden extends UpdateBannerState {
   const UpdateBannerHidden();
 }
 
-/// Há uma versão maior, não dispensada, pra anunciar.
+/// Visible state with an available, undismissed update version.
 final class UpdateBannerVisible extends UpdateBannerState {
   const UpdateBannerVisible(this.info);
 
   final UpdateInfo info;
 
-  // Igualdade por versão — re-emitir o mesmo manifest não dispara rebuild.
+  // Equality by version — re-emitting the same version does not trigger rebuilds.
   @override
   bool operator ==(Object other) =>
       other is UpdateBannerVisible && other.info.version == info.version;

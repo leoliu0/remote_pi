@@ -1,12 +1,12 @@
-# Config do runner de testes.
+# Test runner config.
 #
-# `preview`: testes que NÃO verificam comportamento — geram PNGs de inspeção
-# visual (ex.: a barra de título do Windows, que no mac nunca é desenhada).
-# Ficam de fora do `flutter test` porque comparam goldens, que dependem da
-# renderização de fonte da máquina e quebrariam em CI/outro host.
+# `preview`: tests that do NOT check behavior — they generate PNGs for visual
+# inspection (e.g. the Windows title bar, which is never drawn on mac).
+# Excluded from `flutter test` because they compare goldens that depend on
+# the host's font rendering and would break in CI / another machine.
 #
-# Para gerar/rever as imagens:
+# To generate/review the images:
 #   flutter test --tags preview --run-skipped --update-goldens
 tags:
   preview:
-    skip: "preview visual — rode: flutter test --tags preview --run-skipped --update-goldens"
+    skip: "preview visual — run: flutter test --tags preview --run-skipped --update-goldens"

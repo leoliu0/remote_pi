@@ -1,7 +1,12 @@
+import 'dart:async';
+import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart' show ThemeMode;
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:hive_flutter/hive_flutter.dart';
+import 'package:path_provider/path_provider.dart';
 
+import 'package:app/data/local/boxes.dart';
 import 'package:app/ui/core/themes/app_font_family.dart';
 import 'package:app/ui/core/themes/app_font_scale.dart';
 
@@ -36,6 +41,13 @@ enum ToolCallDisplay {
 /// the first frame to hydrate the in-memory cache.
 class Preferences extends ChangeNotifier {
   final FlutterSecureStorage _store;
+
+  /// Test seam: when set, the relay-URL file layer reads/writes this file
+  /// instead of the app-support dir. `null` in production (resolved lazily).
+  final File? relayFileOverride;
+  File? _relayFile;
+  bool _relayFileResolved = false;
+
   ToolCallDisplay _toolCallDisplay = ToolCallDisplay.brief;
   String? _selectedPeerEpk;
   String? _relayUrl;
@@ -44,8 +56,81 @@ class Preferences extends ChangeNotifier {
   AppFontScale _fontScale = AppFontScale.large;
   AppFontFamily _fontFamily = AppFontFamily.jetbrainsMono;
   final Map<String, String> _drafts = {};
-  Preferences([FlutterSecureStorage? store])
+  Preferences([FlutterSecureStorage? store, this.relayFileOverride])
       : _store = store ?? const FlutterSecureStorage();
+
+  /// Plain file in the app-support dir — the durable last resort for the
+  /// relay URL. Secure storage can come back empty after an Android
+  /// Keystore reset and Hive can fail to open; a plain file survives both.
+  /// Returns `null` when the platform channel is unavailable (unit tests).
+  Future<File?> _resolveRelayFile() async {
+    if (relayFileOverride != null) return relayFileOverride;
+    if (_relayFileResolved) return _relayFile;
+    _relayFileResolved = true;
+    try {
+      // Under `flutter test` (FakeAsync) a platform-channel call never
+    // completes and would hang boot — skip the file layer entirely.
+    if (Platform.environment['FLUTTER_TEST'] == 'true') {
+      _relayFile = null;
+      return _relayFile;
+    }
+      final dir = await getApplicationSupportDirectory().timeout(
+        const Duration(seconds: 2),
+      );
+      _relayFile = File('${dir.path}/relay_url.txt');
+    } catch (_) {
+      _relayFile = null;
+    }
+    return _relayFile;
+  }
+
+  Future<String?> _readRelayFile() async {
+    final f = await _resolveRelayFile();
+    if (f == null) return null;
+    try {
+      final v = await f.readAsString();
+      return v.isEmpty ? null : v;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _writeRelayFile(String? value) async {
+    final f = await _resolveRelayFile();
+    if (f == null) return;
+    try {
+      if (value == null) {
+        if (await f.exists()) await f.delete();
+      } else {
+        await f.writeAsString(value, flush: true);
+      }
+    } catch (_) {}
+  }
+
+  static const _kStoreTimeout = Duration(seconds: 2);
+
+  Future<String?> _readKey(String key) async {
+    try {
+      return await _store.read(key: key).timeout(_kStoreTimeout);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<String?> _storeGet(Map<String, String> all, String key) async {
+    if (all.containsKey(key)) return all[key];
+    return _readKey(key);
+  }
+
+  Future<void> _writeKey(String key, String? value) async {
+    try {
+      if (value == null) {
+        await _store.delete(key: key).timeout(_kStoreTimeout);
+      } else {
+        await _store.write(key: key, value: value).timeout(_kStoreTimeout);
+      }
+    } catch (_) {}
+  }
 
   static String _draftKey(String? peerEpk, String? roomId) {
     return 'prefs.draft.${peerEpk ?? ""}:${roomId ?? "main"}';
@@ -158,12 +243,8 @@ class Preferences extends ChangeNotifier {
         );
       } catch (_) {}
 
-      final raw = all.containsKey(_kHideToolCallsKey)
-          ? all[_kHideToolCallsKey]
-          : await _store.read(key: _kHideToolCallsKey);
-      final rawDisplay = all.containsKey(_kToolCallDisplayKey)
-          ? all[_kToolCallDisplayKey]
-          : await _store.read(key: _kToolCallDisplayKey);
+      final raw = await _storeGet(all, _kHideToolCallsKey);
+      final rawDisplay = await _storeGet(all, _kToolCallDisplayKey);
       final toolDisplay = rawDisplay != null
           ? ToolCallDisplay.fromName(rawDisplay)
           : (raw == 'true' ? ToolCallDisplay.hidden : ToolCallDisplay.brief);
@@ -171,22 +252,29 @@ class Preferences extends ChangeNotifier {
         _toolCallDisplay = toolDisplay;
         changed = true;
       }
-      final selected = all.containsKey(_kSelectedPeerEpkKey)
-          ? all[_kSelectedPeerEpkKey]
-          : await _store.read(key: _kSelectedPeerEpkKey);
+      final selected = await _storeGet(all, _kSelectedPeerEpkKey);
       final cleaned =
           (selected != null && selected.isNotEmpty) ? selected : null;
       if (cleaned != _selectedPeerEpk) {
         _selectedPeerEpk = cleaned;
         changed = true;
       }
-      final relay = all.containsKey(_kRelayUrlKey)
-          ? all[_kRelayUrlKey]
-          : await _store.read(key: _kRelayUrlKey);
+      // Relay URL — three layers, most durable first: plain file, Hive,
+      // secure store. Android Keystore `readAll` can come back empty after
+      // a restart and Hive can fail to open; the file survives both.
+      final fileRelay = await _readRelayFile();
+      final hiveRelay = _readRelayHive();
+      final secureRelay = await _storeGet(all, _kRelayUrlKey);
+      final relay = fileRelay ?? hiveRelay ?? secureRelay;
       final relayCleaned = (relay != null && relay.isNotEmpty) ? relay : null;
       if (relayCleaned != _relayUrl) {
         _relayUrl = relayCleaned;
         changed = true;
+      }
+      // Backfill the layers that missed the value so all three agree.
+      if (relayCleaned != null) {
+        if (fileRelay == null) await _writeRelayFile(relayCleaned);
+        if (hiveRelay == null) _writeRelayHive(relayCleaned);
       }
       final onboarded = all.containsKey(_kOnboardingCompletedKey)
           ? all[_kOnboardingCompletedKey]
@@ -287,12 +375,41 @@ class Preferences extends ChangeNotifier {
     final cleaned = (value != null && value.isNotEmpty) ? value : null;
     if (cleaned == _relayUrl) return;
     _relayUrl = cleaned;
+    // Persist every layer before returning: the plain file is the layer
+    // that survives keystore resets, so it must not be fire-and-forget.
+    await _writeRelayFile(cleaned);
+    _writeRelayHive(cleaned);
     if (cleaned == null) {
       await _store.delete(key: _kRelayUrlKey);
     } else {
       await _store.write(key: _kRelayUrlKey, value: cleaned);
     }
     notifyListeners();
+  }
+
+  static const _kHiveRelayKey = 'relay_url';
+
+  String? _readRelayHive() {
+    try {
+      if (!Hive.isBoxOpen(kAppPrefsBox)) return null;
+      final v = Hive.box<dynamic>(kAppPrefsBox).get(_kHiveRelayKey);
+      if (v is String && v.isNotEmpty) return v;
+    } catch (_) {}
+    return null;
+  }
+
+  void _writeRelayHive(String? value) {
+    try {
+      if (!Hive.isBoxOpen(kAppPrefsBox)) return;
+      final box = Hive.box<dynamic>(kAppPrefsBox);
+      if (value == null) {
+        // ignore: unawaited_futures
+        box.delete(_kHiveRelayKey);
+      } else {
+        // ignore: unawaited_futures
+        box.put(_kHiveRelayKey, value);
+      }
+    } catch (_) {}
   }
 
   Future<void> setOnboardingCompleted(bool value) async {

@@ -1,8 +1,4 @@
-//! Parser de flags comum aos comandos "simples" (send, open, list, read…).
-//!
-//! Porte fiel do `_Flags` do Dart, inclusive os aliases (`-n`, `-t`, `-f`) e o
-//! `--` que joga o resto pra posicionais.
-
+//! Common flag parser for CLI commands.
 use crate::util::die;
 
 #[derive(Debug, Default, PartialEq)]
@@ -14,16 +10,13 @@ pub struct Flags {
     pub lines: Option<u64>,
     pub offset: Option<u64>,
     pub from_start: bool,
-    /// `--enter`: só o `send` usa. Fica aqui (e não num parser local) porque o
-    /// [Flags::parse] jogaria a flag desconhecida nos posicionais, ou seja, ela
-    /// acabaria digitada no terminal como se fosse texto.
+    /// `--enter`: used by `send` to send trailing newline as a separate write.
     pub enter: bool,
-    /// `--focused`: mira a aba que o usuário está vendo. Vira o sentinela
-    /// `@focused` no wire; quem resolve é o app.
+    /// `--focused`: targets currently focused tab (`@focused` sentinel).
     pub focused: bool,
 }
 
-/// Sentinela que o app troca pelo id da aba em foco.
+/// Sentinel replaced by the app with the focused tab ID.
 pub const FOCUSED: &str = "@focused";
 
 fn int_value(flag: &str, raw: &str) -> u64 {
@@ -87,8 +80,7 @@ impl Flags {
         f
     }
 
-    /// Alvo efetivo, na ordem: `--focused` (sentinela resolvido pelo app),
-    /// `--tab-id` explícito, e por fim a aba que emitiu o comando.
+    /// Effective target in priority order: `--focused`, `--tab-id`, emitting tab.
     pub fn effective_tab_id(&self) -> Option<String> {
         if self.focused {
             return Some(FOCUSED.to_string());
@@ -106,14 +98,14 @@ mod tests {
     }
 
     #[test]
-    fn posicionais_e_tab_id() {
-        let f = Flags::parse(&v(&["--tab-id", "t3", "olá", "mundo"]));
+    fn positionals_and_tab_id() {
+        let f = Flags::parse(&v(&["--tab-id", "t3", "hello", "world"]));
         assert_eq!(f.tab_id.as_deref(), Some("t3"));
-        assert_eq!(f.positionals, vec!["olá", "mundo"]);
+        assert_eq!(f.positionals, vec!["hello", "world"]);
     }
 
     #[test]
-    fn forma_com_igual() {
+    fn equals_form() {
         let f = Flags::parse(&v(&["--tab-id=t9", "--lines=25", "--offset=5"]));
         assert_eq!(f.tab_id.as_deref(), Some("t9"));
         assert_eq!(f.lines, Some(25));
@@ -121,7 +113,7 @@ mod tests {
     }
 
     #[test]
-    fn aliases_curtos() {
+    fn short_aliases() {
         let f = Flags::parse(&v(&["-t", "t1", "-n", "10", "-f"]));
         assert_eq!(f.tab_id.as_deref(), Some("t1"));
         assert_eq!(f.lines, Some(10));
@@ -129,29 +121,29 @@ mod tests {
     }
 
     #[test]
-    fn separador_manda_o_resto_pra_posicionais() {
-        let f = Flags::parse(&v(&["--json", "--", "--nao-e-flag", "-x"]));
+    fn separator_sends_rest_to_positionals() {
+        let f = Flags::parse(&v(&["--json", "--", "--not-a-flag", "-x"]));
         assert!(f.json);
-        assert_eq!(f.positionals, vec!["--nao-e-flag", "-x"]);
+        assert_eq!(f.positionals, vec!["--not-a-flag", "-x"]);
     }
 
     #[test]
-    fn focused_vence_o_tab_id_e_o_ambiente() {
-        let f = Flags::parse(&v(&["--focused", "--tab-id", "t1", "oi"]));
+    fn focused_overrides_tab_id_and_env() {
+        let f = Flags::parse(&v(&["--focused", "--tab-id", "t1", "hi"]));
         assert_eq!(f.effective_tab_id().as_deref(), Some(FOCUSED));
-        assert_eq!(f.positionals, vec!["oi"], "a flag não vira texto");
+        assert_eq!(f.positionals, vec!["hi"], "flag is not treated as text");
     }
 
     #[test]
-    fn enter_nao_vaza_para_os_posicionais() {
+    fn enter_does_not_leak_into_positionals() {
         let f = Flags::parse(&v(&["--enter", "npm", "test"]));
         assert!(f.enter);
-        assert_eq!(f.positionals, vec!["npm", "test"], "o texto sai limpo");
+        assert_eq!(f.positionals, vec!["npm", "test"], "text stays clean");
         assert!(!Flags::parse(&v(&["npm", "test"])).enter);
     }
 
     #[test]
-    fn from_start_e_json() {
+    fn from_start_and_json() {
         let f = Flags::parse(&v(&["--from-start", "--json"]));
         assert!(f.from_start);
         assert!(f.json);

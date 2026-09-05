@@ -387,7 +387,8 @@ class HomePage extends StatelessWidget {
           isSelected: isSelected,
           room: it.room,
           onOpen: () => _open(context, vm, it.peer, it.room),
-          onLongPress: () => _showSessionMenu(context, vm, it, isLive: isLive),
+          onLongPress: () => _showSessionMenu(context, vm, it),
+          onDelete: () => _confirmDelete(context, vm, it),
         ),
         Divider(color: colors.border, height: 1),
       ],
@@ -401,9 +402,8 @@ class HomePage extends StatelessWidget {
   void _showSessionMenu(
     BuildContext context,
     HomeViewModel vm,
-    HomeItem it, {
-    required bool isLive,
-  }) {
+    HomeItem it,
+  ) {
     showModalBottomSheet<void>(
       context: context,
       backgroundColor: context.colors.bg,
@@ -425,27 +425,15 @@ class HomePage extends StatelessWidget {
                 },
               ),
               ListTile(
-                leading: Icon(
-                  LucideIcons.trash2,
-                  color: isLive ? colors.muted : colors.error,
-                ),
-                enabled: !isLive,
+                leading: Icon(LucideIcons.trash2, color: colors.error),
                 title: Text(
                   'Delete session (local only)',
-                  style: TextStyle(color: isLive ? colors.muted : colors.text),
+                  style: TextStyle(color: colors.text),
                 ),
-                subtitle: isLive
-                    ? Text(
-                        'Only available when the room is offline',
-                        style: TextStyle(color: colors.muted, fontSize: 11),
-                      )
-                    : null,
-                onTap: isLive
-                    ? null
-                    : () {
-                        Navigator.of(sheetCtx).pop();
-                        _confirmDelete(context, vm, it);
-                      },
+                onTap: () {
+                  Navigator.of(sheetCtx).pop();
+                  _confirmDelete(context, vm, it);
+                },
               ),
             ],
           ),
@@ -519,8 +507,8 @@ class HomePage extends StatelessWidget {
           backgroundColor: colors.bg,
           title: Text('Delete session?', style: TextStyle(color: colors.text)),
           content: Text(
-            'Removes locally only. If the session comes back online on '
-            'the Pi, it reappears in the list.',
+            'Removes the session from this list only. If it is still '
+            'running on the Pi, it reappears.',
             style: TextStyle(color: colors.muted, fontSize: 12),
           ),
           actions: [
@@ -555,10 +543,11 @@ class HomePage extends StatelessWidget {
     // line 2 renders this immediately instead of flickering empty/room-title
     // until the PeerRecord loads async.
     final device = _deviceFor(peer);
-    // Plan/32g — the live state of this tile (the green dot). Passed so the
-    // Chat AppBar's status dot starts correct instead of flashing
-    // "reconnecting" before the runtime is read.
-    final online = vm.isRoomLive(peer.remoteEpk, room.roomId);
+    // Plan/32g — the live state of this tile (the green dot). A working
+    // agent counts as online too (same rule as the Online tab).
+    final online =
+        vm.isRoomLive(peer.remoteEpk, room.roomId) ||
+        vm.isRoomWorking(peer.remoteEpk, room.roomId);
     // Mark the UI selection — drives the tablet detail pane AND the
     // highlighted tile. Set AFTER openSession so the detail's fresh
     // ChatViewModel reads the already-updated prefs.

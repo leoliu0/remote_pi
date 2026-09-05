@@ -28,6 +28,18 @@ class QuickActionsViewModel extends ViewModel<QuickActionsState> {
   QuickActionsViewModel(this._repo) : super(const QuickActionsIdle()) {
     // Seed from the repo's current snapshot before anything is shown
     _adoptMeta(_repo.activeRoomMeta);
+    if (state.currentModel == null && _repo.cachedCurrentModel != null) {
+      final m = _repo.cachedCurrentModel!;
+      if (state.currentModelName == null ||
+          state.currentModelName == m.name ||
+          state.currentModelName == m.id) {
+        _emitIfAlive(QuickActionsIdle(
+          currentModel: m,
+          currentModelName: m.name,
+          currentThinking: state.currentThinking,
+        ));
+      }
+    }
     _metaSub = _repo.activeRoomMetaStream.listen(_adoptMeta);
     // Query the agent immediately for the live model catalogue & current active model
     unawaited(
@@ -44,6 +56,53 @@ class QuickActionsViewModel extends ViewModel<QuickActionsState> {
   WireModel? get currentModel => state.currentModel;
   String? get currentModelName => state.currentModelName;
 
+  /// Effective thinking levels for the active model: wire-reported map when
+  /// resolved, with fallback inference from the model name so the UI renders
+  /// the right segmented buttons immediately on frame 1 before catalogue load.
+  List<ThinkingLevel>? get supportedThinkingLevels {
+    final wireLevels = state.currentModel?.thinkingLevels;
+    if (wireLevels != null && wireLevels.isNotEmpty) return wireLevels;
+    return inferThinkingLevels(
+      state.currentModelName ?? state.currentModel?.name,
+    );
+  }
+
+  static List<ThinkingLevel>? inferThinkingLevels(String? modelName) {
+    if (modelName == null) return null;
+    final name = modelName.toLowerCase();
+    if (name.contains('gemini-3') || name.contains('gemini 3')) {
+      return const [
+        ThinkingLevel.auto,
+        ThinkingLevel.minimal,
+        ThinkingLevel.low,
+        ThinkingLevel.medium,
+        ThinkingLevel.high,
+      ];
+    }
+    if (name.contains('claude-3-7') ||
+        name.contains('claude 3.7') ||
+        name.contains('claude-opus-4') ||
+        name.contains('claude opus 4') ||
+        name.contains('claude-sonnet-4') ||
+        name.contains('claude sonnet 4')) {
+      return const [
+        ThinkingLevel.auto,
+        ThinkingLevel.off,
+        ThinkingLevel.low,
+        ThinkingLevel.medium,
+        ThinkingLevel.high,
+      ];
+    }
+    if (name.contains('o1') || name.contains('o3') || name.contains('r1')) {
+      return const [
+        ThinkingLevel.auto,
+        ThinkingLevel.low,
+        ThinkingLevel.medium,
+        ThinkingLevel.high,
+      ];
+    }
+    return null;
+  }
   // ---------------------------------------------------------------------------
   // Actions
   // ---------------------------------------------------------------------------
@@ -54,6 +113,10 @@ class QuickActionsViewModel extends ViewModel<QuickActionsState> {
 
   Future<void> newSession() async {
     await _runVoid(ActionName.sessionNew, _repo.newSession);
+  }
+
+  Future<void> reloadPlugins() async {
+    await _runVoid(ActionName.reloadPlugins, _repo.reloadPlugins);
   }
 
   Future<void> setModel(WireModel model) async {
@@ -118,13 +181,11 @@ class QuickActionsViewModel extends ViewModel<QuickActionsState> {
   Future<ModelsCatalogue> loadModels({bool forceRefresh = false}) async {
     try {
       final catalogue = await _repo.listModels(forceRefresh: forceRefresh);
-      // Adopt the Pi's "current" answer; only overwrite when present so
-      // a stale cache entry (current=null) doesn't clobber a value we
-      // already learned via setModel.
-      if (catalogue.current != null) {
+      final model = catalogue.current ?? _repo.cachedCurrentModel;
+      if (model != null) {
         _emitIfAlive(QuickActionsIdle(
-          currentModel: catalogue.current,
-          currentModelName: catalogue.current?.name ?? state.currentModelName,
+          currentModel: model,
+          currentModelName: model.name,
           currentThinking: state.currentThinking,
         ));
       }
@@ -156,23 +217,31 @@ class QuickActionsViewModel extends ViewModel<QuickActionsState> {
     WireModel? nextModel = cur.currentModel;
     if (meta.model != null &&
         cur.currentModel != null &&
-        cur.currentModel!.name != meta.model) {
+        cur.currentModel!.name != meta.model &&
+        cur.currentModel!.id != meta.model) {
       nextModel = null;
     }
-
+    final cached = _repo.cachedCurrentModel;
+    if (nextModel == null && cached != null) {
+      if (meta.model == null ||
+          cached.name.toLowerCase() == meta.model!.toLowerCase() ||
+          cached.id.toLowerCase() == meta.model!.toLowerCase()) {
+        nextModel = cached;
+      }
+    }
     QuickActionsState next;
     if (cur is QuickActionsBusy) {
       next = QuickActionsBusy(
         action: cur.action,
         currentThinking: nextThinking,
         currentModel: nextModel,
-        currentModelName: nextModelName,
+        currentModelName: nextModel?.name ?? nextModelName,
       );
     } else {
       next = QuickActionsIdle(
         currentThinking: nextThinking,
         currentModel: nextModel,
-        currentModelName: nextModelName,
+        currentModelName: nextModel?.name ?? nextModelName,
       );
     }
     if (next == cur) return;

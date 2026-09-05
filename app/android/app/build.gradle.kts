@@ -37,10 +37,7 @@ android {
 
     defaultConfig {
         applicationId = "work.jacobmoura.remotepi"
-        // plan/23 § "Versão mínima Android" — the remote_pi_identity
-        // plugin requires API 34 (Block Store + modern biometry), so
-        // the app inherits the same floor. Bump intentional, recorded
-        // in the plano.
+        // plan/23 § "Minimum Android version" — remote_pi_identity plugin requires API 34.
         minSdk = 34
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode

@@ -1,5 +1,4 @@
-/* Preview de markdown (plano 58). Só consome variáveis de tema injetadas pelo
-   app (--ckp-*) — troca de tema re-injeta as variáveis, sem re-render. */
+/* Markdown preview theme styles. Consumes CSS variables injected by app (--ckp-*). */
 * {
   box-sizing: border-box;
 }
@@ -7,13 +6,7 @@ html,
 body {
   margin: 0;
   padding: 0;
-  /* Scroll CLAMP, a regra do app (ver ClampingScrollBehavior no Flutter): sem
-     isto o WKWebView faz o rubber-band do macOS e o preview destoa de todo o
-     resto da UI. `overscroll-behavior` é a propriedade de especificação para
-     isso — no WebKit ela vale a partir do Safari 16 / macOS 13, e nas versões
-     anteriores o efeito continua sendo o do sistema. Não há caminho nativo:
-     `alwaysBounceVertical` do flutter_inappwebview é iOS-only (UIScrollView),
-     e o WKWebView do macOS não expõe equivalente. */
+  /* Clamping scroll behavior to match app. */
   overscroll-behavior: none;
   background: var(--ckp-bg, #1e1e1e);
   color: var(--ckp-text, #d4d4d4);
@@ -51,8 +44,7 @@ pre {
   border-radius: 6px;
   padding: 12px 14px;
   overflow-x: auto;
-  /* Rolagem interna não encadeia na página: chegar ao fim de um bloco de
-     código largo não pode empurrar o documento (e voltar quicando). */
+  /* Prevent internal scroll from chaining into document scroll. */
   overscroll-behavior: contain;
 }
 pre code {
@@ -69,7 +61,7 @@ table {
   border-collapse: collapse;
   display: block;
   overflow-x: auto;
-  overscroll-behavior: contain; /* mesmo motivo do `pre` */
+  overscroll-behavior: contain;
 }
 th,
 td {
@@ -79,15 +71,9 @@ td {
 th {
   background: var(--ckp-code-bg, #2a2a2a);
 }
-/* Frontmatter (cabeçalho de SKILL.md/agent.md): tabela chave/valor, o mesmo
-   formato do MarkdownFrontmatterTable no Flutter. Chave alinhada à esquerda e
-   estreita — sem isso o <th> herda o centralizado e o negrito de cabeçalho de
-   tabela, que aqui não é o papel dele. */
+/* Frontmatter key/value table matching MarkdownFrontmatterTable in Flutter. */
 table.ckp-frontmatter {
-  /* `display: table` sobrescreve o `display: block` da regra genérica (que
-     existe pra dar rolagem horizontal em tabelas largas do documento): aqui o
-     que se quer é o contrário — chave estreita, valor ocupando o resto e
-     quebrando linha em vez de rolar. */
+  /* display: table overrides block scroll rule for frontmatter key-value display */
   display: table;
   table-layout: auto;
   margin: 0 0 16px;

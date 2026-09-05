@@ -79,8 +79,9 @@ class SyncService extends Service {
   bool _working = false;
   bool _sawRemoteWorking = false;
   bool _turnEnded = false;
+  int _finalizedSegmentsCount = 0;
+  Timer? _workingOffDebounce;
   final Set<String> _openToolIds = {};
-  // Id of the user message the in-flight reply is answering — the `cancel`
   // target while working. Null when idle.
   String? _workingReplyTo;
   final StreamController<bool> _workingController =
@@ -171,10 +172,10 @@ class SyncService extends Service {
     _chunkReplyTo = '';
     _workingReplyTo = null;
     _sawRemoteWorking = false;
-    _turnEnded = false;
     _openToolIds.clear();
+    _finalizedSegmentsCount = 0;
+    _workingOffDebounce?.cancel();
     _setQueuedMessages(const []);
-    // Session switch: the previous chat's in-flight sends are no longer ours
     // to confirm — drop their backstops so a stale timer can't fire later.
     _cancelAllSendTimers();
     if (_streaming != null) _emitStreaming(null);
@@ -471,24 +472,29 @@ class SyncService extends Service {
     }
     switch (msg) {
       case AgentChunk(:final inReplyTo, :final delta):
+        _workingOffDebounce?.cancel();
         _chunkBuffer.write(delta);
         _chunkReplyTo = inReplyTo;
         _flushTimer?.cancel();
         _flushTimer = Timer(const Duration(milliseconds: 16), _flushChunks);
         _setWorking(true, replyTo: inReplyTo);
-
       case AgentDone(:final inReplyTo):
         // Finalize whatever text accumulated since the last tool boundary.
         final text = _finalizeSegment();
         _clearSteeringLabel(inReplyTo);
         _turnEnded = true;
         if (_openToolIds.isEmpty) {
-          _setWorking(false, preview: text.isEmpty ? null : text);
+          _scheduleWorkingOff(preview: text.isEmpty ? null : text);
         }
       case AgentMessage(:final inReplyTo, :final text):
-        // Live finalize writes `agent_<uuid>` rows. History / replay uses
-        // `inReplyTo`. Prefer the latest assistant bubble so a post-done
-        // inlined data-URI rewrite replaces the streamed `/tmp/...` path.
+        // Live finalize writes individual `agent_<uuid>` rows per segment.
+        // If multiple text segments were already finalized during this turn
+        // (e.g. before and after tool calls), AgentMessage carries the full
+        // concatenated turn text — overwriting the latest segment would duplicate
+        // earlier segments into the last bubble. Only update if single or zero segments.
+        if (_finalizedSegmentsCount > 1) {
+          break;
+        }
         final targetId = _latestAssistantId() ?? inReplyTo;
         // ignore: discarded_futures
         _upsert(
@@ -505,7 +511,6 @@ class SyncService extends Service {
                       ts: DateTime.now(),
                     ),
         );
-
       case QueuedMessageState(:final items):
         _setQueuedMessages([
           for (final item in items)
@@ -538,21 +543,12 @@ class SyncService extends Service {
           ]);
         }
         // ignore: discarded_futures
-        _upsert(
-          MsgRole.user,
+        _upsertUserEcho(
           id,
-          (seq, existing) => existing != null
-              ? existing.copyWith(pending: false)
-              : MessageRecord(
-                  id: id,
-                  seq: seq,
-                  role: MsgRole.user,
-                  text: text,
-                  image: image == null
-                      ? null
-                      : MessageImage(data: image.data, mime: image.mime),
-                  ts: DateTime.now(),
-                ),
+          text,
+          image == null
+              ? null
+              : MessageImage(data: image.data, mime: image.mime),
         );
         // Steering input should not start/replace the working turn bubble.
         if (streamingBehavior == UserMessageStreamingBehavior.steer) {
@@ -571,6 +567,7 @@ class SyncService extends Service {
         // Sequential ordering: close the current text segment as its own row
         // BEFORE the tool, so "narration → command → narration" renders in
         // order instead of all text landing after the commands.
+        _workingOffDebounce?.cancel();
         _finalizeSegment();
         _openToolIds.add(toolCallId);
         _turnEnded = false;
@@ -619,11 +616,12 @@ class SyncService extends Service {
               );
         });
         if (_openToolIds.isEmpty && _turnEnded) {
-          _setWorking(false);
+          _scheduleWorkingOff();
         }
 
       case Cancelled(:final targetId):
         _pendingSendTimers.remove(targetId)?.cancel();
+        _workingOffDebounce?.cancel();
         _discardStreamingState();
         // Cancel is stop-generation, not delete-history. Only drop a local
         // optimistic row that never got confirmed by the Pi echo; preserve
@@ -731,17 +729,22 @@ class SyncService extends Service {
     final historyIds = {for (final r in rows) _key(r.role, r.id)};
     await _enqueue(() async {
       final box = await _boxes.msgsBox(epk, room);
+      if (rows.isEmpty && box.isNotEmpty) {
+        // Server returned 0 events (e.g. Pi session buffer not yet ready).
+        // Do not wipe the user's existing local chat history.
+        return;
+      }
       // Preserve local pending user rows and steering rows the Pi hasn't unified in history yet.
       final preserved = <MessageRecord>[];
       for (final v in box.values) {
         final r = MessageRecord.fromJson(_coerce(v));
         if (r.role == MsgRole.user &&
             (r.pending || r.steering) &&
-            !historyIds.contains(_key(r.role, r.id))) {
+            !historyIds.contains(_key(r.role, r.id)) &&
+            !rows.any((h) => h.role == MsgRole.user && h.text == r.text)) {
           preserved.add(r);
         }
       }
-      // Desired ordered state: history (seq = index) then preserved pending.
       final desired = <MessageRecord>[
         for (var i = 0; i < rows.length; i++) rows[i].copyWith(seq: i),
         for (var j = 0; j < preserved.length; j++)
@@ -1059,14 +1062,29 @@ class SyncService extends Service {
     if (epk == null) return;
     final remoteWorking = _conn.isRoomWorking(epk, _activeRoomId);
     if (remoteWorking) {
+      _workingOffDebounce?.cancel();
       _sawRemoteWorking = true;
+      _setWorking(true);
       return;
     }
-    if (_sawRemoteWorking && _working) {
+    if (_openToolIds.isNotEmpty) {
+      return;
+    }
+    if (_sawRemoteWorking || _working) {
+      _workingOffDebounce?.cancel();
       _discardStreamingState();
       _setWorking(false);
     }
     _sawRemoteWorking = false;
+  }
+
+  void _scheduleWorkingOff({String? preview}) {
+    _workingOffDebounce?.cancel();
+    _workingOffDebounce = Timer(const Duration(milliseconds: 100), () {
+      if (_openToolIds.isEmpty && _turnEnded) {
+        _setWorking(false, preview: preview);
+      }
+    });
   }
 
   void _setWorking(bool on, {String? preview, String? replyTo}) {
@@ -1084,8 +1102,8 @@ class SyncService extends Service {
     } else {
       _workingReplyTo = null;
       _sawRemoteWorking = false;
+      _finalizedSegmentsCount = 0;
     }
-    if (_working == on) return;
     _working = on;
     if (!_workingController.isClosed) _workingController.add(on);
   }
@@ -1166,6 +1184,7 @@ class SyncService extends Service {
     }
     final text = _streaming?.buffer ?? '';
     if (text.isNotEmpty) {
+      _finalizedSegmentsCount++;
       final id = 'agent_${uuid7()}';
       // ignore: discarded_futures
       _upsert(
@@ -1193,6 +1212,57 @@ class SyncService extends Service {
     _emitStreaming(null);
   }
 
+
+  Future<void> _upsertUserEcho(
+    String id,
+    String text,
+    MessageImage? image,
+  ) {
+    final epk = _activeEpk;
+    if (epk == null) return Future<void>.value();
+    final room = _activeRoomId;
+    return _enqueue(() async {
+      final active = _activeEpk == epk && _activeRoomId == room;
+      if (!active) return;
+      final box = await _boxes.msgsBox(epk, room);
+      final mapKey = _key(MsgRole.user, id);
+      var existingSeq = _idToSeq[mapKey];
+
+      // Search for an existing pending user message with identical text to dedupe.
+      if (existingSeq == null) {
+        for (final entry in _idToSeq.entries) {
+          if (!entry.key.startsWith('${MsgRole.user.name}:')) continue;
+          final raw = box.get(entry.value);
+          if (raw == null) continue;
+          final rec = MessageRecord.fromJson(_coerce(raw));
+          if (rec.role == MsgRole.user && rec.text == text) {
+            existingSeq = entry.value;
+            _idToSeq[mapKey] = existingSeq;
+            break;
+          }
+        }
+      }
+
+      if (existingSeq != null) {
+        final existing = MessageRecord.fromJson(_coerce(box.get(existingSeq)));
+        await box.put(existingSeq, existing.copyWith(pending: false).toJson());
+      } else {
+        final seq = _nextSeq++;
+        await box.put(
+          seq,
+          MessageRecord(
+            id: id,
+            seq: seq,
+            role: MsgRole.user,
+            text: text,
+            image: image,
+            ts: DateTime.now(),
+          ).toJson(),
+        );
+        _idToSeq[mapKey] = seq;
+      }
+    });
+  }
   void _emitStreaming(StreamingMessage? s) {
     _streaming = s;
     if (!_streamingController.isClosed) _streamingController.add(s);

@@ -38,4 +38,43 @@ void main() {
     expect(cursor.top, greaterThanOrEqualTo(md.bottom - 0.5));
     expect(cursor.left, closeTo(md.left, 1));
   });
+
+  testWidgets('brief mode omits thinking indicator and strips thinking tags', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Scaffold(
+          body: StreamingBubble(
+            streaming: StreamingMessage(
+              inReplyTo: 'x',
+              buffer: '<think>internal reason</think>visible reply',
+            ),
+            brief: true,
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(find.text('Thinking & analyzing…'), findsNothing);
+    expect(find.textContaining('visible reply'), findsOneWidget);
+    expect(find.textContaining('internal reason'), findsNothing);
+  });
+
+  testWidgets('brief mode with empty buffer omits thinking indicator', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Scaffold(
+          body: StreamingBubble(
+            streaming: StreamingMessage(inReplyTo: 'x'),
+            brief: true,
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(find.text('Thinking & analyzing…'), findsNothing);
+  });
 }

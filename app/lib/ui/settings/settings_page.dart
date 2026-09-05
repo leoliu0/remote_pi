@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:app/config/dependencies.dart';
 import 'package:app/data/preferences/preferences.dart';
 import 'package:app/data/transport/relay_config.dart';
@@ -9,6 +10,7 @@ import 'package:app/ui/settings/widgets/widgets.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:provider/provider.dart';
 
 class SettingsPage extends StatelessWidget {
@@ -73,6 +75,7 @@ class SettingsPage extends StatelessWidget {
           // peers/rooms already exist (PairingViewModel handles the
           // add path the same way as the first pair).
           const _AddPairingButton(),
+          const _VersionFooter(),
         ],
       ),
     );
@@ -114,41 +117,67 @@ class _RelaySection extends StatefulWidget {
   State<_RelaySection> createState() => _RelaySectionState();
 }
 
-class _RelaySectionState extends State<_RelaySection> {
+class _RelaySectionState extends State<_RelaySection>
+    with WidgetsBindingObserver {
+  late final SettingsViewModel _vm;
   late final TextEditingController _ctrl;
+  late final FocusNode _focus;
+  late final String _initial;
   String? _error;
 
   @override
   void initState() {
     super.initState();
-    final vm = context.read<SettingsViewModel>();
-    _ctrl = TextEditingController(text: vm.relayUrlOverride);
+    WidgetsBinding.instance.addObserver(this);
+    _vm = context.read<SettingsViewModel>();
+    _initial = _vm.relayUrlOverride;
+    _ctrl = TextEditingController(text: _initial);
+    _focus = FocusNode();
+    _focus.addListener(() {
+      if (!_focus.hasFocus) unawaited(_save(silent: true));
+    });
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden) {
+      unawaited(_save(silent: true));
+    }
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    final text = _ctrl.text;
+    if (text.trim() != _initial.trim()) {
+      unawaited(_vm.saveRelayUrl(text));
+    }
+    _focus.dispose();
     _ctrl.dispose();
     super.dispose();
   }
 
-  Future<void> _save() async {
-    final vm = context.read<SettingsViewModel>();
-    final messenger = ScaffoldMessenger.of(context);
-    final err = await vm.saveRelayUrl(_ctrl.text);
+  Future<void> _save({bool silent = false}) async {
+    if (silent && _ctrl.text.trim() == _initial.trim()) return;
+    final err = await _vm.saveRelayUrl(
+      _ctrl.text,
+      alwaysReconnect: !silent,
+    );
     if (!mounted) return;
     setState(() => _error = err);
-    if (err == null) {
-      _ctrl.text = vm.effectiveRelayUrl;
-      messenger.showSnackBar(
-        const SnackBar(
-          content: Text(
-            'Relay updated',
-            style: TextStyle(fontFamily: kMonoFamily),
-          ),
-          duration: Duration(seconds: 2),
+    if (silent || err != null) return;
+    _ctrl.text = _vm.effectiveRelayUrl;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text(
+          'Relay updated',
+          style: TextStyle(fontFamily: kMonoFamily),
         ),
-      );
-    }
+        duration: Duration(seconds: 2),
+      ),
+    );
   }
 
   @override
@@ -166,6 +195,9 @@ class _RelaySectionState extends State<_RelaySection> {
             children: [
               TextField(
                 controller: _ctrl,
+                focusNode: _focus,
+                textInputAction: TextInputAction.done,
+                onSubmitted: (_) => unawaited(_save()),
                 style: context.typo.mono.copyWith(
                   fontSize: 13,
                   color: colors.text,
@@ -208,7 +240,7 @@ class _RelaySectionState extends State<_RelaySection> {
                   crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
                     FilledButton(
-                      onPressed: _save,
+                      onPressed: () => unawaited(_save()),
                       style: FilledButton.styleFrom(
                         backgroundColor: colors.accent,
                         foregroundColor: colors.onAccent,
@@ -223,7 +255,8 @@ class _RelaySectionState extends State<_RelaySection> {
                       child: Text(
                         'Save',
                         style: TextStyle(
-                          fontFamily: context.typo.mono.fontFamily ?? kMonoFamily,
+                          fontFamily:
+                              context.typo.mono.fontFamily ?? kMonoFamily,
                           fontSize: 13,
                         ),
                       ),
@@ -233,7 +266,10 @@ class _RelaySectionState extends State<_RelaySection> {
                       onPressed: () async {
                         _ctrl.text = kDefaultRelayUrl;
                         final messenger = ScaffoldMessenger.of(context);
-                        await vm.resetRelayUrl();
+                        await vm.saveRelayUrl(
+                          null,
+                          alwaysReconnect: true,
+                        );
                         if (!mounted) return;
                         setState(() => _error = null);
                         messenger.showSnackBar(
@@ -249,7 +285,8 @@ class _RelaySectionState extends State<_RelaySection> {
                       child: Text(
                         'Use default Relay',
                         style: TextStyle(
-                          fontFamily: context.typo.mono.fontFamily ?? kMonoFamily,
+                          fontFamily:
+                              context.typo.mono.fontFamily ?? kMonoFamily,
                           fontSize: 13,
                         ),
                       ),
@@ -540,5 +577,36 @@ class _PeerList extends StatelessWidget {
     );
     if (result == null) return; // canceled
     await onSetNickname(peer.remoteEpk, result.isEmpty ? null : result);
+  }
+}
+
+/// Build identity footer — makes "which APK is actually installed"
+/// verifiable on-device (the 1.2.4+12 versionCode collision meant
+/// reinstalls silently kept the old build).
+class _VersionFooter extends StatelessWidget {
+  const _VersionFooter();
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    return FutureBuilder<PackageInfo>(
+      future: PackageInfo.fromPlatform(),
+      builder: (context, snap) {
+        final info = snap.data;
+        if (info == null) return const SizedBox.shrink();
+        return Padding(
+          padding: const EdgeInsets.symmetric(vertical: 20),
+          child: Center(
+            child: Text(
+              'Remote Pi ${info.version} (${info.buildNumber})',
+              style: context.typo.mono.copyWith(
+                fontSize: 10,
+                color: colors.muted2,
+              ),
+            ),
+          ),
+        );
+      },
+    );
   }
 }

@@ -1,12 +1,12 @@
-# Release do Cockpit (plano 43, passo 3).
+# Cockpit Release workflow.
 #
-# Trigger: tag `cockpit-v<versão>` (a versão DEVE bater com o pubspec.yaml).
-# Produz: GitHub Release com 6 artefatos + SHA256SUMS + latest.json.
-# Publicação: o job final envia latest.json + appcasts direto pro rp-s3 via
-# PUT /upload (Bearer RP_S3_UPLOAD_TOKEN) — ver rp-s3/README.md. Sem gate
-# manual: a release vai ao ar assim que o workflow termina.
+# Trigger: tag `cockpit-v<version>` (version MUST match pubspec.yaml).
+# Produces: GitHub Release with 6 artifacts + SHA256SUMS + latest.json.
+# Publishing: the final job uploads latest.json + appcasts directly to rp-s3 via
+# PUT /upload (Bearer RP_S3_UPLOAD_TOKEN) — see rp-s3/README.md. No manual
+# gate: release goes live as soon as the workflow finishes.
 #
-# Runbook por plataforma: cockpit/packaging/README.md.
+# Platform runbook: cockpit/packaging/README.md.
 
 name: cockpit-release
 
@@ -16,7 +16,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Tag da release (ex: cockpit-v1.0.0); precisa existir"
+        description: "Release tag (e.g. cockpit-v1.0.0); must exist"
         required: true
 
 permissions:
@@ -32,7 +32,7 @@ env:
 
 jobs:
   meta:
-    name: Valida tag ↔ pubspec
+    name: Validate tag <-> pubspec
     runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.v.outputs.version }}
@@ -48,45 +48,32 @@ jobs:
           PUBSPEC="${FULL%%+*}"
           BUILD="${FULL##*+}"
           if [ "$VERSION" != "$PUBSPEC" ]; then
-            echo "::error::tag $RELEASE_TAG pede $VERSION mas o pubspec está em $PUBSPEC"
+            echo "::error::tag $RELEASE_TAG requests $VERSION but pubspec is $PUBSPEC"
             exit 1
           fi
-          # Plano 47: o Sparkle (macOS) compara CFBundleVersion (o +n). Sem build
-          # number o self-update não detecta a versão nova — exigir +n explícito.
+          # Sparkle (macOS) compares CFBundleVersion (+n). Without build
+          # number self-update won't detect new version — require explicit +n.
           if [ "$BUILD" = "$FULL" ] || [ -z "$BUILD" ]; then
-            echo "::error::pubspec precisa de build number (ex: $VERSION+8) pro Sparkle comparar a versão"
+            echo "::error::pubspec requires build number (e.g. $VERSION+8) for Sparkle version comparison"
             exit 1
           fi
-          # As notas que o Sparkle mostra saem da PRIMEIRA seção `## ` do
-          # CHANGELOG. Sem esta checagem, esquecer de escrever a seção da versão
-          # publica silenciosamente a nota da versão ANTERIOR — foi o que
-          # aconteceu de 1.15.4 até 1.18.1: releases seguidas exibindo o mesmo
-          # texto. Falha aqui (segundos) em vez de depois dos builds.
+          # Sparkle notes are extracted from the FIRST `## ` section of
+          # CHANGELOG.md. Fail early if version does not match.
           CHANGELOG_VERSION=$(awk '/^## /{print; exit}' cockpit/CHANGELOG.md \
             | sed -E 's/^## *\[?([0-9]+\.[0-9]+\.[0-9]+)\]?.*/\1/')
           if [ "$VERSION" != "$CHANGELOG_VERSION" ]; then
-            echo "::error::CHANGELOG.md começa em '$CHANGELOG_VERSION' mas a release é $VERSION — escreva a seção ## [$VERSION] no topo (é dela que sai a nota do update)"
+            echo "::error::CHANGELOG.md starts with '$CHANGELOG_VERSION' but release is $VERSION — write ## [$VERSION] section at the top"
             exit 1
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "build=$BUILD" >> "$GITHUB_OUTPUT"
 
-  # Fatia x86_64 do cockpit-server (plano 58). `dart build cli` NÃO cross-compila,
-  # e o runner do job macOS é Apple Silicon (arm64), então o bundle sairia
-  # arm64-only e o Mac Intel cairia no fallback in-process (sem sidecar/host
-  # remoto). Este job roda num runner Intel só pra produzir a fatia x64 do
-  # bundle (leve: só `dart build cli` + a dylib do PTY, sem ghostty/Flutter app);
-  # o job macOS funde as duas com `lipo`.
+  # x86_64 slice for cockpit-server. `dart build cli` does NOT cross-compile,
+  # so this job runs on an Intel runner to build the x64 slice of the bundle;
+  # the macOS job merges both with `lipo`.
   server-x64:
-    name: cockpit-server (fatia x86_64)
+    name: cockpit-server (x86_64 slice)
     needs: meta
-    # macOS INTEL: o `dart build cli` não cross-compila, então a fatia x86_64
-    # precisa de um runner Intel de verdade. O `macos-13` (último Intel gratuito)
-    # foi RETIRADO em dez/2025 e o job ficava na fila para sempre — não falhava,
-    # só nunca rodava, e o job macos (needs: server-x64) nunca começava.
-    # `macos-15-intel` é o substituto oficial, último x86_64 do Actions,
-    # disponível até ago/2027. Depois disso, a fatia Intel precisa de outra
-    # estratégia (cross via Rosetta num runner ARM, ou abrir mão do Intel).
     runs-on: macos-15-intel
     defaults: { run: { working-directory: cockpit } }
     steps:
@@ -98,25 +85,20 @@ jobs:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
           cache: true
-      - name: Rust (native assets do anaki)
+      - name: Rust (native assets for anaki)
         run: |
           rustup toolchain install stable --profile minimal --no-self-update || true
           rustup default stable
           cargo --version
-      - name: Build do bundle x86_64
+      - name: Build x86_64 bundle
         run: |
           flutter pub get
           ./tool/build-sidecar.sh
-          # Sanidade: o exe TEM que ser x86_64 (o runner é Intel). Se sair arm64
-          # é sinal de dart/emulação errada — aborta antes de enganar o merge.
-          # Checa TODO binário de bin/, não só o server: o lipo do job macos
-          # exige a fatia x64 de cada um, e quando a CLI embarcada (bin/cockpit)
-          # existia só do lado arm64 a release morria lá na frente, depois de
-          # ~15min de build. Falhar aqui aponta o binário que faltou.
+          # Sanity check: binary MUST be x86_64 (runner is Intel).
           for f in build/server-bundle/bin/*; do
             lipo -archs "$f"
             lipo -archs "$f" | grep -q x86_64 || {
-              echo "::error::$(basename "$f") x64 saiu sem a fatia x86_64"; exit 1; }
+              echo "::error::$(basename "$f") x64 is missing the x86_64 slice"; exit 1; }
           done
       - uses: actions/upload-artifact@v4
         with:
@@ -125,7 +107,7 @@ jobs:
           retention-days: 1
 
   macos:
-    name: macOS dmg (universal, notarizado)
+    name: macOS dmg (universal, notarized)
     needs: [meta, server-x64]
     runs-on: macos-latest
     defaults: { run: { working-directory: cockpit } }
@@ -142,35 +124,32 @@ jobs:
           channel: stable
           cache: true
 
-      # O build hook do libghostty compila a dylib do ghostty (pubspec: hooks >
-      # user_defines > libghostty > source: compile), o que exige Zig. Versão
-      # FIXA de propósito — nunca master/latest: o ghostty declara
-      # minimum_zig_version 0.16.0, e um floating aqui traria de volta a classe
-      # de bug que o `compile` resolve (toolchain divergindo do que suportamos).
-      # Quando o ghostty subir o mínimo, o job quebra alto e a gente atualiza.
+      # Libghostty build hook compiles ghostty dylib, requiring fixed Zig version.
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.16.0
 
-      # A CLI interna (`cockpit-cli`, crate em cockpit/cli) é compilada pelo
-      # Run Script phase do Xcode como binário UNIVERSAL: o build_cli.sh gera
-      # arm64 + x86_64 e junta com `lipo`. O runner é Apple Silicon, então o
-      # target Intel precisa estar instalado — sem ele o app sai sem a fatia
-      # x86_64 e a CLI/hook não funcionam em Mac Intel.
-      - name: Rust + target Intel (CLI interna universal)
+      # Internal CLI (`cockpit-cli`, crate in cockpit/cli) is built as a UNIVERSAL binary.
+      - name: Rust + Intel target (universal internal CLI)
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      # Internal CLI (`cockpit-cli`, crate in cockpit/cli) is built as a UNIVERSAL binary.
+      - name: Rust + Intel target (universal internal CLI)
         run: |
           rustup toolchain install stable --profile minimal --no-self-update
           rustup default stable
           rustup target add aarch64-apple-darwin x86_64-apple-darwin
           cargo --version
 
-      - name: Baixa a fatia x86_64 do cockpit-server
+      - name: Download x86_64 slice of cockpit-server
         uses: actions/download-artifact@v4
         with:
           name: cockpit-server-x64
           path: cockpit/build/server-x64
 
-      - name: Importa certificado Developer ID em keychain temporário
+      - name: Import Developer ID certificate into temporary keychain
         env:
           MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
           MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
@@ -197,77 +176,43 @@ jobs:
           flutter pub get
           flutter build macos --release
           APP="build/macos/Build/Products/Release/Cockpit.app"
-          # Funde a fatia x86_64 do cockpit-server (job server-x64) no bundle
-          # arm64 do .app → universal. Reassina cada Mach-O fundido com o SIGN_ID
-          # (lipo invalida a assinatura). Feito ANTES das assinaturas do app pra
-          # o --deep/verify já verem o bundle universal e assinado.
+          # Merge x86_64 slice into arm64 bundle -> universal.
           SERVER_BUNDLE="$APP/Contents/Resources/cockpit-server-bundle"
-          # Merge sem assinar (o lipo invalida a assinatura de qualquer jeito);
-          # a assinatura vem logo abaixo, com as entitlements certas.
           ./tool/lipo-server-bundle.sh "$SERVER_BUNDLE" build/server-x64
-          # Reassina o bundle do servidor igual ao build_server.sh: as dylibs
-          # primeiro; o exe (Dart AOT) com cockpit_hook.entitlements — sob
-          # hardened runtime sem allow-jit o macOS o mata (mesma classe do
-          # cockpit-hook/cli). O --deep abaixo não toca Mach-O solto em
-          # Resources/, então esta assinatura é a que vale.
+          # Re-sign server bundle dylibs and executable with entitlements.
           for f in "$SERVER_BUNDLE"/lib/*.dylib; do
             codesign --force --options runtime --timestamp -s "$SIGN_ID" "$f"
           done
-          # TODO binário de bin/, não só o cockpit-server: a CLI embarcada
-          # (bin/cockpit, plano 60 Wave G1) entrou depois e ninguém a assinava.
-          # O `--deep` do app NÃO alcança Mach-O em subpasta de Resources/, então
-          # ela chegava crua na notarização e a reprovava com "not signed",
-          # "no secure timestamp" e "hardened runtime not enabled".
           for f in "$SERVER_BUNDLE"/bin/*; do
             codesign --force --options runtime --timestamp \
               --entitlements macos/cockpit_hook.entitlements \
               --sign "$SIGN_ID" "$f"
           done
-          # Gate do Intel (mesmo espírito do cockpit-cli): sem a fatia x86_64 o
-          # sidecar/host remoto não sobem em Mac Intel. O exe do servidor é um
-          # AOT do Dart e sai do lipo-server-bundle.sh como DOIS arquivos finos
-          # (ver o cabeçalho do script: AOT do Dart não sobrevive ao lipo).
           for arch in arm64 x64; do
             exe="$SERVER_BUNDLE/bin/cockpit-server-$arch"
             [ -f "$exe" ] || {
-              echo "::error::cockpit-server-$arch ausente no bundle"; exit 1; }
+              echo "::error::cockpit-server-$arch missing in bundle"; exit 1; }
             want=$([ "$arch" = x64 ] && echo x86_64 || echo arm64)
             lipo -archs "$exe" | grep -q "$want" || {
-              echo "::error::cockpit-server-$arch não é $want"; exit 1; }
+              echo "::error::cockpit-server-$arch is not $want"; exit 1; }
           done
-          # Smoke test do binário assinado: sobe o servidor e exige o socket.
-          # É o gate que faltava — o bundle universal da 1.28.0 passou por todas
-          # as verificações estáticas e mesmo assim NENHUMA arquitetura rodava
-          # ("is not an AOT snapshot"), deixando todo terminal no fallback.
           SMOKE="$RUNNER_TEMP/cockpit-server-smoke.sock"
           COCKPIT_PTY_DYLIB="$SERVER_BUNDLE/lib/libcockpit_pty.dylib" \
             "$SERVER_BUNDLE/bin/cockpit-server-arm64" \
             --socket "$SMOKE" --exit-on-idle 1 >"$RUNNER_TEMP/smoke.log" 2>&1 &
           for i in $(seq 1 20); do [ -S "$SMOKE" ] && break; sleep 0.5; done
           [ -S "$SMOKE" ] || {
-            echo "::error::cockpit-server não subiu (bundle quebrado)"
+            echo "::error::cockpit-server failed to start (broken bundle)"
             cat "$RUNNER_TEMP/smoke.log" || true
             exit 1
           }
-          echo "[smoke] cockpit-server subiu e escutou em $SMOKE"
-          # Assina o .app (Developer ID + Hardened Runtime + timestamp). --deep
-          # cobre os componentes do Sparkle aninhados (Sparkle.framework,
-          # Autoupdate, Updater.app, XPCServices), exigência da notarização.
+          echo "[smoke] cockpit-server started and listening on $SMOKE"
           codesign --force --deep --options runtime --timestamp \
             --entitlements macos/Runner/Release.entitlements \
             --sign "$SIGN_ID" "$APP"
-          # O --deep reassinou o cockpit-hook (Contents/Resources) SEM as
-          # entitlements dele. É um exe AOT do Dart: sob hardened runtime sem
-          # allow-jit/allow-unsigned-executable-memory o macOS o mata (SIGKILL).
-          # Reassina o helper com as entitlements certas e re-sela o topo do app
-          # (sem --deep, pra não reassinar/estragar de novo o helper).
           codesign --force --options runtime --timestamp \
             --entitlements macos/cockpit_hook.entitlements \
             --sign "$SIGN_ID" "$APP/Contents/Resources/cockpit-hook"
-          # Mesmo caso do cockpit-cli: exe AOT do Dart solto em Resources/. O
-          # --deep NÃO assina Mach-O avulso em Resources/ (só trata code conhecido
-          # — frameworks/plugins/XPC), então ele saía sem Developer ID, sem
-          # timestamp e sem hardened runtime → notarização Invalid. Assina explícito.
           codesign --force --options runtime --timestamp \
             --entitlements macos/cockpit_hook.entitlements \
             --sign "$SIGN_ID" "$APP/Contents/Resources/cockpit-cli"
@@ -275,23 +220,15 @@ jobs:
             --entitlements macos/Runner/Release.entitlements \
             --sign "$SIGN_ID" "$APP"
           codesign --verify --deep --strict --verbose=2 "$APP"
-          # O --deep --strict acima NÃO inspeciona Mach-O solto em subpasta de
-          # Resources/ — foi assim que a CLI do bundle do servidor passou crua
-          # daqui e só foi barrada pela Apple, 10 minutos depois. Verifica cada
-          # um explicitamente, antes de gastar a submissão.
           for f in "$SERVER_BUNDLE"/bin/* "$SERVER_BUNDLE"/lib/*.dylib; do
             codesign --verify --strict --verbose=2 "$f" || {
-              echo "::error::$(basename "$f") do bundle do servidor não passou na verificação de assinatura"
+              echo "::error::$(basename "$f") in server bundle failed signature verification"
               exit 1
             }
           done
-          # Gate do Intel: a CLI (que também atende os hooks do Claude via
-          # `cockpit hook`) precisa das DUAS fatias. Checar a arquitetura não
-          # basta — `lipo -verify_arch` passa até em binário quebrado —, então
-          # também executamos a fatia nativa.
           lipo -archs "$APP/Contents/Resources/cockpit-cli"
           lipo -archs "$APP/Contents/Resources/cockpit-cli" | grep -q x86_64 || {
-            echo "::error::cockpit-cli saiu sem a fatia x86_64 (Mac Intel ficaria sem CLI/hook)"
+            echo "::error::cockpit-cli missing x86_64 slice"
             exit 1
           }
           "$APP/Contents/Resources/cockpit-cli" --version
@@ -302,26 +239,19 @@ jobs:
             out=$(xcrun notarytool submit "$1" --key "$RUNNER_TEMP/apikey.p8" \
               --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER" --wait 2>&1)
             echo "$out"
-            # Em rejeição (Invalid) o submit não traz os motivos; puxa o log com os
-            # issues (arquivo + razão) pra diagnosticar sem caça manual.
             if echo "$out" | grep -q "status: Invalid"; then
               local id
               id=$(echo "$out" | grep -m1 -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}')
-              echo "::error::Notarização Invalid — log da submissão $id:"
+              echo "::error::Notarization Invalid — submission log $id:"
               xcrun notarytool log "$id" --key "$RUNNER_TEMP/apikey.p8" \
                 --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER" || true
               return 1
             fi
           }
-          # 1) Notariza o .app (submetendo um zip) e grampeia o ticket no bundle.
           ditto -c -k --keepParent "$APP" "$RUNNER_TEMP/notarize-app.zip"
           notarize "$RUNNER_TEMP/notarize-app.zip"
           xcrun stapler staple "$APP"
-          # 2) Artefato de update do Sparkle (plano 47): zip do .app já
-          #    notarizado+stapled — Sparkle troca o bundle in-place (zip é o
-          #    caminho recomendado, não o dmg). NÃO entra no latest.json.
           ditto -c -k --keepParent "$APP" "dist/Cockpit-${VERSION}-macos.zip"
-          # 3) DMG de primeira instalação, a partir do .app já stapled.
           STAGE=$(mktemp -d)
           cp -R "$APP" "$STAGE/"
           ln -s /Applications "$STAGE/Applications"
@@ -333,11 +263,10 @@ jobs:
           xcrun stapler staple "$DMG"
           spctl -a -t open --context context:primary-signature -vv "$DMG"
           rm "$RUNNER_TEMP/apikey.p8"
-
       - uses: actions/upload-artifact@v4
         with:
           name: macos
-          # dmg (primeira instalação) + Cockpit-<v>-macos.zip (update Sparkle).
+          # dmg (first install) + Cockpit-<v>-macos.zip (Sparkle update).
           path: cockpit/dist/*
           if-no-files-found: error
 
@@ -358,53 +287,39 @@ jobs:
           channel: stable
           cache: true
 
-      # O build hook do libghostty compila a dylib do ghostty (pubspec: hooks >
-      # user_defines > libghostty > source: compile), o que exige Zig. Versão
-      # FIXA de propósito — nunca master/latest: o ghostty declara
-      # minimum_zig_version 0.16.0, e um floating aqui traria de volta a classe
-      # de bug que o `compile` resolve (toolchain divergindo do que suportamos).
-      # Quando o ghostty subir o mínimo, o job quebra alto e a gente atualiza.
+      # Libghostty build hook compiles ghostty dylib using pinned Zig version.
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.16.0
 
-      - name: Prepara Fastforge e Inno Setup
+      - name: Prepare Fastforge and Inno Setup
         run: |
           dart pub global activate fastforge
           echo "C:\\Program Files (x86)\\Inno Setup 6" >> "$GITHUB_PATH"
 
-      - name: Build + empacota
+      - name: Build + package
         run: |
-          flutter pub get
           flutter build windows --release
-          # Gate do sidecar: sem o bundle do cockpit-server o app cai no
-          # fallback in-process e o Windows roda uma arquitetura diferente do
-          # macOS — silenciosamente, porque o fallback só escreve no log.
+          # Sidecar guard: verify cockpit-server binary and dylib presence.
           SRV="build/windows/x64/runner/Release/cockpit-server-bundle/bin"
           test -x "$SRV/cockpit-server.exe" || {
-            echo "::error::cockpit-server.exe ausente do bundle Windows"; exit 1; }
+            echo "::error::cockpit-server.exe missing from Windows bundle"; exit 1; }
           test -f "$SRV/cockpit_pty.dll" || {
-            echo "::error::cockpit_pty.dll ausente do bundle do servidor"; exit 1; }
-          # Smoke test: sobe o servidor e exige o anúncio do endpoint. No
-          # Windows o transporte é TCP de loopback + token num arquivo de
-          # rendezvous (dart:io não tem socket UNIX lá) — era exatamente esse
-          # bind que estourava, deixando TODO terminal do Windows no fallback
-          # in-process depois de esperar o backoff do conector. O
-          # --exit-on-idle encerra o processo sozinho, então o job não trava.
+            echo "::error::cockpit_pty.dll missing from server bundle"; exit 1; }
           ENDPOINT="$RUNNER_TEMP/cockpit-server-smoke.sock"
           "$SRV/cockpit-server.exe" --socket "$ENDPOINT" --exit-on-idle 1 \
             >"$RUNNER_TEMP/smoke.log" 2>&1 &
           for i in $(seq 1 20); do [ -f "$ENDPOINT" ] && break; sleep 0.5; done
           test -f "$ENDPOINT" || {
-            echo "::error::cockpit-server não subiu no Windows"
+            echo "::error::cockpit-server failed to start on Windows"
             cat "$RUNNER_TEMP/smoke.log" || true
             exit 1
           }
           grep -q '"port"' "$ENDPOINT" || {
-            echo "::error::anúncio do endpoint sem porta: $(cat "$ENDPOINT")"
+            echo "::error::endpoint announcement missing port: $(cat "$ENDPOINT")"
             exit 1
           }
-          echo "[smoke] cockpit-server anunciou o endpoint: $(cat "$ENDPOINT")"
+          echo "[smoke] cockpit-server announced endpoint: $(cat "$ENDPOINT")"
           dart pub global run fastforge:main package --platform windows --targets exe
           EXE=$(find dist -name "*.exe" | head -1)
           test -n "$EXE"
@@ -431,11 +346,7 @@ jobs:
             deb_arch: arm64
             rpm_arch: aarch64
     runs-on: ${{ matrix.runner }}
-    # Rede de segurança: sem teto o default do GitHub é SEIS HORAS. Na 1.28.1
-    # um `apt-get` pendurado segurou o job por 47min (o normal é ~1min) sem
-    # nada acusar; a release só andou porque alguém foi olhar. Os tetos abaixo
-    # transformam "pendurado indefinidamente" em "falha alto, com log, e
-    # `gh run rerun --failed` refaz só este job".
+    # Safety timeout: default GitHub timeout is 6 hours.
     timeout-minutes: 45
     defaults: { run: { working-directory: cockpit } }
     env:
@@ -444,95 +355,72 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.RELEASE_TAG }}
-      - name: Flutter x64 (SDK empacotado)
-        if: matrix.deb_arch == 'amd64'
+      - name: Flutter x64 (packaged SDK)
         uses: subosito/flutter-action@v2
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
           cache: true
 
-      # Não existe SDK empacotado de Flutter pra linux-arm64 (flutter-action
-      # falha em host ARM). O caminho suportado é rodar a partir do git: o
-      # tool se bootstrapa e baixa os artefatos de engine arm64.
+      # Flutter SDK for linux-arm64 via git
       - name: Flutter arm64 (via git)
         if: matrix.deb_arch == 'arm64'
         run: |
           git clone --depth 1 --branch "$FLUTTER_VERSION" https://github.com/flutter/flutter.git "$RUNNER_TEMP/flutter"
           echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
 
-      # O build hook do libghostty compila a dylib do ghostty (pubspec: hooks >
-      # user_defines > libghostty > source: compile), o que exige Zig. Versão
-      # FIXA de propósito — nunca master/latest: o ghostty declara
-      # minimum_zig_version 0.16.0, e um floating aqui traria de volta a classe
-      # de bug que o `compile` resolve (toolchain divergindo do que suportamos).
-      # Quando o ghostty subir o mínimo, o job quebra alto e a gente atualiza.
+      # Libghostty build hook compiles ghostty dylib using pinned Zig version.
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.16.0
 
-      - name: Deps de sistema (GTK, ninja, rpmbuild, libmpv)
-        # Medido: 55s no amd64, 1m08s no arm64. Passar de 10min aqui não é
-        # lentidão, é pendura — lista de pacotes fixa, nada a compilar.
+      - name: System dependencies (GTK, ninja, rpmbuild, libmpv)
+        # Fixed package list, nothing to compile.
         timeout-minutes: 10
         env:
-          # `needrestart` do ubuntu-24.04 abre prompt interativo no install e
-          # é uma das formas clássicas de pendurar o passo.
+          # Non-interactive to prevent install hangs.
           DEBIAN_FRONTEND: noninteractive
         run: |
-          # Stall de mirror costuma passar na segunda tentativa; três, com
-          # teto por tentativa, custam nada perto de um rerun manual. Falha nas
-          # três aborta AQUI: seguir pro install com o índice velho troca um
-          # erro claro por um "pacote não encontrado" mais adiante.
+          # Mirror retries with timeout per attempt.
           updated=0
           for attempt in 1 2 3; do
             if timeout 120 sudo -E apt-get update; then updated=1; break; fi
-            echo "apt-get update falhou/expirou (tentativa $attempt)"
+            echo "apt-get update failed/timed out (attempt $attempt)"
             sleep 5
           done
           [ "$updated" = 1 ] || {
-            echo "::error::apt-get update falhou nas 3 tentativas (mirror?)"
+            echo "::error::apt-get update failed after 3 attempts (mirror?)"
             exit 1
           }
-          # libmpv-dev: media_kit linka contra libmpv no Linux (plano 46).
-          # Runtime declarado nos pacotes: deb libmpv2 / rpm mpv-libs.
-          # libsecret-1-dev: flutter_secure_storage no Linux (senha de banco,
-          # plano 51). Runtime: libsecret-1-0.
+          # libmpv-dev: media_kit links against libmpv on Linux.
+          # libsecret-1-dev: flutter_secure_storage on Linux.
           sudo -E apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev rpm libmpv-dev libsecret-1-dev
           flutter --version
           dart pub global activate fastforge
 
-      - name: Build + empacota
-        # Medido: 7m19s. Teto folgado de propósito — aqui se compila Flutter,
-        # o `dart build cli`, o Rust da CLI e o Zig do libghostty, e cache frio
-        # infla isso legitimamente.
+      - name: Build + package
+        # Builds Flutter, dart CLI, Rust CLI, and Zig libghostty.
         timeout-minutes: 30
         run: |
           flutter pub get
           flutter build linux --release
-          # Gate do sidecar (mesma razão do Windows): sem o bundle do
-          # cockpit-server o app cai no fallback in-process, em silêncio.
+          # Sidecar guard: verify cockpit-server bundle.
           SRV="build/linux/${{ matrix.deb_arch == 'amd64' && 'x64' || 'arm64' }}/release/bundle/cockpit-server-bundle/bin"
           test -x "$SRV/cockpit-server" || {
-            echo "::error::cockpit-server ausente do bundle Linux ($SRV)"; exit 1; }
+            echo "::error::cockpit-server missing from Linux bundle ($SRV)"; exit 1; }
           test -f "$SRV/libcockpit_pty.so" || {
-            echo "::error::libcockpit_pty.so ausente do bundle do servidor"; exit 1; }
-          # Smoke test: sobe o servidor e exige o socket. Existir e ser
-          # executável não prova que roda — no macOS um bundle que passava em
-          # toda checagem estática não subia em arquitetura nenhuma, e o app
-          # caía no PTY in-process em silêncio. O --exit-on-idle encerra
-          # sozinho, então o job não trava.
+            echo "::error::libcockpit_pty.so missing from server bundle"; exit 1; }
           SOCK="$RUNNER_TEMP/cockpit-server-smoke.sock"
           COCKPIT_PTY_DYLIB="$SRV/libcockpit_pty.so" \
             "$SRV/cockpit-server" --socket "$SOCK" --exit-on-idle 1 \
             >"$RUNNER_TEMP/smoke.log" 2>&1 &
           for i in $(seq 1 20); do [ -S "$SOCK" ] && break; sleep 0.5; done
           [ -S "$SOCK" ] || {
-            echo "::error::cockpit-server não subiu no Linux"
+            echo "::error::cockpit-server failed to start on Linux"
             cat "$RUNNER_TEMP/smoke.log" || true
             exit 1
           }
-          echo "[smoke] cockpit-server subiu e escutou em $SOCK"
+          echo "[smoke] cockpit-server started and listening on $SOCK"
           dart pub global run fastforge:main package --platform linux --targets deb
           dart pub global run fastforge:main package --platform linux --targets rpm
           DEB=$(find dist -name "*.deb" | head -1); test -n "$DEB"
@@ -541,40 +429,32 @@ jobs:
           mv "$DEB" "out/remote-pi-cockpit_${VERSION}_${{ matrix.deb_arch }}.deb"
           mv "$RPM" "out/remote-pi-cockpit-${VERSION}.${{ matrix.rpm_arch }}.rpm"
 
-      - name: Smoke test .deb (instala no próprio runner)
-        # Medido: 6s. O smoke sobe o servidor e espera o socket com laço
-        # próprio, então um teto curto aqui é seguro.
+      - name: Smoke test .deb (install on runner)
+        # Smoke test installs deb on the runner.
         timeout-minutes: 5
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
           sudo -E apt-get install -y "./out/remote-pi-cockpit_${VERSION}_${{ matrix.deb_arch }}.deb"
           dpkg -L remote-pi-cockpit | grep -m1 "\.desktop$"
-          # O bundle do servidor chegou ao PACOTE (o gate anterior só provou que
-          # saiu do build). Sem ele o app instalado roda no fallback.
           dpkg -L remote-pi-cockpit | grep -q "cockpit-server-bundle/bin/cockpit-server$" || {
-            echo "::error::.deb sem o bundle do cockpit-server"; exit 1; }
-          # E o binário INSTALADO sobe de fato: é a única checagem que exercita
-          # o caminho real (prefixo de instalação, permissões, rpath das libs
-          # ao lado). O gate anterior só provou que o arquivo está no pacote.
+            echo "::error::.deb missing cockpit-server bundle"; exit 1; }
           INSTALLED=$(dpkg -L remote-pi-cockpit | grep -m1 "cockpit-server-bundle/bin/cockpit-server$")
           SOCK="$RUNNER_TEMP/cockpit-server-deb.sock"
           "$INSTALLED" --socket "$SOCK" --exit-on-idle 1 \
             >"$RUNNER_TEMP/deb-smoke.log" 2>&1 &
           for i in $(seq 1 20); do [ -S "$SOCK" ] && break; sleep 0.5; done
           [ -S "$SOCK" ] || {
-            echo "::error::cockpit-server instalado pelo .deb não sobe"
+            echo "::error::cockpit-server installed from .deb failed to start"
             cat "$RUNNER_TEMP/deb-smoke.log" || true
             exit 1
           }
-          echo "[smoke] cockpit-server do .deb subiu em $SOCK"
+          echo "[smoke] cockpit-server from .deb started on $SOCK"
 
-      - name: Smoke test .rpm (container fedora:40)
-        # Medido: 37s. A folga cobre o pull da imagem num dia ruim de rede.
+      - name: Smoke test .rpm (fedora:40 container)
         timeout-minutes: 10
         run: |
-          # rpm -qpl consulta o ARQUIVO (o nome interno do pacote não é
-          # remote-pi-cockpit — o maker do Fastforge usa o nome do pubspec).
+          # Query file with rpm -qpl
           docker run --rm -v "$PWD/out:/out:ro" fedora:40 bash -c \
             "dnf install -y /out/remote-pi-cockpit-${VERSION}.${{ matrix.rpm_arch }}.rpm \
              && rpm -qpl /out/remote-pi-cockpit-${VERSION}.${{ matrix.rpm_arch }}.rpm | grep -m1 '\.desktop$'"
@@ -601,24 +481,16 @@ jobs:
           path: release
           merge-multiple: true
 
-      # O download traz TODOS os artefatos do run, inclusive o
-      # `cockpit-server-x64` — que é INSUMO do job macos (a fatia Intel pro
-      # lipo), não entregável, e chega como os diretórios bin/ e lib/. Cada
-      # passo seguinte tropeçava neles por conta própria: `sha256sum` com "Is a
-      # directory" e o `gh release upload` tentando subir um diretório como
-      # asset. Some com eles aqui, uma vez, em vez de remendar passo a passo.
-      - name: Descarta insumos (só entregáveis viram asset)
+      # Download brings ALL run artifacts, including `cockpit-server-x64`
+      # which is an input for macOS lipo, not a deliverable. Clean up here.
+      - name: Discard intermediate inputs (deliverables only)
         run: |
           find release -mindepth 1 -maxdepth 1 -type d -print -exec rm -rf {} +
           ls -la release
 
-      - name: Gera SHA256SUMS e latest.json
+      - name: Generate SHA256SUMS and latest.json
         run: |
-          cd release
-          # Só ARQUIVOS: o artefato `cockpit-server-x64` (insumo do job macos, não
-          # entregável) vem como os diretórios bin/ e lib/, e `sha256sum *`
-          # falhava com "Is a directory" — derrubando o job inteiro sob `bash -e`
-          # depois de todo o build já ter passado.
+          # Files only: skip directories
           find . -maxdepth 1 -type f ! -name SHA256SUMS -print0 \
             | xargs -0 sha256sum > SHA256SUMS
           BASE="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}"
@@ -643,13 +515,10 @@ jobs:
           done
           COUNT=$(jq -s length artifacts.ndjson)
           if [ "$COUNT" -ne 6 ]; then
-            echo "::error::esperava 6 artefatos no manifest, achei $COUNT"
+            echo "::error::expected 6 artifacts in manifest, found $COUNT"
             exit 1
           fi
-          # Notas: primeira seção do CHANGELOG; fallback genérico. O markdown
-          # CRU (com as linhas em branco) vai pro RUNNER_TEMP — é o que o passo
-          # do appcast converte pra HTML. O `notes` do latest.json segue como
-          # está (o site renderiza esse campo como texto).
+          # Notes: first section of CHANGELOG; generic fallback.
           awk '/^## /{n++} n==1' ../cockpit/CHANGELOG.md | tail -n +2 \
             > "$RUNNER_TEMP/notes.md"
           NOTES=$(sed '/^$/d' "$RUNNER_TEMP/notes.md" | head -20)
@@ -664,15 +533,12 @@ jobs:
           rm artifacts.ndjson
           cat latest.json
 
-      - name: Assina artefatos e gera appcasts (Sparkle/WinSparkle)
+      - name: Sign artifacts and generate appcasts (Sparkle/WinSparkle)
         env:
           SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
           BUILD: ${{ needs.meta.outputs.build }}
         run: |
-          # Plano 47 — assina o .app.zip (macOS) e o .exe (Windows) com a MESMA
-          # chave ed25519 (decisão E refinada): ed25519 é determinístico, então
-          # PyNaCl gera a assinatura que Sparkle e WinSparkle verificam. Sem
-          # ferramenta nativa nos runners — só a chave (secret).
+          # Sign .app.zip (macOS) and .exe (Windows) with the same ed25519 key.
           python3 -m venv "$RUNNER_TEMP/venv"
           "$RUNNER_TEMP/venv/bin/pip" install --quiet pynacl
           cat > "$RUNNER_TEMP/sign.py" <<'PY'
@@ -691,10 +557,7 @@ jobs:
           MAC_SIG=$(sign "$ZIP"); MAC_LEN=$(stat -c%s "$ZIP")
           WIN_SIG=$(sign "$EXE"); WIN_LEN=$(stat -c%s "$EXE")
           PUBDATE=$(date -u +"%a, %d %b %Y %H:%M:%S +0000")
-          # O Sparkle/WinSparkle renderiza a <description> como HTML num webview.
-          # Jogar o markdown do CHANGELOG lá dentro fazia o usuário ver os `###`
-          # e `**` na tela e, pior, TUDO numa linha só (HTML colapsa quebras de
-          # linha) — ilegível. Converte pra HTML de verdade antes.
+          # Sparkle/WinSparkle renders <description> as HTML in a webview.
           python3 ../cockpit/packaging/release_notes_html.py --selftest
           python3 ../cockpit/packaging/release_notes_html.py \
             < "$RUNNER_TEMP/notes.md" > "$RUNNER_TEMP/notes.html"
@@ -716,9 +579,8 @@ jobs:
             </channel>
           </rss>
           XML
-          # Windows: WinSparkle baixa o .exe do Inno e roda silencioso via
-          # sparkle:installerArguments; sparkle:version = versão marketing (bate
-          # com o ProductVersion do Runner.rc).
+          # Windows: WinSparkle downloads Inno .exe and runs silently via
+          # sparkle:installerArguments; sparkle:version = marketing version.
           cat > appcast-windows.xml <<XML
           <?xml version="1.0" encoding="utf-8"?>
           <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
@@ -734,9 +596,7 @@ jobs:
             </channel>
           </rss>
           XML
-          # Injeta o HTML por substituição (não por expansão do heredoc): as
-          # notas são texto livre e um `$(`, uma crase ou um `]]>` no CHANGELOG
-          # quebrariam o shell ou o CDATA.
+          # Inject HTML via substitution (avoiding heredoc expansion issues).
           python3 - "$RUNNER_TEMP/notes.html" appcast-macos.xml appcast-windows.xml <<'PY'
           import sys
           notes = open(sys.argv[1], encoding='utf-8').read().replace(']]>', ']]&gt;')
@@ -747,24 +607,23 @@ jobs:
                   f.write(xml.replace('@@NOTES@@', notes))
           PY
           if grep -q '@@NOTES@@' appcast-macos.xml appcast-windows.xml; then
-            echo "::error::notas não injetadas no appcast (placeholder sobrou)"
+            echo "::error::notes not injected into appcast (placeholder remaining)"
             exit 1
           fi
           echo "== appcast-macos.xml =="; cat appcast-macos.xml
           echo "== appcast-windows.xml =="; cat appcast-windows.xml
 
-      - name: Cria (ou atualiza) a GitHub Release
+      - name: Create (or update) GitHub Release
         run: |
           NOTES_FILE=$(mktemp)
           jq -r .notes release/latest.json > "$NOTES_FILE"
           {
             echo ""
             echo "---"
-            echo "**Publicação:** \`latest.json\` + appcasts são enviados automaticamente"
-            echo "pro rp-s3 no fim do workflow (liga site/card e o self-update"
-            echo "Sparkle/WinSparkle). Se o passo de publish falhar, o fallback manual"
-            echo "é baixar os 3 arquivos desta release e colocar em"
-            echo "\`/Users/flutterando/cockpit/data/\` (ver \`rp-s3/README.md\`)."
+            echo "**Publishing:** \`latest.json\` + appcasts are automatically uploaded"
+            echo "to rp-s3 at the end of the workflow (enables site download and self-update)."
+            echo "Manual fallback: download the 3 files from this release and place at"
+            echo "\`/Users/flutterando/cockpit/data/\` (see \`rp-s3/README.md\`)."
           } >> "$NOTES_FILE"
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             gh release upload "$RELEASE_TAG" release/* --clobber
@@ -774,24 +633,12 @@ jobs:
               --notes-file "$NOTES_FILE" \
               --latest
           fi
-          # O badge "Latest" também no re-run (ali em cima só o create passa a
-          # flag). Idempotente.
-          #
-          # O repositório publica DUAS linhas de release (cockpit-v* e app-v*) e
-          # o GitHub só tem um "Latest" — a flag era `false` nas duas, herdada
-          # do workflow do app, e sobrava marcar na mão a cada release. O
-          # Cockpit fica com o badge por ser a linha ativa; o app mobile, raro,
-          # segue sem. Nada no projeto depende da URL /releases/latest (os
-          # downloads vão pelo latest.json do rp-s3 e pelos appcasts), então
-          # isto é cosmético — e o cosmético estava dando trabalho manual.
+          # The "Latest" badge is set on every release run (idempotent).
           gh release edit "$RELEASE_TAG" --latest
 
-      # Publica os manifests no rp-s3 (substitui o gate manual). Roda DEPOIS da
-      # release existir no GitHub: as URLs dentro do latest.json/appcasts apontam
-      # pros assets da release, então só faz sentido publicar com eles no ar.
-      # Appcasts primeiro, latest.json por último: o site/card só anuncia a
-      # versão quando o self-update já tem o que servir.
-      - name: Publica manifests no rp-s3
+      # Publish manifests to rp-s3 (replaces manual gate). Runs AFTER release
+      # exists on GitHub: URLs inside latest.json/appcasts point to release assets.
+      - name: Publish manifests to rp-s3
         env:
           RP_S3_UPLOAD_TOKEN: ${{ secrets.RP_S3_UPLOAD_TOKEN }}
         run: |
@@ -805,16 +652,15 @@ jobs:
           upload appcast-windows.xml
           upload SHA256SUMS
           upload latest.json
-          echo "publicado: https://rp-s3.jacobmoura.work/downloads/cockpit/latest.json"
-
-      - name: Resumo
+          echo "published: https://rp-s3.jacobmoura.work/downloads/cockpit/latest.json"
+      - name: Summary
         run: |
           {
-            echo "## Cockpit ${VERSION} publicado"
+            echo "## Cockpit ${VERSION} published"
             echo ""
             echo "Release: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${RELEASE_TAG}"
             echo ""
-            echo "Manifests publicados automaticamente no rp-s3:"
+            echo "Manifests published to rp-s3:"
             echo "- https://rp-s3.jacobmoura.work/downloads/cockpit/latest.json"
             echo "- https://rp-s3.jacobmoura.work/downloads/cockpit/appcast-macos.xml"
             echo "- https://rp-s3.jacobmoura.work/downloads/cockpit/appcast-windows.xml"

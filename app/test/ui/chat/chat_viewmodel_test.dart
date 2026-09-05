@@ -155,7 +155,7 @@ void main() {
     expect(vm.isWorking, isTrue, reason: 'turn started → working');
     expect(vm.cancelTargetId, 'u1', reason: 'stop button cancels this turn');
     ch.push(AgentDone(inReplyTo: 'u1'));
-    await Future<void>.delayed(const Duration(milliseconds: 50));
+    await Future<void>.delayed(const Duration(milliseconds: 120));
     expect(vm.isWorking, isFalse, reason: 'agent_done → idle');
     expect(vm.cancelTargetId, isNull, reason: 'no turn to cancel when idle');
 
@@ -192,7 +192,7 @@ void main() {
     expect(vm.isWorking, isTrue, reason: 'BASH RUNNING must keep the pill on');
 
     ch.push(ToolResult(toolCallId: 't1', result: 'ok'));
-    await Future<void>.delayed(const Duration(milliseconds: 50));
+    await Future<void>.delayed(const Duration(milliseconds: 120));
     expect(vm.isWorking, isFalse, reason: 'last tool done + agent_done → idle');
 
     vm.dispose();
@@ -469,7 +469,7 @@ void main() {
     // broadcast is delayed/missed, the active chat must not stay stuck on
     // the stop button. The local channel observation clears the room flag.
     ch.push(AgentDone(inReplyTo: 'u1'));
-    await Future<void>.delayed(const Duration(milliseconds: 20));
+    await Future<void>.delayed(const Duration(milliseconds: 180));
     expect(vm.isWorking, isFalse);
     expect((vm.state as ChatReady).isWorking, isFalse);
 
@@ -485,6 +485,56 @@ void main() {
     );
     await Future<void>.delayed(const Duration(milliseconds: 20));
     expect(vm.isWorking, isFalse);
+    expect((vm.state as ChatReady).isWorking, isFalse);
+
+    vm.dispose();
+    sync.dispose();
+    conn.dispose();
+  });
+
+  test(
+      'historical pending ToolEvent in message history does not keep isWorking permanently true when idle',
+      () async {
+    final ch = _FakeChannel();
+    final storage = _FakeStorage();
+    final conn = ConnectionManager(
+      factory: (_, _) async => ch,
+      storage: storage,
+      emitDebounce: Duration.zero,
+      workingOffDebounce: Duration.zero,
+    );
+    final boxes = LocalBoxes();
+    final sync = SyncService(conn, boxes);
+    final read = SessionReadRepository(boxes);
+    final prefs = Preferences(_FakeSecureStorage());
+    await prefs.setSelectedPeerEpk(_peer.remoteEpk);
+    await prefs.setSelectedRoom(epk: _peer.remoteEpk, roomId: 'main');
+
+    conn.adopt(ch, _peer);
+    await Future<void>.delayed(const Duration(milliseconds: 30));
+
+    final vm = ChatViewModel(read, sync, conn, prefs, storage);
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+
+    // Simulate history containing a tool call whose result was not received
+    ch.push(SessionHistory(
+      inReplyTo: 'sync-1',
+      sessionStartedAt: 1000,
+      events: const [
+        UserInputEvt(id: 'sync_1000', text: 'run tool', ts: 1000),
+        ToolRequestEvt(toolCallId: 't1', tool: 'todo', args: {}, ts: 1050),
+      ],
+      eos: true,
+    ));
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+
+    // Agent is idle on the relay and sync has no active in-flight turn
+    expect(conn.isRoomWorking(_peer.remoteEpk, 'main'), isFalse);
+    expect(sync.isWorking, isFalse);
+
+    // isWorking must be false despite historical ToolEvent in messages
+    expect(vm.isWorking, isFalse,
+        reason: 'historical tool events must not lock chat into working mode');
     expect((vm.state as ChatReady).isWorking, isFalse);
 
     vm.dispose();

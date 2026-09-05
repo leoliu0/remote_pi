@@ -1,104 +1,106 @@
-# Protocolo Cockpit Remote (v1, rascunho da Wave 0)
+# Cockpit Remote protocol (v1, Wave 0 draft)
 
-Protocolo cliente ↔ `cockpit-server` do plano 58. Nesta wave cobre o
-**handshake** e o **domínio Terminais**; arquivos, git e databases entram nas
-waves seguintes com o mesmo envelope.
+Client ↔ `cockpit-server` protocol. This wave covers the **handshake** and the
+**Terminals** domain; files, git, and databases come in later waves with the
+same envelope.
 
-As mensagens são classes Dart em `packages/cockpit_protocol` — a mesma classe
-serializa e desserializa nos dois lados do fio. Este documento descreve o
-formato no fio para debugging e para futuros clientes.
+Messages are Dart classes in `packages/cockpit_protocol` — the same class
+serializes and deserializes on both sides of the wire. This document describes
+the on-wire format for debugging and for future clients.
 
-## Transporte
+## Transport
 
-- **Framing**: JSONL — um objeto JSON por linha (`\n`), UTF-8. O despacho é
-  por linha, nunca por `onDone` (lição do socket da CLI interna: esperar
-  `onDone` deadlocka request/response).
-- **Canal**: socket local. No POSIX é um UDS no caminho anunciado; **no Windows
-  é TCP no loopback**, porque o `dart:io` não implementa socket UNIX lá — o
-  bind estourava e o app caía no PTY in-process. O caminho anunciado passa a
-  guardar um **arquivo de rendezvous** JSON (`{"v":1,"port":…,"token":…}`), que
-  faz o papel do inode: é por ele que um cliente descobre um servidor já de pé
-  e o adota. Remoto = o MESMO socket tunelado por SSH (Wave 2); o protocolo não
-  muda. O servidor nunca escuta em porta de rede roteável.
-- **Bytes de PTY**: base64 no campo `d`. (Candidato a otimização em wave
-  futura: frame binário; só se o benchmark pedir.)
-- **Autenticação**: nenhuma no canal onde alcançá-lo já é credencial
-  (permissão de filesystem no UDS; login SSH no túnel) — decisões G/H do plano
-  58. No loopback TCP isso não vale: qualquer processo da máquina conecta,
-  então o `hello` leva um **token** (`tok`) que só quem lê o arquivo de
-  rendezvous conhece, e o servidor recusa o handshake sem ele.
+- **Framing**: JSONL — one JSON object per line (`\n`), UTF-8. Dispatch is
+  per line, never on `onDone` (lesson from the internal CLI socket: waiting
+  on `onDone` deadlocks request/response).
+- **Channel**: local socket. On POSIX it is a UDS at the announced path; **on
+  Windows it is TCP on loopback**, because `dart:io` does not implement UNIX
+  sockets there — bind blew up and the app fell back to in-process PTY. The
+  announced path now holds a JSON **rendezvous file**
+  (`{"v":1,"port":…,"token":…}`), which plays the inode's role: that is how a
+  client discovers an already-running server and adopts it. Remote = the SAME
+  socket tunneled over SSH (Wave 2); the protocol does not change. The server
+  never listens on a routable network port.
+- **PTY bytes**: base64 in field `d`. (Future-wave optimization candidate:
+  binary frame; only if a benchmark asks for it.)
+- **Auth**: none on a channel where reaching it is already a credential
+  (filesystem permission on the UDS; SSH login on the tunnel). That does not
+  hold for loopback TCP: any process on the machine can connect, so `hello`
+  carries a **token** (`tok`) that only whoever reads the rendezvous file
+  knows, and the server refuses the handshake without it.
 
 ## Envelope
 
 ```json
-{"t": "<tipo>", ...campos}
+{"t": "<type>", ...fields}
 ```
 
-Campos comuns: `id` = id de sessão PTY; `d` = payload base64; `off` = offset
-absoluto em bytes do stream da sessão desde o spawn.
+Common fields: `id` = PTY session id; `d` = base64 payload; `off` = absolute
+byte offset of the session stream since spawn.
 
 ## Handshake
 
-O cliente abre a conexão e envia `hello`; o servidor responde `hello.ack` ou
-`err{code: version_mismatch}` e fecha. Toda mensagem antes do `hello` é
-rejeitada com `err{code: handshake_required}`.
+The client opens the connection and sends `hello`; the server replies
+`hello.ack` or `err{code: version_mismatch}` and closes. Every message before
+`hello` is rejected with `err{code: handshake_required}`.
 
-| Direção | Mensagem | Campos |
+| Direction | Message | Fields |
 |---|---|---|
-| C→S | `hello` | `v` (int, versão do protocolo), `client` (nome/versão), `tok` (opcional), `loc` (opcional) |
-| S→C | `hello.ack` | `v`, `server` (versão do binário) |
+| C→S | `hello` | `v` (int, protocol version), `client` (name/version), `tok` (optional), `loc` (optional) |
+| S→C | `hello.ack` | `v`, `server` (binary version) |
 
-`tok` é o token do arquivo de rendezvous, obrigatório onde o transporte é TCP
-de loopback (Windows) e ausente sobre UDS/túnel SSH; token errado responde
-`err{code: invalid_token}` e fecha.
+`tok` is the rendezvous-file token, required where transport is loopback TCP
+(Windows) and absent over UDS/SSH tunnel; a wrong token replies
+`err{code: invalid_token}` and closes.
 
-`loc: true` diz "estou na mesma máquina que você" (sidecar), e não é derivável
-do transporte — a ponta de um `ssh -L` também é um socket local, e ali o
-servidor é remoto. Ele muda uma coisa: as PTYs de um cliente local mantêm o
-`COCKPIT_STATUS_SOCK` que o cliente injetou, porque aquele socket é a via da
-CLI interna (`cockpit send`, `list-tabs`, `db`) além do status de turno. Para
-um cliente remoto o servidor troca esse endereço pelo do seu próprio receptor
-(o socket do cliente é inalcançável do host), removendo junto as chaves do
-outro transporte — o hook lê `COCKPIT_STATUS_SOCK` antes de porta+token, e uma
-sobra do cliente venceria o endereço certo.
+`loc: true` means "I am on the same machine as you" (sidecar), and is not
+derivable from transport — the near end of `ssh -L` is also a local socket,
+and there the server is remote. It changes one thing: PTYs of a local client
+keep the `COCKPIT_STATUS_SOCK` the client injected, because that socket is
+the path for the internal CLI (`cockpit send`, `list-tabs`, `db`) as well as
+turn status. For a remote client the server swaps that address for its own
+receiver (the client's socket is unreachable from the host), also removing
+the other transport's keys — the hook reads `COCKPIT_STATUS_SOCK` before
+port+token, and a leftover from the client would win over the right address.
 
-`v` é comparado por igualdade nesta fase. Incompatível → o cliente oferece
-"Update server" (bootstrap pelo túnel, Wave 2).
+`v` is compared by equality at this stage. Incompatible → the client offers
+"Update server" (bootstrap over the tunnel, Wave 2).
 
-## Domínio Terminais
+## Terminals domain
 
-Modelo: **sessões pertencem ao servidor**, não à conexão. Detach (ou queda da
-conexão) não mata a sessão; reattach recupera o scrollback retido (ring
-buffer de bytes crus, default 4 MiB por sessão) e continua live. O emulador
-(Ghostty) vive no cliente; o servidor não interpreta os bytes.
+Model: **sessions belong to the server**, not to the connection. Detach (or
+a dropped connection) does not kill the session; reattach recovers the
+retained scrollback (raw-byte ring buffer, default 4 MiB per session) and
+continues live. The emulator (Ghostty) lives on the client; the server does
+not interpret the bytes.
 
-| Direção | Mensagem | Campos | Resposta |
+| Direction | Message | Fields | Reply |
 |---|---|---|---|
-| C→S | `pty.open` | `cmd`, `args[]`, `cwd?`, `env{}?`, `rows`, `cols` | `pty.opened{id, pid}` ou `err` |
+| C→S | `pty.open` | `cmd`, `args[]`, `cwd?`, `env{}?`, `rows`, `cols` | `pty.opened{id, pid}` or `err` |
 | C→S | `pty.list` | — | `pty.sessions{sessions[]}` (`{id,pid,cmd,rows,cols,len,exit?}`) |
-| C→S | `pty.attach` | `id`, `from` (offset; 0 = replay do retido) | stream de `pty.output` + `pty.exited` |
-| C→S | `pty.detach` | `id` | (nada; sessão segue viva) |
+| C→S | `pty.attach` | `id`, `from` (offset; 0 = replay retained) | stream of `pty.output` + `pty.exited` |
+| C→S | `pty.detach` | `id` | (nothing; session stays alive) |
 | C→S | `pty.input` | `id`, `d` | — |
 | C→S | `pty.resize` | `id`, `rows`, `cols` | — |
-| C→S | `pty.kill` | `id` | — (mata processo E descarta a sessão) |
+| C→S | `pty.kill` | `id` | — (kills the process AND discards the session) |
 | S→C | `pty.output` | `id`, `off`, `d` | — |
-| S→C | `pty.exited` | `id`, `code` | — (scrollback segue anexável até `pty.kill`) |
+| S→C | `pty.exited` | `id`, `code` | — (scrollback stays attachable until `pty.kill`) |
 
-Semântica do offset: `off` é a posição absoluta do primeiro byte do chunk no
-stream total da sessão. No attach com `from` anterior ao retido, o primeiro
-chunk chega com `off` maior que o pedido — o cliente sabe que perdeu o início.
-O replay nunca duplica nem perde bytes em relação ao live (o servidor filtra
-por offset na costura replay→live).
+Offset semantics: `off` is the absolute position of the chunk's first byte in
+the session's total stream. On attach with `from` earlier than retained, the
+first chunk arrives with `off` greater than requested — the client knows it
+lost the start. Replay never duplicates or drops bytes relative to live (the
+server filters by offset at the replay→live seam).
 
-## Erros
+## Errors
 
 ```json
-{"t": "err", "code": "<código estável>", "detail": "<texto cru>", "id": "<sessão>?"}
+{"t": "err", "code": "<stable code>", "detail": "<raw text>", "id": "<session>?"}
 ```
 
-Códigos atuais: `handshake_required`, `version_mismatch`, `bad_message`,
-`session_not_found`, `spawn_failed`, `internal`. `code` é contrato (a UI
-traduz por enum); `detail` é texto de terceiros (errno etc.), exibido cru.
+Current codes: `handshake_required`, `version_mismatch`, `bad_message`,
+`session_not_found`, `spawn_failed`, `internal`. `code` is contract (the UI
+translates by enum); `detail` is third-party text (errno etc.), shown raw.
 
 ## Domínio Bancos de dados — segredos (plano 62)
 
@@ -177,10 +179,10 @@ não funcionava a partir de cliente remoto.
   idioma do cofre. Consequência aceita: a primeira conexão a um bastion novo
   falha uma vez, de propósito.
 
-## Aberto (para as próximas waves)
+## Open (for later waves)
 
-- Backpressure/coalescing de output no fio (integrar com o
-  `pty_output_scheduler` de `docs/terminal-output-flow-control.md`).
-- Resize com N clientes attached (política tmux a decidir).
-- Frame binário para `pty.output` se o benchmark apontar o base64.
-- Envelopes dos domínios Arquivos, Git e Databases.
+- Output backpressure/coalescing on the wire (integrate with
+  `pty_output_scheduler` in `docs/terminal-output-flow-control.md`).
+- Resize with N attached clients (tmux policy to decide).
+- Binary frame for `pty.output` if a benchmark points at base64.
+- Envelopes for Files, Git, and Databases domains.

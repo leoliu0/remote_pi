@@ -198,7 +198,7 @@ export type ClientMessage =
   | { type: "model_set"; id: string; provider: string; model_id: string }
   | { type: "thinking_set"; id: string; level: ThinkingLevel }
   | { type: "list_models"; id: string }
-  // Plan/57 — interactive extension prompt response (ask_user via pi-ask).
+  | { type: "reload_plugins"; id: string }
   // Mirrors RpcExtensionUIResponse; the optional `ask` envelope carries
   // pi-ask's structured answer so multi/preview/notes survive the round-trip.
   | ExtensionUiResponseWire;
@@ -352,23 +352,21 @@ export type ActionName =
   | "session_new"
   | "session_compact"
   | "model_set"
-  | "thinking_set";
-
+  | "thinking_set"
+  | "reload_plugins";
 /**
  * Plan/28 — Mirror of the SDK's `ThinkingLevel` (defined in
  * `@earendil-works/pi-agent-core/types`). Re-declared locally so the wire
  * protocol owns its own enum and we don't leak SDK-internal types onto
  * the app's network surface.
  *
- * Note: `"xhigh"` is only honored by select model families — the SDK uses
- * each `Model.thinkingLevelMap` to decide if the requested level is
- * supported, falling back to a sensible neighbour when not. The app
- * surfaces all 6 buttons but can grey out unsupported ones using the
- * model's metadata if the picker fetches it later.
+ * Note: `"xhigh"`/`"max"` are only honored by select model families — the
+ * SDK uses each `Model.thinkingLevelMap` to decide if the requested level
+ * is supported, falling back to a sensible neighbour when not. The app's
+ * picker hides unsupported levels via `WireModel.thinking_levels`.
  */
 export type ThinkingLevel =
-  | "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
-
+  | "auto" | "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 /**
  * Plan/28 — Wire shape for one model entry in the app's model picker.
  *
@@ -394,6 +392,12 @@ export interface WireModel {
    *  includes `"image"`). The app uses it to enable/disable the attach
    *  button — a text-only model greys out image attachments. */
   vision: boolean;
+  /** Thinking levels this model supports, always including `"off"`. Derived
+   *  from the SDK's `Model.thinkingLevelMap` — a level mapped to `null` is
+   *  unsupported (e.g. no "max" on most models) and omitted. Undefined when
+   *  the catalog entry predates per-model maps — the app falls back to
+   *  showing every level. */
+  thinking_levels?: ThinkingLevel[];
 }
 
 export type ByeReason = "peer_stop" | "session_replaced" | "shutdown";

@@ -8,7 +8,7 @@ import { describe, expect, test, vi, beforeEach, afterEach } from "vitest";
 import { EventEmitter } from "node:events";
 import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { tmpdir, homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getCapabilities, setCapabilities } from "@earendil-works/pi-tui";
@@ -214,10 +214,14 @@ const {
   routeClientMessage,
   _mapAgentMessagesToEvents,
   _inlineLocalMarkdownImages,
+  _extractAssistantText,
   _setMessageBufferForTest,
   _setSessionStartedAtForTest,
   _hasPendingReconnect,
   _getMessageBufferForTest,
+  _hydrateMessageBufferFromSession,
+  _findMostRecentSessionFile,
+  _loadMessagesFromJsonlFile,
   _setCurrentModelForTest,
   _setPiForTest,
   _getCurrentTurnIdForTest,
@@ -239,6 +243,8 @@ const {
   _routeClientMessageFrom,
   _deliverMeshMessageToAgentForTest,
   CTRL_PREFIX,
+  _isSubagentSession,
+  _getDisposedForTest,
 } = indexModule;
 const { acquireCwdLock } = await import("./session/cwd_lock.js");
 
@@ -1279,6 +1285,69 @@ describe("multi-channel broadcast (W2D)", () => {
     expect(chunks).toHaveLength(2);
     const recipients = new Set(chunks.map((d) => d.peer));
     expect(recipients).toEqual(new Set(["ownerA__1234567890", "ownerB__abcdefghij"]));
+  });
+  // ── Streaming block boundaries (phase machine in message_update) ─────────
+
+  const _setupChunkCapture = async () => {
+    await _pairForTest("ownerA__1234567890");
+    const onUpdate = captureEventHandler("message_update");
+    const onInput = captureEventHandler("input");
+    const onTurnStart = captureEventHandler("turn_start");
+    // Reset the module-level _streamPhase so tests don't leak into each other.
+    onTurnStart({} as unknown as Parameters<typeof onTurnStart>[0], makeMockCtx());
+    onInput({ source: "terminal", text: "hello" } as unknown as Parameters<typeof onInput>[0]);
+    const sendsBefore = relayRef.current!.send.mock.calls.length;
+    const fire = (ae: unknown) =>
+      onUpdate({ assistantMessageEvent: ae } as unknown as Parameters<typeof onUpdate>[0]);
+    const deltas = () =>
+      relayRef.current!.send.mock.calls.slice(sendsBefore)
+        .map((c) => c[0] as string).map(decodeSentCt)
+        .filter((d) => d.inner.type === "agent_chunk")
+        .map((d) => (d.inner as { delta?: string }).delta);
+    return { fire, deltas };
+  };
+
+  test("consecutive text blocks get a paragraph separator", async () => {
+    const { fire, deltas } = await _setupChunkCapture();
+    fire({ type: "text_start", contentIndex: 0 });
+    fire({ type: "text_delta", contentIndex: 0, delta: "First block." });
+    fire({ type: "text_start", contentIndex: 1 });
+    fire({ type: "text_delta", contentIndex: 1, delta: "Second block." });
+    expect(deltas()).toEqual(["First block.", "\n\n", "Second block."]);
+  });
+
+  test("thinking blocks are wrapped in <think> and separated from text", async () => {
+    const { fire, deltas } = await _setupChunkCapture();
+    fire({ type: "thinking_start", contentIndex: 0 });
+    fire({ type: "thinking_delta", contentIndex: 0, delta: "reasoning" });
+    fire({ type: "thinking_end", contentIndex: 0, content: "reasoning" });
+    fire({ type: "text_start", contentIndex: 1 });
+    fire({ type: "text_delta", contentIndex: 1, delta: "Answer." });
+    expect(deltas()).toEqual(["<think>", "reasoning", "</think>", "\n\n", "Answer."]);
+  });
+
+  test("text after thinking is separated; tool call closes a dangling think", async () => {
+    const { fire, deltas } = await _setupChunkCapture();
+    fire({ type: "text_start", contentIndex: 0 });
+    fire({ type: "text_delta", contentIndex: 0, delta: "Story end." });
+    fire({ type: "thinking_start", contentIndex: 1 });
+    fire({ type: "thinking_delta", contentIndex: 1, delta: "hmm" });
+    fire({ type: "toolcall_start", contentIndex: 2 });
+    fire({ type: "tool_call", toolCallId: "t1", toolName: "bash", args: {} });
+    // Next text block after a tool boundary: no separator (app splits bubbles).
+    fire({ type: "text_start", contentIndex: 3 });
+    fire({ type: "text_delta", contentIndex: 3, delta: "After tool." });
+    expect(deltas()).toEqual([
+      "Story end.", "\n\n", "<think>", "hmm", "</think>", "After tool.",
+    ]);
+  });
+
+  test("thinking_delta without thinking_start opens the wrapper lazily", async () => {
+    const { fire, deltas } = await _setupChunkCapture();
+    fire({ type: "text_start", contentIndex: 0 });
+    fire({ type: "text_delta", contentIndex: 0, delta: "Visible." });
+    fire({ type: "thinking_delta", contentIndex: 1, delta: "orphan" });
+    expect(deltas()).toEqual(["Visible.", "\n\n", "<think>", "orphan"]);
   });
 
   test("session_sync from owner A → session_history reply only to A", async () => {
@@ -3951,6 +4020,49 @@ describe("session_shutdown teardown", () => {
     await expect(shutdown({ type: "session_shutdown", reason: "quit" })).resolves.toBeUndefined();
     expect(_getState()).toBe("idle");
   });
+  test("session_shutdown ignores subagent session and preserves parent mesh + relay", async () => {
+    captureHandler("remote-pi");
+    await _connectForTest(makeMockCtx());
+    expect(_getState()).toBe("started");
+
+    const shutdown = captureEventHandler("session_shutdown");
+    const subagentCtx = {
+      hasUI: false,
+      sessionManager: {
+        getSessionFile: () => "/home/user/.omp/agent/sessions/parent-dir_12345/subagent-1.jsonl",
+        getEntries: () => [{ type: "session_init", task: "do work" }],
+      },
+      ui: { notify: vi.fn() },
+      cwd: "/home/user/projects/remote_pi",
+    };
+
+    await shutdown({ type: "session_shutdown", reason: "dispose" }, subagentCtx as unknown as Parameters<typeof shutdown>[1]);
+
+    // Parent state MUST still be "started", not torn down to idle
+    expect(_getState()).toBe("started");
+    expect(_hasMeshNodeForTest()).toBe(true);
+    expect(_getDisposedForTest()).toBe(false);
+
+    // Clean up
+    await shutdown({ type: "session_shutdown", reason: "resume" });
+    expect(_getState()).toBe("idle");
+  });
+
+  test("session_start ignores subagent session without re-arming or re-initing", async () => {
+    const sessionStart = captureEventHandler("session_start");
+    const subagentCtx = {
+      hasUI: false,
+      sessionManager: {
+        getSessionFile: () => "/home/user/.omp/agent/sessions/parent-dir_12345/subagent-1.jsonl",
+        getEntries: () => [{ type: "session_init", task: "do work" }],
+      },
+      ui: { notify: vi.fn() },
+      cwd: "/home/user/projects/remote_pi",
+    };
+    expect(_isSubagentSession(subagentCtx)).toBe(true);
+    expect(_isSubagentSession(makeMockCtx())).toBe(false);
+  });
+
 
   // Race guard: the daemon defers its connect (`setTimeout(_cmdRoot, 0)`), so a
   // shutdown can land while that connect is still in flight. The flag must make
@@ -5994,5 +6106,116 @@ describe("model meta", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("session history hydration from disk", () => {
+  test("hydrates message buffer from omp session JSONL on disk when sm is empty", async () => {
+    const tmpCwd = mkdtempSync(join(tmpdir(), "pi-session-disk-"));
+    const home = homedir();
+    const ompSessionDir = join(home, ".omp", "agent", "sessions", `-${tmpCwd.replace(home, "").replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}`);
+    mkdirSync(ompSessionDir, { recursive: true });
+    const sessionFile = join(ompSessionDir, "2026-08-29T10-00-00-000Z_test-session.jsonl");
+
+    const fileLines = [
+      JSON.stringify({ type: "title", v: 1, title: "Test Trust", source: "user" }),
+      JSON.stringify({ type: "session", version: 3, id: "test-session", timestamp: "2026-08-29T10:00:00.000Z", cwd: tmpCwd }),
+      JSON.stringify({ type: "message", id: "m1", message: { role: "user", content: [{ type: "text", text: "Hello from disk" }], timestamp: 1000 } }),
+      JSON.stringify({ type: "message", id: "m2", message: { role: "assistant", content: [{ type: "text", text: "Hi from disk assistant" }], timestamp: 2000 } }),
+    ];
+    writeFileSync(sessionFile, fileLines.join("\n") + "\n");
+
+    try {
+      _hydrateMessageBufferFromSession(null, tmpCwd);
+      const events = _mapAgentMessagesToEvents(_getMessageBufferForTest());
+      expect(events).toHaveLength(2);
+      expect(events[0]!.type).toBe("user_input");
+      expect((events[0] as { text: string }).text).toBe("Hello from disk");
+      expect(events[1]!.type).toBe("agent_message");
+      expect((events[1] as { text: string }).text).toBe("Hi from disk assistant");
+    } finally {
+      rmSync(tmpCwd, { recursive: true, force: true });
+      rmSync(ompSessionDir, { recursive: true, force: true });
+    }
+  });
+
+  test("session_sync returns disk-hydrated events to requesting peer", async () => {
+    const tmpCwd = mkdtempSync(join(tmpdir(), "pi-sync-flow-"));
+    const home = homedir();
+    const ompSessionDir = join(home, ".omp", "agent", "sessions", `-${tmpCwd.replace(home, "").replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}`);
+    mkdirSync(ompSessionDir, { recursive: true });
+    const sessionFile = join(ompSessionDir, "2026-08-29T10-00-00-000Z_sync.jsonl");
+
+    const fileLines = [
+      JSON.stringify({ type: "session", version: 3, id: "test-sync", timestamp: "2026-08-29T10:00:00.000Z", cwd: tmpCwd }),
+      JSON.stringify({ type: "message", id: "u1", message: { role: "user", content: [{ type: "text", text: "Trust query" }], timestamp: 1000 } }),
+      JSON.stringify({ type: "message", id: "a1", message: { role: "assistant", content: [{ type: "text", text: "Trust response" }], timestamp: 2000 } }),
+    ];
+    writeFileSync(sessionFile, fileLines.join("\n") + "\n");
+
+    const sentMessages: unknown[] = [];
+    const mockSender = {
+      send: vi.fn((m) => sentMessages.push(m)),
+    };
+
+    try {
+      _setMessageBufferForTest([]);
+      _hydrateMessageBufferFromSession(null, tmpCwd);
+      const events = _mapAgentMessagesToEvents(_getMessageBufferForTest());
+      expect(events).toHaveLength(2);
+      expect((events[0] as { text: string }).text).toBe("Trust query");
+      expect((events[1] as { text: string }).text).toBe("Trust response");
+    } finally {
+      rmSync(tmpCwd, { recursive: true, force: true });
+      rmSync(ompSessionDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("markdown image resolution and extraction", () => {
+  test("_inlineLocalMarkdownImages inlines relative paths with session cwd", () => {
+    const tmpCwd = mkdtempSync(join(tmpdir(), "pi-img-test-"));
+    const imgFile = join(tmpCwd, "test-plot.png");
+    writeFileSync(imgFile, Buffer.from("fake-png-bytes"));
+
+    try {
+      const text = "Look at this plot: ![Plot](test-plot.png)";
+      const inlined = _inlineLocalMarkdownImages(text, tmpCwd);
+      expect(inlined).toContain("![Plot](data:image/png;base64,");
+      expect(inlined).toContain(Buffer.from("fake-png-bytes").toString("base64"));
+    } finally {
+      rmSync(tmpCwd, { recursive: true, force: true });
+    }
+  });
+
+  test("_extractAssistantText preserves assistant image blocks as markdown", () => {
+    const content = [
+      { type: "text", text: "Analysis results:" },
+      { type: "image", data: "QUJDREVGRw==", mimeType: "image/png" },
+    ];
+    const extracted = _extractAssistantText(content);
+    expect(extracted).toContain("Analysis results:");
+    expect(extracted).toContain("![image](data:image/png;base64,QUJDREVGRw==)");
+  });
+
+  test("_mapAgentMessagesToEvents preserves image blocks in assistant messages", () => {
+    const msgs: BufferMsg[] = [
+      {
+        role: "user",
+        content: "Show image",
+        timestamp: 1000,
+      },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Generated:" },
+          { type: "image", data: "QUJD", mimeType: "image/jpeg" },
+        ] as unknown as string,
+        timestamp: 2000,
+      },
+    ];
+    const events = _mapAgentMessagesToEvents(msgs);
+    expect(events).toHaveLength(3);
+    expect((events[2] as { text: string }).text).toContain("![image](data:image/jpeg;base64,QUJD)");
   });
 });

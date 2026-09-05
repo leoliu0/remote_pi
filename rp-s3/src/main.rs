@@ -11,12 +11,10 @@ use axum::{
 };
 use tower_http::{services::ServeDir, trace::TraceLayer};
 
-/// Extensões servidas como download (attachment) com cache imutável —
-/// artefatos vivem em diretórios versionados, então a URL nunca é reusada.
+/// Extensions served as downloadable attachments with immutable cache.
 const ARTIFACT_EXTENSIONS: [&str; 5] = [".dmg", ".exe", ".deb", ".rpm", ".zip"];
 
-/// Só manifests podem ser publicados via upload — binários ficam nos assets
-/// da GitHub Release, então o endpoint nunca aceita artefato grande.
+/// Only manifests and signatures may be uploaded via PUT.
 fn is_uploadable_manifest(name: &str) -> bool {
     name == "latest.json" || name == "SHA256SUMS" || name.ends_with(".xml")
 }
@@ -49,7 +47,7 @@ async fn main() {
         )
         .layer(middleware::from_fn(set_download_headers));
 
-    // Sem UPLOAD_TOKEN o endpoint nem existe — publicação segue 100% manual.
+    // Without UPLOAD_TOKEN the endpoint is not registered (manual flow only).
     match env::var("UPLOAD_TOKEN") {
         Ok(token) if !token.trim().is_empty() => {
             let cfg = Arc::new(UploadConfig {
@@ -70,12 +68,12 @@ async fn main() {
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     let listener = tokio::net::TcpListener::bind(addr)
         .await
-        .unwrap_or_else(|e| panic!("falha ao bindar {addr}: {e}"));
-    tracing::info!("servindo {data_dir} em http://{addr}/downloads");
+        .unwrap_or_else(|e| panic!("failed to bind {addr}: {e}"));
+    tracing::info!("serving {data_dir} at http://{addr}/downloads");
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await
-        .expect("servidor encerrou com erro");
+        .expect("server closed with error");
 }
 
 async fn upload_manifest(
@@ -90,27 +88,26 @@ async fn upload_manifest(
         .and_then(|v| v.strip_prefix("Bearer "))
         .is_some_and(|t| constant_time_eq(t.as_bytes(), cfg.token.as_bytes()));
     if !authorized {
-        return (StatusCode::UNAUTHORIZED, "token inválido\n");
+        return (StatusCode::UNAUTHORIZED, "invalid token\n");
     }
 
-    // Segmentos de path do axum não contêm '/', mas '..' e nomes fora da
-    // allowlist ainda precisam ser barrados.
+    // Validate path segments against path traversal.
     let safe_segment = |s: &str| {
         !s.is_empty() && s != "." && s != ".." && s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
     };
     if !safe_segment(&product) || !safe_segment(&file) || !is_uploadable_manifest(&file) {
-        return (StatusCode::FORBIDDEN, "só manifests (latest.json, *.xml, SHA256SUMS)\n");
+        return (StatusCode::FORBIDDEN, "manifests only (latest.json, *.xml, SHA256SUMS)\n");
     }
     if body.is_empty() {
-        return (StatusCode::BAD_REQUEST, "corpo vazio\n");
+        return (StatusCode::BAD_REQUEST, "empty body\n");
     }
 
     let dir = cfg.data_dir.join(&product);
     if let Err(e) = tokio::fs::create_dir_all(&dir).await {
-        tracing::error!("criar {dir:?}: {e}");
-        return (StatusCode::INTERNAL_SERVER_ERROR, "erro ao gravar\n");
+        tracing::error!("create_dir_all {dir:?}: {e}");
+        return (StatusCode::INTERNAL_SERVER_ERROR, "failed to write file\n");
     }
-    // Escrita atômica: quem baixa o manifest nunca vê arquivo pela metade.
+    // Atomic write via temp file + rename.
     let tmp = dir.join(format!(".{file}.tmp"));
     let dest = dir.join(&file);
     let write = async {
@@ -123,9 +120,9 @@ async fn upload_manifest(
             (StatusCode::OK, "ok\n")
         }
         Err(e) => {
-            tracing::error!("gravar {dest:?}: {e}");
+            tracing::error!("write {dest:?}: {e}");
             let _ = tokio::fs::remove_file(&tmp).await;
-            (StatusCode::INTERNAL_SERVER_ERROR, "erro ao gravar\n")
+            (StatusCode::INTERNAL_SERVER_ERROR, "failed to write file\n")
         }
     }
 }
@@ -145,7 +142,7 @@ async fn set_download_headers(req: Request, next: Next) -> Response {
     }
 
     let headers = res.headers_mut();
-    // O site (Next.js) e qualquer cliente podem ler o manifest de outro domínio.
+    // Enable CORS for cross-origin manifest access.
     headers.insert(
         header::ACCESS_CONTROL_ALLOW_ORIGIN,
         HeaderValue::from_static("*"),
@@ -163,7 +160,7 @@ async fn set_download_headers(req: Request, next: Next) -> Response {
             }
         }
     } else {
-        // latest.json / SHA256SUMS: URL fixa, release novo precisa propagar rápido.
+        // latest.json / SHA256SUMS: fast cache propagation.
         headers.insert(
             header::CACHE_CONTROL,
             HeaderValue::from_static("public, max-age=300"),
@@ -176,7 +173,7 @@ async fn shutdown_signal() {
     let ctrl_c = async {
         tokio::signal::ctrl_c()
             .await
-            .expect("instalar handler de Ctrl+C");
+            .expect("failed to install Ctrl+C handler");
     };
 
     #[cfg(unix)]

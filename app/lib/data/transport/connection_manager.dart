@@ -158,14 +158,21 @@ class ConnectionManager extends Service {
   Timer? _presenceEmitTimer;
   Timer? _roomsEmitTimer;
   final Duration _emitDebounce;
+  final Duration _workingOffDebounce;
+  final Map<String, Timer> _workingOffTimers = <String, Timer>{};
 
   ConnectionManager({
     required ConnectionFactory factory,
     required PairingStorage storage,
     Duration emitDebounce = const Duration(milliseconds: 50),
+    Duration? workingOffDebounce,
   }) : _factory = factory,
        _storage = storage,
-       _emitDebounce = emitDebounce {
+       _emitDebounce = emitDebounce,
+       _workingOffDebounce = workingOffDebounce ??
+           (emitDebounce == Duration.zero
+               ? Duration.zero
+               : const Duration(milliseconds: 350)) {
     _startWatchdog();
   }
 
@@ -423,6 +430,20 @@ class ConnectionManager extends Service {
     _cancelPing();
     _connectCancel?.cancel();
 
+    // New relay: drop live presence/rooms so Home does not keep the
+    // previous relay's sessions, and so "No sessions online" cannot
+    // flash before the first snapshot from the new endpoint.
+    _presence.clear();
+    _liveRoomIds.clear();
+    _roomsByPeer.clear();
+    _liveRoomsKnown = false;
+    if (!_presenceController.isClosed) {
+      _presenceController.add(presenceSnapshot);
+    }
+    if (!_roomsController.isClosed) {
+      _roomsController.add(_roomsSnapshot());
+    }
+
     final peers = await _storage.listPeers();
     if (peers.isEmpty) {
       await _teardownActive(emitNoPeer: true);
@@ -527,6 +548,10 @@ class ConnectionManager extends Service {
     _presenceEmitTimer = null;
     _roomsEmitTimer?.cancel();
     _roomsEmitTimer = null;
+    for (final t in _workingOffTimers.values) {
+      t.cancel();
+    }
+    _workingOffTimers.clear();
     _channelSub?.cancel();
     _channelSub = null;
     _controlSub?.cancel();
@@ -534,7 +559,6 @@ class ConnectionManager extends Service {
     _statusController.close();
     _presenceController.close();
   }
-
   // ---------------------------------------------------------------------------
 
   Future<void> _connect(PeerRecord peer) async {
@@ -753,57 +777,69 @@ class ConnectionManager extends Service {
         // would clobber the previously cached model with null.
         final nextModel = hasModel ? model : current.model;
         final nextThinking = hasThinking ? thinking : current.thinking;
-        // Plan/32 — `working` is nullable-as-absent: null preserves the
-        // cached value (e.g. a model-only update must not flip the dot),
-        // non-null sets it. This is what carries the relay's
-        // turn_start/turn_end broadcast to the Home dot for EVERY room.
-        final nextWorking = working ?? current.working;
-        if (current.model == nextModel &&
-            current.thinking == nextThinking &&
-            current.working == nextWorking) {
-          break; // dedup: nothing actually changed
-        }
-        if (current.working && !nextWorking) {
-          final isCurrentActive =
-              _activePeer?.remoteEpk == key && _activeRoomId == roomId;
-          if (!isCurrentActive) {
-            _unreadFinishedRooms.add('$key:$roomId');
-          }
-        } else if (nextWorking) {
+        if (working == true) {
+          _workingOffTimers.remove('$key:$roomId')?.cancel();
           _unreadFinishedRooms.remove('$key:$roomId');
+          if (current.model == nextModel &&
+              current.thinking == nextThinking &&
+              current.working == true) {
+            break;
+          }
+          list[idx] = current.copyWith(
+            model: nextModel,
+            thinking: nextThinking,
+            working: true,
+          );
+          roomsDirty = true;
+          // ignore: unawaited_futures
+          _persistRoomsForPeer(key);
+        } else if (working == false) {
+          if (hasModel || hasThinking) {
+            list[idx] = current.copyWith(
+              model: nextModel,
+              thinking: nextThinking,
+            );
+            roomsDirty = true;
+          }
+          if (current.working) {
+            _scheduleRoomWorkingOff(key, roomId);
+          }
+        } else {
+          if (current.model == nextModel &&
+              current.thinking == nextThinking) {
+            break;
+          }
+          list[idx] = current.copyWith(
+            model: nextModel,
+            thinking: nextThinking,
+          );
+          roomsDirty = true;
+          // ignore: unawaited_futures
+          _persistRoomsForPeer(key);
         }
-        list[idx] = current.copyWith(
-          model: nextModel,
-          thinking: nextThinking,
-          working: nextWorking,
-        );
-        roomsDirty = true;
-        // ignore: unawaited_futures
       case RoomsSnapshot(:final peer, :final rooms):
         _liveRoomsKnown = true;
         final key = toStandardB64(peer);
-        // Merge snapshot into cache: add unknown rooms, refresh
-        // metadata (preserving local rename + previous model when
-        // the snapshot omits it), update live set.
         final existing = _roomsByPeer[key] ?? <RoomInfo>[];
         final byId = {for (final r in existing) r.roomId: r};
         for (final r in rooms) {
           final preservedName = byId[r.roomId]?.name ?? r.name;
-          final preservedModel = r.model ?? byId[r.roomId]?.model;
-          // Plan/28 Wave D — same convention as model: keep the
-          // previously-known thinking when the snapshot omits it.
           final preservedThinking = r.thinking ?? byId[r.roomId]?.thinking;
+          final hasActiveWorkingTimer =
+              _workingOffTimers.containsKey('$key:${r.roomId}');
+          final effectiveWorking =
+              hasActiveWorkingTimer ? true : r.working;
+          if (r.working) {
+            _workingOffTimers.remove('$key:${r.roomId}')?.cancel();
+          }
           byId[r.roomId] = RoomInfo(
             roomId: r.roomId,
             name: preservedName,
             cwd: r.cwd,
             startedAt: r.startedAt,
-            model: preservedModel,
+            model: r.model ?? byId[r.roomId]?.model,
             thinking: preservedThinking,
-            // Plan/32 — the snapshot is authoritative for live state:
-            // `rooms_of` reads the current registry meta, so its
-            // `working` reflects the latest turn_start/turn_end.
-            working: r.working,
+            working: effectiveWorking,
           );
         }
         final newList = byId.values.toList();
@@ -928,7 +964,9 @@ class ConnectionManager extends Service {
   /// fall back to the amber "reconnecting" / grey state.
   bool isRoomWorking(String epk, String roomId) {
     if (_status is! StatusOnline) return false;
-    final list = _roomsByPeer[toStandardB64(epk)];
+    final key = toStandardB64(epk);
+    if (_workingOffTimers.containsKey('$key:$roomId')) return true;
+    final list = _roomsByPeer[key];
     if (list == null) return false;
     for (final r in list) {
       if (r.roomId == roomId) return r.working;
@@ -947,17 +985,46 @@ class ConnectionManager extends Service {
     final list = _roomsByPeer[key];
     if (list == null) return;
     final idx = list.indexWhere((r) => r.roomId == roomId);
-    final wasWorking = list[idx].working;
-    if (wasWorking && !working) {
-      final isCurrentActive =
-          _activePeer?.remoteEpk == key && _activeRoomId == roomId;
-      if (!isCurrentActive) {
-        _unreadFinishedRooms.add('$key:$roomId');
-      }
-    } else if (working) {
+    if (idx < 0) return;
+    if (working) {
+      _workingOffTimers.remove('$key:$roomId')?.cancel();
       _unreadFinishedRooms.remove('$key:$roomId');
+      if (list[idx].working) return;
+      list[idx] = list[idx].copyWith(working: true);
+      _scheduleRoomsEmit();
+      // ignore: unawaited_futures
+      _persistRoomsForPeer(key);
+    } else {
+      if (!list[idx].working) return;
+      _scheduleRoomWorkingOff(key, roomId);
     }
-    list[idx] = list[idx].copyWith(working: working);
+  }
+
+  void _scheduleRoomWorkingOff(String key, String roomId) {
+    final timerKey = '$key:$roomId';
+    if (_workingOffTimers.containsKey(timerKey)) return;
+    if (_workingOffDebounce == Duration.zero) {
+      _commitRoomWorkingOff(key, roomId);
+      return;
+    }
+    _workingOffTimers[timerKey] = Timer(_workingOffDebounce, () {
+      _workingOffTimers.remove(timerKey);
+      _commitRoomWorkingOff(key, roomId);
+    });
+  }
+
+  void _commitRoomWorkingOff(String key, String roomId) {
+    final list = _roomsByPeer[key];
+    if (list == null) return;
+    final idx = list.indexWhere((r) => r.roomId == roomId);
+    if (idx < 0) return;
+    if (!list[idx].working) return;
+    final isCurrentActive =
+        _activePeer?.remoteEpk == key && _activeRoomId == roomId;
+    if (!isCurrentActive) {
+      _unreadFinishedRooms.add('$key:$roomId');
+    }
+    list[idx] = list[idx].copyWith(working: false);
     _scheduleRoomsEmit();
     // ignore: unawaited_futures
     _persistRoomsForPeer(key);
@@ -1066,8 +1133,10 @@ class ConnectionManager extends Service {
     }
   }
 
-  /// Plan-17 follow-up — delete a cached room locally. Only safe when
-  /// the room is offline (not live); UI gates this.
+  /// Plan-17 follow-up — delete a cached room locally. Allowed whether
+  /// the room is live or offline; a live room reappears when the relay
+  /// re-announces it (next snapshot/announce), which is the documented
+  /// behaviour surfaced in the delete confirmation.
   Future<void> deleteCachedRoom(String epk, String roomId) async {
     final key = toStandardB64(epk);
     final list = _roomsByPeer[key];
@@ -1075,6 +1144,8 @@ class ConnectionManager extends Service {
       list.removeWhere((r) => r.roomId == roomId);
       if (list.isEmpty) _roomsByPeer.remove(key);
     }
+    _liveRoomIds[key]?.remove(roomId);
+    if (_liveRoomIds[key]?.isEmpty ?? true) _liveRoomIds.remove(key);
     final cached = await _storage.loadRooms(epk);
     final pruned = cached.where((c) => c.roomId != roomId).toList();
     await _storage.saveRooms(epk, pruned);

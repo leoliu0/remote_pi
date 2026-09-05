@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://remote-pi.dev/cockpit/tasks.schema.json",
   "title": "Cockpit Task Run config",
-  "description": "Schema do .cockpit/tasks.json — ver cockpit/docs/tasks-json.md",
+  "description": "Schema for .cockpit/tasks.json — see cockpit/docs/tasks-json.md",
   "type": "object",
   "required": ["tasks"],
   "additionalProperties": false,
@@ -10,7 +10,7 @@
     "$schema": { "type": "string" },
     "cwd": {
       "type": "string",
-      "description": "Default de cwd pra todas as tasks (relativo à pasta do arquivo). Cada task pode sobrescrever."
+      "description": "Default cwd for every task (relative to the file folder). Each task can override."
     },
     "tasks": {
       "type": "array",
@@ -23,28 +23,28 @@
       "required": ["label", "command"],
       "additionalProperties": false,
       "properties": {
-        "label": { "type": "string", "description": "Nome curto exibido na lista." },
-        "command": { "type": "string", "description": "Executável base (npm, flutter, go...)." },
+        "label": { "type": "string", "description": "Short name shown in the list." },
+        "command": { "type": "string", "description": "Base executable (npm, flutter, go...)." },
         "args": {
           "type": "array",
           "items": { "type": "string" },
-          "description": "Args base, antes do profile."
+          "description": "Base args, before the profile."
         },
         "cwd": {
           "type": "string",
-          "description": "Pasta de execução relativa à pasta do tasks.json (ou absoluta). Omitido = default top-level / raiz."
+          "description": "Working directory relative to the tasks.json folder (or absolute). Omitted = top-level default / root."
         },
         "platforms": {
           "oneOf": [
             { "$ref": "#/$defs/platform" },
             { "type": "array", "items": { "$ref": "#/$defs/platform" } }
           ],
-          "description": "SOs onde a task é visível (macos, windows, linux). Omitido = todos."
+          "description": "OSes where the task is visible (macos, windows, linux). Omitted = all."
         },
         "kind": {
           "enum": ["watch", "oneShot"],
           "default": "oneShot",
-          "description": "watch = processo vivo (dev-server); oneShot = roda e termina."
+          "description": "watch = live process (dev-server); oneShot = runs and exits."
         },
         "interactiveKeys": {
           "type": "array",
@@ -65,12 +65,12 @@
             { "type": "string", "format": "uri" }
           ],
           "default": true,
-          "description": "Auto-open do navegador: true (default) abre a primeira URL local do output; false desliga; string abre essa URL fixa já no start."
+          "description": "Browser auto-open: true (default) opens the first local URL from output; false turns it off; a string opens that fixed URL at start."
         },
         "previewOpen": {
           "enum": ["always", "start", "never"],
           "default": "always",
-          "description": "Em quais execuções o preview abre: always (default, start e restart), start (só no start — restart não reabre), never."
+          "description": "When the preview opens: always (default, start and restart), start (start only — restart does not reopen), never."
         }
       }
     },
@@ -80,7 +80,7 @@
       "required": ["key", "label"],
       "additionalProperties": false,
       "properties": {
-        "key": { "type": "string", "description": "Sequência escrita no PTY (ex.: r, R, q)." },
+        "key": { "type": "string", "description": "Sequence written to the PTY (e.g. r, R, q)." },
         "label": { "type": "string" },
         "icon": { "enum": ["refresh", "restart", "stop", "bolt"] },
         "primary": { "type": "boolean", "default": false }
@@ -95,7 +95,7 @@
         "ignore": { "type": "array", "items": { "type": "string" } },
         "onChange": {
           "type": "string",
-          "description": "label de um interactiveKey, ou '__restart__'."
+          "description": "label of an interactiveKey, or '__restart__'."
         },
         "debounceMs": { "type": "integer", "minimum": 0, "default": 300 }
       }
@@ -105,8 +105,8 @@
       "required": ["begin", "end"],
       "additionalProperties": false,
       "properties": {
-        "begin": { "type": "string", "description": "Regex de início de recompilação." },
-        "end": { "type": "string", "description": "Regex de volta ao idle." }
+        "begin": { "type": "string", "description": "Regex for start of recompilation." },
+        "end": { "type": "string", "description": "Regex for return to idle." }
       }
     },
     "profile": {

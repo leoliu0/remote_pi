@@ -110,16 +110,8 @@ class ChatViewModel extends ViewModel<ChatState> {
   bool get isWorking {
     final epk = _activePeer?.remoteEpk;
     final roomWorking = epk != null && _conn.isRoomWorking(epk, _activeRoomId);
-    return roomWorking || _working || _streaming != null || _hasRunningTool;
+    return roomWorking || _working || _streaming != null;
   }
-
-  bool get _hasRunningTool => _messages.any(
-    (m) =>
-        m is ToolEvent &&
-        (m.status == ToolEventStatus.pending ||
-            m.status == ToolEventStatus.allowed),
-  );
-
   /// The id to `cancel` to stop the in-flight reply (the user message the
   /// agent is answering). Null when idle. Prefers the live streaming target,
   /// falls back to the SyncService's tracked turn id.

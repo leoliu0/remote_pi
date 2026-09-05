@@ -140,11 +140,14 @@ class HomeViewModel extends ViewModel<HomeState> {
     emit(s.copyWith(filter: filter));
   }
 
-  /// `true` when `(epk, roomId)` is in the relay's last live set.
-  /// Deliberately not gated on WS status: dropping the socket must not
-  /// empty the Online tab (amber reconnecting dots stay on the tiles).
+  /// `true` if `(epk, roomId)` is in the relay's live set OR the agent
+  /// is mid-turn there. A working agent keeps its session in the Online
+  /// tab even when the live set lags behind (relay snapshot miss), so
+  /// "agent is working" always reads as online. Deliberately not gated
+  /// on WS status: dropping the socket must not empty the Online tab.
   bool _online(HomeItem it) =>
-      _conn.isRoomInLiveSet(it.peer.remoteEpk, it.room.roomId);
+      _conn.isRoomInLiveSet(it.peer.remoteEpk, it.room.roomId) ||
+      _conn.isRoomWorking(it.peer.remoteEpk, it.room.roomId);
 
   /// Spinner instead of "No sessions online" until the relay has
   /// delivered a rooms snapshot (or we time out in the page via this flag).
@@ -226,8 +229,8 @@ class HomeViewModel extends ViewModel<HomeState> {
   Future<void> renameRoom(String epk, String roomId, String? name) =>
       _conn.setRoomLocalName(epk, roomId, name);
 
-  /// Long-press menu — delete a cached room locally. Caller should
-  /// gate on `!isRoomLive` (only offline rooms can be removed).
+  /// Long-press menu / delete button — remove a cached room locally. A
+  /// live room reappears on the next relay announce; that is expected.
   Future<void> deleteRoom(String epk, String roomId) =>
       _conn.deleteCachedRoom(epk, roomId);
 

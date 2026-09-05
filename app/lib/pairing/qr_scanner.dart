@@ -4,12 +4,12 @@ import 'dart:convert';
 //   remotepi://pair?t=<base64url>&epk=<base64url>&n=<name>[&r=<url>][&rm=<roomId>]
 //
 // Fields:
-//   t   — token efêmero (16 bytes, base64url), single-use, valid 60s
-//   epk — Ed25519 pubkey do Pi (32 bytes) — único peer ID no relay
+//   t   — ephemeral token (16 bytes, base64url), single-use, valid 60s
+//   epk — Pi Ed25519 pubkey (32 bytes) — unique peer ID on the relay
 //   n   — session name (max 80 chars)
 //   r   — relay WebSocket URL (OPTIONAL since plan 14: app uses its own
 //         configured relay; legacy QR codes that carry `r` are tolerated
-//         and trigger a "trocar relay?" modal if the value mismatches
+//         and trigger a "switch relay?" modal if the value mismatches
 //         the user's configured relay).
 //   rm  — Pi-side room id this QR was generated FROM (plan 17 fix —
 //         lets the app address the right cwd-session on the very first

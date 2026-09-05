@@ -4,12 +4,10 @@ import 'package:app/domain/contracts/update_checker.dart';
 import 'package:app/domain/entities/update_info.dart';
 import 'package:dio/dio.dart';
 
-/// Busca o `latest.json` do app via HTTP (Dio — mesmo client já usado pelo
-/// mesh, plano 24). Timeout curto; qualquer falha → `null` (nunca lança), pra
-/// que o aviso seja totalmente silencioso quando offline/indisponível.
+/// Fetches `latest.json` for the app via HTTP. Short timeout; any
+/// failure returns `null` (never throws) so the banner remains quiet offline.
 ///
-/// Espelha o schema do manifest do Cockpit (plano 43/44), com 1 artefato
-/// `android`/`apk`. O parsing/validação fica em [UpdateInfo.fromJson].
+/// Mirrors Cockpit manifest schema, with 1 `android`/`apk` artifact.
 class UpdateCheckerImpl implements UpdateChecker {
   UpdateCheckerImpl({
     String? manifestUrl,
@@ -30,10 +28,9 @@ class UpdateCheckerImpl implements UpdateChecker {
         connectTimeout: timeout,
         sendTimeout: timeout,
         receiveTimeout: timeout,
-        // Tratamos status não-2xx manualmente — não deixa o Dio lançar.
+        // Handle non-2xx status manually.
         validateStatus: (_) => true,
-        // Plain: jsonDecode manual, não deixa o parser do Dio tropeçar num
-        // corpo vazio/não-JSON num 4xx/5xx.
+        // Plain: manual jsonDecode so parser does not fail on empty/non-JSON 4xx/5xx.
         responseType: ResponseType.plain,
       ),
     );
@@ -49,7 +46,7 @@ class UpdateCheckerImpl implements UpdateChecker {
       if (body == null || body.isEmpty) return null;
       return UpdateInfo.fromJson(jsonDecode(body));
     } catch (_) {
-      // sem rede / 404 / JSON inválido / schema errado → silencioso.
+      // Offline / 404 / invalid JSON / schema mismatch -> silent null.
       return null;
     }
   }

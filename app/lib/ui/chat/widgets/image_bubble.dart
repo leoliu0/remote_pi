@@ -23,8 +23,7 @@ class ImageBubble extends StatefulWidget {
   final bool isFailed;
 
   /// Cap the thumbnail height; the width follows the bubble's 300px max.
-  static const double maxHeight = 220;
-
+  static const double maxHeight = 180;
   @override
   State<ImageBubble> createState() => _ImageBubbleState();
 }
@@ -61,10 +60,20 @@ class _ImageBubbleState extends State<ImageBubble> {
     final bubble = Container(
       decoration: BoxDecoration(
         color: colors.userBubble,
-        borderRadius: BorderRadius.circular(12),
-        border: widget.isFailed
-            ? Border.all(color: colors.error, width: 1)
-            : null,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: widget.isFailed
+              ? colors.error
+              : colors.border.withValues(alpha: 0.95),
+          width: 1.5,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.25),
+            blurRadius: 6,
+            offset: const Offset(0, 2),
+          ),
+        ],
       ),
       clipBehavior: Clip.antiAlias,
       child: Column(

@@ -1,9 +1,7 @@
-//! Teclas nomeadas do `send-key` (vocabulário estilo tmux).
-//!
-//! Porte fiel do `_resolveKey` do Dart: devolve a sequência de bytes que vai
-//! pra PTY, ou `None` quando o nome é desconhecido.
+//! Named keys for `send-key` (tmux-style vocabulary).
+//! Resolves key names to byte sequences sent to PTY.
 
-/// Resolve um nome de tecla na sua sequência. `None` = nome desconhecido.
+/// Resolves key name to byte sequence, or `None` if unknown.
 pub fn resolve(name: &str) -> Option<String> {
     let lower = name.to_lowercase();
     let seq = match lower.as_str() {
@@ -22,7 +20,7 @@ pub fn resolve(name: &str) -> Option<String> {
         "pagedown" | "npage" => "\x1b[6~",
         "delete" | "del" => "\x1b[3~",
         _ => {
-            // Ctrl: C-<letra> → byte de controle (a=0x01 … z=0x1a).
+            // Ctrl: C-<letter> -> control byte (a=0x01 ... z=0x1a).
             let bytes = lower.as_bytes();
             if bytes.len() == 3 && bytes[0] == b'c' && bytes[1] == b'-' {
                 let ch = bytes[2];
@@ -30,8 +28,7 @@ pub fn resolve(name: &str) -> Option<String> {
                     return Some(((ch - 0x60) as char).to_string());
                 }
             }
-            // Nome de 1 caractere → literal (ex.: `cockpit send-key a`).
-            // Conta em chars (não bytes) pra não fatiar UTF-8.
+            // 1-character string -> literal (e.g. `cockpit send-key a`).
             if name.chars().count() == 1 {
                 return Some(name.to_string());
             }
@@ -59,12 +56,12 @@ mod tests {
         assert_eq!(resolve("C-c").as_deref(), Some("\u{3}"));
         assert_eq!(resolve("c-a").as_deref(), Some("\u{1}"));
         assert_eq!(resolve("C-z").as_deref(), Some("\u{1a}"));
-        // fora do range a-z não é control
+        // outside a-z is not a control character
         assert_eq!(resolve("C-1"), None);
     }
 
     #[test]
-    fn caractere_unico_vira_literal() {
+    fn single_char_is_literal() {
         assert_eq!(resolve("a").as_deref(), Some("a"));
         assert_eq!(resolve("ç").as_deref(), Some("ç"));
     }

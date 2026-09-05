@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://raw.githubusercontent.com/jacobaraujo7/remote_pi/main/cockpit/docs/theme.schema.json",
   "title": "Cockpit theme",
-  "description": "Schema de um tema do Cockpit — ver cockpit/docs/theme-format.md",
+  "description": "Schema for a Cockpit theme — see cockpit/docs/theme-format.md",
   "type": "object",
   "required": ["id", "name", "variants"],
   "additionalProperties": false,
@@ -10,24 +10,24 @@
     "$schema": { "type": "string" },
     "id": {
       "type": "string",
-      "description": "Identidade estável, namespaced (publisher.nome). É o que fica salvo nas preferências. Não pode colidir com um built-in: cockpit, cockpit.2, violet, violet.2, midnight, rose, sun, flexoki, pantera.",
+      "description": "Stable namespaced identity (publisher.name). This is what preferences store. Must not collide with a built-in: cockpit, cockpit.2, violet, violet.2, midnight, rose, sun, flexoki, pantera.",
       "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
     },
     "name": {
       "type": "string",
-      "description": "Nome exibido no seletor de tema.",
+      "description": "Name shown in the theme picker.",
       "minLength": 1
     },
     "author": { "type": "string" },
     "version": { "type": "string" },
     "extends": {
       "type": "string",
-      "description": "Id de um tema built-in do qual herdar os tokens não declarados. Ausente = herda do tema 'cockpit'.",
+      "description": "Id of a built-in theme to inherit undeclared tokens from. Absent = inherit from the 'cockpit' theme.",
       "enum": ["cockpit", "cockpit.2", "violet", "violet.2", "midnight", "rose", "sun", "flexoki", "pantera"]
     },
     "variants": {
       "type": "object",
-      "description": "Pelo menos um de dark/light. Um tema com só um variant é aplicado nos dois brilhos.",
+      "description": "At least one of dark/light. A theme with only one variant is applied at both brightnesses.",
       "additionalProperties": false,
       "minProperties": 1,
       "properties": {
@@ -40,13 +40,13 @@
   "definitions": {
     "color": {
       "type": "string",
-      "description": "Hex CSS: #RGB, #RRGGBB ou #RRGGBBAA (alpha no FIM).",
+      "description": "CSS hex: #RGB, #RRGGBB or #RRGGBBAA (alpha at the END).",
       "pattern": "^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$"
     },
 
     "variant": {
       "type": "object",
-      "description": "As três paletas de um brilho. Todo token é opcional: o que faltar vem da base.",
+      "description": "The three palettes for one brightness. Every token is optional: missing ones come from the base.",
       "additionalProperties": false,
       "properties": {
         "ui": { "$ref": "#/definitions/ui" },
@@ -57,32 +57,32 @@
 
     "ui": {
       "type": "object",
-      "description": "Tokens da interface do app.",
+      "description": "App interface tokens.",
       "additionalProperties": false,
       "properties": {
-        "bg": { "$ref": "#/definitions/color", "description": "Fundo mais profundo do app." },
-        "panel": { "$ref": "#/definitions/color", "description": "Superfície de pane / rail." },
-        "panel2": { "$ref": "#/definitions/color", "description": "Elevado: composer, cards." },
-        "panel3": { "$ref": "#/definitions/color", "description": "Hover / código embutido." },
+        "bg": { "$ref": "#/definitions/color", "description": "Deepest app background." },
+        "panel": { "$ref": "#/definitions/color", "description": "Pane / rail surface." },
+        "panel2": { "$ref": "#/definitions/color", "description": "Elevated: composer, cards." },
+        "panel3": { "$ref": "#/definitions/color", "description": "Hover / inline code." },
 
-        "border": { "$ref": "#/definitions/color", "description": "Fio de cabelo." },
-        "border2": { "$ref": "#/definitions/color", "description": "Divisor mais forte." },
+        "border": { "$ref": "#/definitions/color", "description": "Hairline." },
+        "border2": { "$ref": "#/definitions/color", "description": "Stronger divider." },
 
-        "text": { "$ref": "#/definitions/color", "description": "Texto primário." },
-        "text2": { "$ref": "#/definitions/color", "description": "Texto secundário." },
-        "text3": { "$ref": "#/definitions/color", "description": "Terciário / placeholder." },
-        "text4": { "$ref": "#/definitions/color", "description": "Fraco: ícone em repouso." },
+        "text": { "$ref": "#/definitions/color", "description": "Primary text." },
+        "text2": { "$ref": "#/definitions/color", "description": "Secondary text." },
+        "text3": { "$ref": "#/definitions/color", "description": "Tertiary / placeholder." },
+        "text4": { "$ref": "#/definitions/color", "description": "Weak: idle icon." },
 
-        "accent": { "$ref": "#/definitions/color", "description": "A marca. O texto sobre ela é derivado da luminância, não é um token." },
-        "accentSoft": { "$ref": "#/definitions/color", "description": "Fundo de seleção — translúcido." },
-        "accentText": { "$ref": "#/definitions/color", "description": "Texto na cor da marca." },
+        "accent": { "$ref": "#/definitions/color", "description": "Brand color. Text on it is derived from luminance, not a token." },
+        "accentSoft": { "$ref": "#/definitions/color", "description": "Selection background — translucent." },
+        "accentText": { "$ref": "#/definitions/color", "description": "Text in the brand color." },
 
         "online": { "$ref": "#/definitions/color" },
         "ok": { "$ref": "#/definitions/color" },
         "error": { "$ref": "#/definitions/color" },
         "warn": { "$ref": "#/definitions/color" },
 
-        "edited": { "$ref": "#/definitions/color", "description": "Realce de arquivo editado há pouco." },
+        "edited": { "$ref": "#/definitions/color", "description": "Highlight for a recently edited file." },
         "editedBg": { "$ref": "#/definitions/color" },
 
         "gitStaged": { "$ref": "#/definitions/color" },
@@ -90,34 +90,34 @@
         "gitDeleted": { "$ref": "#/definitions/color" },
         "gitConflict": { "$ref": "#/definitions/color" },
 
-        "scrim": { "$ref": "#/definitions/color", "description": "Fundo de dialog — translúcido." },
-        "shadow": { "$ref": "#/definitions/color", "description": "Sombra projetada — translúcida." }
+        "scrim": { "$ref": "#/definitions/color", "description": "Dialog backdrop — translucent." },
+        "shadow": { "$ref": "#/definitions/color", "description": "Drop shadow — translucent." }
       }
     },
 
     "syntax": {
       "type": "object",
-      "description": "Realce de código do viewer.",
+      "description": "Code-viewer highlighting.",
       "additionalProperties": false,
       "properties": {
         "background": { "$ref": "#/definitions/color" },
-        "base": { "$ref": "#/definitions/color", "description": "Texto sem escopo." },
+        "base": { "$ref": "#/definitions/color", "description": "Unscoped text." },
         "comment": { "$ref": "#/definitions/color" },
         "keyword": { "$ref": "#/definitions/color" },
         "string": { "$ref": "#/definitions/color" },
         "number": { "$ref": "#/definitions/color" },
-        "class": { "$ref": "#/definitions/color", "description": "Tipos / classes." },
+        "class": { "$ref": "#/definitions/color", "description": "Types / classes." },
         "builtin": { "$ref": "#/definitions/color" },
         "function": { "$ref": "#/definitions/color" },
         "variable": { "$ref": "#/definitions/color" },
-        "meta": { "$ref": "#/definitions/color", "description": "Decorators / preprocessador." },
+        "meta": { "$ref": "#/definitions/color", "description": "Decorators / preprocessor." },
         "deletion": { "$ref": "#/definitions/color", "description": "Diff -." }
       }
     },
 
     "terminal": {
       "type": "object",
-      "description": "Paleta ANSI do terminal.",
+      "description": "Terminal ANSI palette.",
       "additionalProperties": false,
       "properties": {
         "cursor": { "$ref": "#/definitions/color" },

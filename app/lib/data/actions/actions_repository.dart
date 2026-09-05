@@ -95,11 +95,14 @@ abstract class IActionsRepository extends Repository {
   Future<void> newSession();
   Future<void> setModel(String provider, String modelId);
   Future<void> setThinking(ThinkingLevel level);
-
+  Future<void> reloadPlugins();
   /// Fetches the model catalogue. When [forceRefresh] is `false`
   /// (default) returns the cached catalogue for the current
   /// (peer, room) session if one exists; otherwise hits the Pi.
   Future<ModelsCatalogue> listModels({bool forceRefresh = false});
+
+  /// Synchronous cached model for the active room, if previously loaded.
+  WireModel? get cachedCurrentModel;
 
   /// Snapshot of the active room's meta. Recomputed on every rooms
   /// snapshot and on every connection-status change.
@@ -260,6 +263,31 @@ class ActionsRepository extends Repository implements IActionsRepository {
   ActiveRoomMeta get activeRoomMeta => _activeRoomMeta;
 
   @override
+  WireModel? get cachedCurrentModel {
+    final key = _sessionKey();
+    final cached = _modelsCache[key];
+    if (cached?.current != null) return cached!.current;
+    final modelName = _activeRoomMeta.model;
+    if (modelName != null && cached != null) {
+      final query = modelName.toLowerCase().trim();
+      for (final m in cached.models) {
+        if (m.name.toLowerCase() == query || m.id.toLowerCase() == query) {
+          return m;
+        }
+      }
+      for (final m in cached.models) {
+        if (m.name.toLowerCase().contains(query) ||
+            query.contains(m.name.toLowerCase()) ||
+            m.id.toLowerCase().contains(query) ||
+            query.contains(m.id.toLowerCase())) {
+          return m;
+        }
+      }
+    }
+    return null;
+  }
+
+  @override
   Stream<ActiveRoomMeta> get activeRoomMetaStream =>
       _activeRoomMetaController.stream;
 
@@ -290,6 +318,11 @@ class ActionsRepository extends Repository implements IActionsRepository {
   @override
   Future<void> setThinking(ThinkingLevel level) async {
     await _dispatch<void>((id) => ThinkingSet(id: id, level: level));
+  }
+
+  @override
+  Future<void> reloadPlugins() async {
+    await _dispatch<void>((id) => ReloadPlugins(id: id));
   }
 
   @override

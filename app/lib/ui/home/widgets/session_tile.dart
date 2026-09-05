@@ -33,6 +33,10 @@ class SessionTile extends StatelessWidget {
   /// dialog (rename + delete-offline). Optional; when null the tile
   /// only responds to tap.
   final VoidCallback? onLongPress;
+  /// Visible delete affordance on the row. When null (tests / legacy
+  /// callers) nothing is rendered. Tap target sits before the dot so
+  /// the presence indicator stays the trailing edge.
+  final VoidCallback? onDelete;
 
   const SessionTile({
     super.key,
@@ -45,6 +49,7 @@ class SessionTile extends StatelessWidget {
     this.isFinishedUnread = false,
     this.isSelected = false,
     this.onLongPress,
+    this.onDelete,
   });
 
   @override
@@ -77,6 +82,13 @@ class SessionTile extends StatelessWidget {
                 Expanded(
                   child: _TitleBlock(peer: peer, room: room),
                 ),
+                if (onDelete != null)
+                  IconButton(
+                    tooltip: 'Delete session',
+                    visualDensity: VisualDensity.compact,
+                    icon: Icon(LucideIcons.trash2, size: 16, color: colors.muted2),
+                    onPressed: onDelete,
+                  ),
                 _PresenceDot(
                   isLive: isLive,
                   isReconnecting: isReconnecting,
@@ -206,7 +218,7 @@ class _TitleBlock extends StatelessWidget {
     final r = room;
     // Title preference: explicit room.name → cwd basename → peer
     // nickname → session name. The cwd path line was dropped on purpose
-    // — the tile now shows just title + subtitle (model / paired date).
+    // — the tile now shows just title + subtitle (model · thinking).
     final String title;
     if (r != null) {
       if (r.name != null && r.name!.isNotEmpty) {
@@ -239,20 +251,19 @@ class _TitleBlock extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 3),
-        // Subtitle = the Pi-extension's model (when surfaced via
-        // `room_announced` / `room_meta_updated`), else the legacy
-        // "Last paired" timestamp so the row keeps a stable height.
+        // Subtitle = model · thinking when the Pi has announced them,
+        // else the legacy "Last paired" timestamp so the row keeps a
+        // stable height.
         Builder(builder: (_) {
-          final model = room?.model;
-          final hasModel = model != null && model.isNotEmpty;
+          final subtitle = _tileSubtitle(room, peer);
+          final accented = (room?.model?.isNotEmpty ?? false) ||
+              room?.thinking != null;
           return Text(
-            hasModel
-                ? _truncateModel(model)
-                : 'Last paired: ${_relativeTime(peer.pairedAt)}',
+            subtitle,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: context.typo.mono.copyWith(
-              color: hasModel ? colors.accent : colors.muted,
+              color: accented ? colors.accent : colors.muted,
               fontSize: 12,
             ),
           );
@@ -262,8 +273,103 @@ class _TitleBlock extends StatelessWidget {
   }
 }
 
-String _truncateModel(String name) =>
-    name.length <= 24 ? name : '${name.substring(0, 21)}…';
+String _tileSubtitle(RoomInfo? room, PeerRecord peer) {
+  final rawModel = room?.model;
+  final hasModel = rawModel != null && rawModel.isNotEmpty;
+  final model = hasModel ? formatModelName(rawModel) : null;
+  final thinking = room?.thinking;
+  if (model != null && thinking != null) {
+    return '${_truncateModel(model, 20)} · ${_thinkingLabel(thinking)}';
+  }
+  if (model != null) return _truncateModel(model);
+  if (thinking != null) return _thinkingLabel(thinking);
+  return 'Last paired: ${_relativeTime(peer.pairedAt)}';
+}
+
+/// Normalizes raw model IDs (e.g. `gemini-3.8-flash`, `qwen3.8-flash`, `gpt-4o`)
+/// into clean, consistent Title Case display names when the display title wasn't
+/// already provided by the model registry.
+String formatModelName(String raw) {
+  final trimmed = raw.trim();
+  if (trimmed.isEmpty) return trimmed;
+
+  // Strip provider prefix if present (e.g. "google/gemini-3.8-flash" -> "gemini-3.8-flash")
+  final namePart = trimmed.contains('/') ? trimmed.split('/').last : trimmed;
+
+  // If already properly spaced and capitalized (e.g. "Gemini 3.8 Flash"), keep as-is
+  if (namePart.contains(' ') && RegExp(r'[A-Z]').hasMatch(namePart)) {
+    return namePart;
+  }
+
+  // Known brand acronyms / capitalizations
+  final brandMap = <String, String>{
+    'gpt': 'GPT',
+    'claude': 'Claude',
+    'gemini': 'Gemini',
+    'qwen': 'Qwen',
+    'deepseek': 'DeepSeek',
+    'glm': 'GLM',
+    'kimi': 'Kimi',
+    'grok': 'Grok',
+    'mistral': 'Mistral',
+    'llama': 'Llama',
+    'flash': 'Flash',
+    'pro': 'Pro',
+    'max': 'Max',
+    'mini': 'Mini',
+    'plus': 'Plus',
+    'turbo': 'Turbo',
+    'coder': 'Coder',
+    'instruct': 'Instruct',
+    'thinking': 'Thinking',
+  };
+
+  // Split on '-' or '_' or '.' boundaries where text changes, or words vs numbers
+  // E.g. "gemini-3.8-flash" -> ["gemini", "3.8", "flash"]
+  // "qwen3.8-flash" -> ["qwen", "3.8", "flash"]
+  final tokens = <String>[];
+  final segments = namePart.split(RegExp(r'[-_]'));
+  for (final seg in segments) {
+    final match = RegExp(r'^([a-zA-Z]+)(\d.*)$').firstMatch(seg);
+    if (match != null) {
+      tokens.add(match.group(1)!);
+      tokens.add(match.group(2)!);
+    } else {
+      tokens.add(seg);
+    }
+  }
+
+  final formatted = tokens.map((t) {
+    final lower = t.toLowerCase();
+    if (brandMap.containsKey(lower)) {
+      return brandMap[lower]!;
+    }
+    if (RegExp(r'^\d+(\.\d+)?$').hasMatch(t)) {
+      return t;
+    }
+    if (lower.startsWith('v') && RegExp(r'^v\d+').hasMatch(lower)) {
+      return 'V${t.substring(1)}';
+    }
+    // Capitalize first letter
+    return t.isNotEmpty ? '${t[0].toUpperCase()}${t.substring(1)}' : t;
+  }).join(' ');
+
+  return formatted;
+}
+
+String _thinkingLabel(ThinkingLevel level) => switch (level) {
+      ThinkingLevel.auto => 'auto',
+      ThinkingLevel.off => 'off',
+      ThinkingLevel.minimal => 'min',
+      ThinkingLevel.low => 'low',
+      ThinkingLevel.medium => 'med',
+      ThinkingLevel.high => 'high',
+      ThinkingLevel.xhigh => 'xhigh',
+      ThinkingLevel.max => 'max',
+    };
+
+String _truncateModel(String name, [int max = 24]) =>
+    name.length <= max ? name : '${name.substring(0, max - 3)}…';
 
 class _Avatar extends StatelessWidget {
   final String name;

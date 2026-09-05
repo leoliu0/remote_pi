@@ -1,23 +1,5 @@
-//! `cockpit hook` — helper que os agentes invocam nos hooks de ciclo de vida.
-//! Serve **dois harnesses**, instalados pelos `HookInstaller`s do app:
-//!
-//! - **Claude Code** (`~/.claude/settings.json`)
-//! - **Codex CLI** (`~/.codex/hooks.json` + trust em `~/.codex/config.toml`)
-//!
-//! Os dois usam o mesmo envelope: um JSON pelo stdin com `hook_event_name`,
-//! `session_id`, `transcript_path` etc. Traduzimos num status de turno
-//! (working / waiting / idle) e mandamos pro Cockpit pelo mesmo socket da CLI,
-//! discriminado por ausência de `type:"cmd"`. Este helper é **agnóstico de
-//! harness**: só o conjunto de eventos difere, e o `status_for` cobre a união.
-//!
-//! Por que socket e não OSC na PTY: os agentes rodam os hooks SEM terminal
-//! controlador (escrever em /dev/tty falha com ENXIO). O app injeta no env da
-//! PTY o `COCKPIT_PANE_ID` (roteamento) e o `COCKPIT_STATUS_SOCK` (caminho do
-//! socket); o hook herda os dois. Sessões de agente fora do Cockpit não têm
-//! essas envs, então o hook é no-op (gate natural).
-//!
-//! **Nunca escreve no stdout** (participa do protocolo de hook) e **nunca falha
-//! barulhento**: qualquer erro é engolido pra não atrapalhar o turno.
+//! `cockpit hook` — helper invoked by agents during lifecycle hooks (Claude Code & Codex CLI).
+//! Translates agent events into status transitions (working / waiting / idle) sent over socket.
 
 use std::io::{Read, Write};
 
@@ -25,14 +7,13 @@ use serde_json::{json, Value};
 
 use crate::util::env_non_empty;
 
-/// Executa o hook. Sempre retorna sem erro visível.
+/// Runs the hook handler. Always exits silently.
 pub fn run(args: &[String]) -> ! {
     let _ = try_run(harness_from(args));
     std::process::exit(0)
 }
 
-/// Lê `--harness <nome>` dos argumentos. Default `claude`: entries instalados
-/// por versões anteriores não passam a flag, e todos eles são do Claude Code.
+/// Reads `--harness <name>` from arguments, defaulting to `claude`.
 fn harness_from(args: &[String]) -> String {
     let mut it = args.iter();
     while let Some(a) = it.next() {
@@ -52,7 +33,7 @@ fn harness_from(args: &[String]) -> String {
 }
 
 fn try_run(harness: String) -> Option<()> {
-    let pane_id = env_non_empty("COCKPIT_PANE_ID")?; // não é sessão do Cockpit
+    let pane_id = env_non_empty("COCKPIT_PANE_ID")?; // not inside a Cockpit session
     let sock = env_non_empty("COCKPIT_STATUS_SOCK");
     let port = env_non_empty("COCKPIT_STATUS_PORT").and_then(|p| p.parse::<u16>().ok());
     if sock.is_none() && port.is_none() {
@@ -70,33 +51,24 @@ fn try_run(harness: String) -> Option<()> {
     }
 
     let event = str_field(&decoded, "hook_event_name");
-    let status = status_for(&event, &decoded)?; // evento que não nos interessa
+    let status = status_for(&event, &decoded)?; // unhandled event -> ignore
 
     let mut payload = json!({
         "paneId": pane_id,
         "st": status,
-        // Evento cru — o app usa pra distinguir INÍCIO de turno
-        // (UserPromptSubmit) de atividade mid-turn (Pre/PostToolUse) e descartar
-        // um 'working' tardio que chega fora de ordem depois do 'idle' (Stop),
-        // evitando o spinner eterno. Cada hook é um processo separado abrindo
-        // seu próprio socket, sem ordem garantida entre eles.
+        // Raw event name for distinguishing turn start vs tool activity
         "ev": event,
         "sid": str_field(&decoded, "session_id"),
         "tx": str_field(&decoded, "transcript_path"),
-        // Quem emitiu o evento. O app precisa disso pra retomar a sessão com o
-        // comando certo (`claude --resume <id>` vs `codex resume <id>`) — o
-        // session-id sozinho não diz de quem é.
+        // Emitting harness name for session resumption
         "hn": harness,
     });
-    // Só o Codex manda `turn_id`. Transportamos quando existe: identifica o
-    // turno sem depender da ordem de chegada dos hooks (o `ev` continua sendo
-    // o que o app consome hoje).
+    // Pass turn_id when present (e.g. Codex)
     let turn = str_field(&decoded, "turn_id");
     if !turn.is_empty() {
         payload["tid"] = json!(turn);
     }
-    // Token só importa no TCP (loopback é acessível por qualquer processo
-    // local); no UDS a permissão do socket já protege.
+    // Status token for TCP transport authentication
     if let Ok(tok) = std::env::var("COCKPIT_STATUS_TOKEN") {
         payload["tok"] = json!(tok);
     }
@@ -120,8 +92,7 @@ fn try_run(harness: String) -> Option<()> {
     Some(())
 }
 
-/// Campo string do JSON do hook, com `""` quando ausente (igual ao Dart, que
-/// faz `(json['x'] ?? '').toString()`).
+/// Returns string field from JSON value, defaulting to `""`.
 fn str_field(v: &Value, key: &str) -> String {
     match v.get(key) {
         Some(Value::String(s)) => s.clone(),
@@ -130,31 +101,12 @@ fn str_field(v: &Value, key: &str) -> String {
     }
 }
 
-/// Mapeia o evento de hook num status de turno, ou `None` se o evento não deve
-/// mover o indicador.
-///
-/// Cobre a **união** dos eventos do Claude Code e do Codex CLI — os nomes
-/// coincidem onde a semântica coincide. Diferenças que importam:
-///
-/// - `Notification` só existe no Claude; `PermissionRequest` só no Codex. Os
-///   dois significam "precisa do usuário", mas o do Codex é explícito e não
-///   exige a heurística de texto.
-/// - O desvio de `PreToolUse` bloqueante é do Claude (ferramenta que trava
-///   esperando resposta sem emitir `Notification`). No Codex é inerte: aquelas
-///   ferramentas não existem lá, e a aprovação tem evento próprio.
-/// - `SubagentStart`/`SubagentStop` e `PreCompact`/`PostCompact` (Codex) são
-///   ignorados de propósito: subagente e compactação não devem mexer no
-///   indicador da aba, que representa a sessão principal.
+/// Maps hook event to turn status, or `None` if the event should not change the indicator.
 pub fn status_for(event: &str, json: &Value) -> Option<&'static str> {
     match event {
         "UserPromptSubmit" | "PostToolUse" => Some("working"),
         "PreToolUse" => {
-            // Ferramentas que por definição BLOQUEIAM esperando o usuário
-            // (formulário do plan mode, aprovação de plano) não emitem
-            // `Notification` — o último hook antes do bloqueio é este PreToolUse.
-            // Sem este desvio o app fica em `working` (spinner eterno) sem
-            // chime/notificação. O `PostToolUse` que chega quando o usuário
-            // responde volta pra `working` normalmente.
+            // Blocking tools (plan mode form, plan approval) do not emit `Notification`
             let tool = str_field(json, "tool_name");
             const BLOCKING: [&str; 2] = ["AskUserQuestion", "ExitPlanMode"];
             Some(if BLOCKING.contains(&tool.as_str()) {
@@ -164,7 +116,7 @@ pub fn status_for(event: &str, json: &Value) -> Option<&'static str> {
             })
         }
         "Notification" => {
-            // Notification cobre "precisa de aprovação" e "ocioso esperando input".
+            // Covers both "needs approval" and "idle waiting for input".
             let hint = format!(
                 "{} {}",
                 str_field(json, "notification_type"),
@@ -177,11 +129,10 @@ pub fn status_for(event: &str, json: &Value) -> Option<&'static str> {
                 "waiting"
             })
         }
-        // Codex: o pedido de aprovação tem evento próprio, sem heurística.
+        // Codex: approval has its own event, no text heuristic.
         "PermissionRequest" => Some("waiting"),
         "Stop" | "SessionStart" | "SessionEnd" => Some("idle"),
-        // Explicitamente inertes (Codex): subagente e compactação não são o
-        // turno da aba. Listados pra deixar claro que é decisão, não omissão.
+        // Explicitly inert (Codex): subagent and compaction are not the tab's turn.
         "SubagentStart" | "SubagentStop" | "PreCompact" | "PostCompact" => None,
         _ => None,
     }
@@ -192,69 +143,69 @@ mod tests {
     use super::*;
 
     #[test]
-    fn eventos_de_trabalho() {
+    fn work_events() {
         assert_eq!(status_for("UserPromptSubmit", &json!({})), Some("working"));
         assert_eq!(status_for("PostToolUse", &json!({})), Some("working"));
     }
 
     #[test]
-    fn pretooluse_bloqueante_vira_waiting() {
-        let bloqueia = json!({"tool_name": "AskUserQuestion"});
-        assert_eq!(status_for("PreToolUse", &bloqueia), Some("waiting"));
-        let plano = json!({"tool_name": "ExitPlanMode"});
-        assert_eq!(status_for("PreToolUse", &plano), Some("waiting"));
-        let comum = json!({"tool_name": "Bash"});
-        assert_eq!(status_for("PreToolUse", &comum), Some("working"));
-        // sem tool_name continua working
+    fn blocking_pretooluse_becomes_waiting() {
+        let blocking = json!({"tool_name": "AskUserQuestion"});
+        assert_eq!(status_for("PreToolUse", &blocking), Some("waiting"));
+        let plan = json!({"tool_name": "ExitPlanMode"});
+        assert_eq!(status_for("PreToolUse", &plan), Some("waiting"));
+        let common = json!({"tool_name": "Bash"});
+        assert_eq!(status_for("PreToolUse", &common), Some("working"));
+        // missing tool_name stays working
         assert_eq!(status_for("PreToolUse", &json!({})), Some("working"));
     }
 
     #[test]
-    fn notification_distingue_idle_de_waiting() {
+    fn notification_distinguishes_idle_from_waiting() {
         let idle = json!({"message": "Claude is idle waiting for input"});
         assert_eq!(status_for("Notification", &idle), Some("idle"));
         let tipo_idle = json!({"notification_type": "IDLE"});
         assert_eq!(status_for("Notification", &tipo_idle), Some("idle"));
-        let aprovacao = json!({"message": "needs your approval"});
-        assert_eq!(status_for("Notification", &aprovacao), Some("waiting"));
+        let approval = json!({"message": "needs your approval"});
+        assert_eq!(status_for("Notification", &approval), Some("waiting"));
     }
 
     #[test]
-    fn fim_de_turno_e_sessao_sao_idle() {
+    fn turn_end_and_session_are_idle() {
         for ev in ["Stop", "SessionStart", "SessionEnd"] {
             assert_eq!(status_for(ev, &json!({})), Some("idle"));
         }
     }
 
     #[test]
-    fn evento_desconhecido_nao_move_indicador() {
+    fn unknown_event_does_not_move_indicator() {
         assert_eq!(status_for("", &json!({})), None);
         assert_eq!(status_for("Whatever", &json!({})), None);
     }
 
     #[test]
-    fn permission_request_do_codex_e_waiting() {
-        // Payload real do Codex: nada de texto pra interpretar, o evento já diz.
+    fn codex_permission_request_is_waiting() {
+        // Real Codex payload: the event itself is enough; no text to interpret.
         let ev = json!({"hook_event_name": "PermissionRequest", "tool_name": "shell"});
         assert_eq!(status_for("PermissionRequest", &ev), Some("waiting"));
     }
 
     #[test]
-    fn subagente_e_compactacao_do_codex_sao_inertes() {
+    fn codex_subagent_and_compaction_are_inert() {
         for ev in [
             "SubagentStart",
             "SubagentStop",
             "PreCompact",
             "PostCompact",
         ] {
-            assert_eq!(status_for(ev, &json!({})), None, "{ev} não deve mover a aba");
+            assert_eq!(status_for(ev, &json!({})), None, "{ev} must not move the tab");
         }
     }
 
     #[test]
-    fn eventos_do_codex_cobrem_o_ciclo_de_turno() {
-        // Sequência observada numa sessão real de `codex exec`.
-        let ciclo = [
+    fn codex_events_cover_the_turn_cycle() {
+        // Sequence observed in a real `codex exec` session.
+        let cycle = [
             ("SessionStart", "idle"),
             ("UserPromptSubmit", "working"),
             ("PreToolUse", "working"),
@@ -263,21 +214,21 @@ mod tests {
             ("Stop", "idle"),
             ("SessionEnd", "idle"),
         ];
-        for (ev, esperado) in ciclo {
-            assert_eq!(status_for(ev, &json!({})), Some(esperado), "evento {ev}");
+        for (ev, expected) in cycle {
+            assert_eq!(status_for(ev, &json!({})), Some(expected), "event {ev}");
         }
     }
 
     #[test]
-    fn harness_default_e_claude() {
-        // Entry antigo (instalado antes da flag existir) só passa `hook`.
+    fn harness_defaults_to_claude() {
+        // Older entries (installed before the flag existed) only pass `hook`.
         assert_eq!(harness_from(&[]), "claude");
         assert_eq!(harness_from(&["--harness".into()]), "claude");
         assert_eq!(harness_from(&["--harness".into(), "  ".into()]), "claude");
     }
 
     #[test]
-    fn harness_aceita_as_duas_formas() {
+    fn harness_accepts_both_forms() {
         assert_eq!(
             harness_from(&["--harness".into(), "codex".into()]),
             "codex"
@@ -286,7 +237,7 @@ mod tests {
     }
 
     #[test]
-    fn str_field_normaliza_ausente_e_nao_string() {
+    fn str_field_normalizes_missing_and_non_string() {
         assert_eq!(str_field(&json!({}), "x"), "");
         assert_eq!(str_field(&json!({"x": null}), "x"), "");
         assert_eq!(str_field(&json!({"x": "v"}), "x"), "v");

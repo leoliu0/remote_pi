@@ -9,8 +9,13 @@ import 'package:flutter/material.dart';
 class StreamingBubble extends StatefulWidget {
   final StreamingMessage? streaming;
   final bool isWorking;
-  const StreamingBubble({super.key, this.streaming, this.isWorking = true});
-
+  final bool brief;
+  const StreamingBubble({
+    super.key,
+    this.streaming,
+    this.isWorking = true,
+    this.brief = false,
+  });
   @override
   State<StreamingBubble> createState() => _StreamingBubbleState();
 }
@@ -36,18 +41,23 @@ class _StreamingBubbleState extends State<StreamingBubble>
 
   @override
   Widget build(BuildContext context) {
-    final buffer = widget.streaming?.buffer ?? '';
+    final raw = widget.streaming?.buffer ?? '';
+    final buffer = widget.brief
+        ? stripThinkingTrace(raw, isLiveStreaming: true)
+        : raw;
     final hasText = buffer.isNotEmpty;
+    if (!hasText && !widget.isWorking) return const SizedBox.shrink();
     return SizedBox(
       width: double.infinity,
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          if (!hasText && widget.isWorking)
+          if (!hasText && widget.isWorking && !widget.brief)
             const _ThinkingIndicator(),
           if (hasText) AgentMarkdown(buffer),
-          _BlinkingCursor(controller: _blink),
+          if (widget.isWorking && widget.streaming != null)
+            _BlinkingCursor(controller: _blink),
         ],
       ),
     );

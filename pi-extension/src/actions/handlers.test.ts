@@ -178,6 +178,17 @@ describe("handleThinkingSet", () => {
     ]);
   });
 
+  test("auto level clears the override (undefined) on pi.setThinkingLevel", () => {
+    const calls: (string | undefined)[] = [];
+    const pi = fakePi({ setThinkingLevel: (lvl) => { calls.push(lvl); } });
+    const sender = makeSender();
+    handleThinkingSet(pi, sender, { type: "thinking_set", id: "r3", level: "auto" });
+    expect(calls).toEqual([undefined]);
+    expect(sender.sent).toEqual([
+      { type: "action_ok", in_reply_to: "r3", action: "thinking_set" },
+    ]);
+  });
+
   test("setThinkingLevel throwing surfaces as action_error", () => {
     const pi = fakePi({ setThinkingLevel: () => { throw new Error("nope"); } });
     const sender = makeSender();
@@ -296,6 +307,7 @@ describe("handleListModels", () => {
         reasoning: true,
         context_window: 200_000,
         vision: false,
+        thinking_levels: ["auto", "off", "minimal", "low", "medium", "high", "xhigh", "max"],
       },
     ]);
     expect(reply.current).toEqual(reply.models[0]);
@@ -335,6 +347,7 @@ describe("handleListModels", () => {
         reasoning: false,
         context_window: 131_072,
         vision: false,
+        thinking_levels: ["off"],
       },
     ]);
   });
@@ -367,6 +380,7 @@ describe("wireFromModel", () => {
       reasoning: true,
       context_window: 200_000,
       vision: false,  // sampleModel has no `input` → text-only
+      thinking_levels: ["auto", "off", "minimal", "low", "medium", "high", "xhigh", "max"],
     });
   });
 
@@ -379,5 +393,63 @@ describe("wireFromModel", () => {
   test("vision=false when model.input is text-only", () => {
     const textOnly: SdkModelLike = { ...sampleModel, input: ["text"] };
     expect(wireFromModel(textOnly).vision).toBe(false);
+  });
+
+  test("Gemini 3.7 Flash: off mapped to null -> only minimal..high (no off, no max)", () => {
+    const gemini: SdkModelLike = {
+      ...sampleModel,
+      id: "gemini-3.7-flash",
+      name: "Gemini 3.7 Flash",
+      reasoning: true,
+      thinkingLevelMap: { off: null },
+    };
+    expect(wireFromModel(gemini).thinking_levels).toEqual([
+      "auto", "minimal", "low", "medium", "high",
+    ]);
+  });
+
+  test("Kimi K3: off, minimal, medium, xhigh mapped to null -> only low, high, max", () => {
+    const k3: SdkModelLike = {
+      ...sampleModel,
+      id: "k3",
+      name: "Kimi K3",
+      reasoning: true,
+      thinkingLevelMap: {
+        off: null,
+        minimal: null,
+        low: "low",
+        medium: null,
+        high: "high",
+        xhigh: null,
+        max: "max",
+      },
+    };
+    expect(wireFromModel(k3).thinking_levels).toEqual([
+      "auto", "low", "high", "max",
+    ]);
+  });
+
+  test("DeepSeek V4 Pro: supports off, high, max", () => {
+    const dsv4: SdkModelLike = {
+      ...sampleModel,
+      id: "deepseek-v4-pro",
+      reasoning: true,
+      thinkingLevelMap: {
+        minimal: null,
+        low: null,
+        medium: null,
+        high: "high",
+        xhigh: null,
+        max: "max",
+      },
+    };
+    expect(wireFromModel(dsv4).thinking_levels).toEqual([
+      "auto", "off", "high", "max",
+    ]);
+  });
+
+  test("thinking_levels is ['off'] for non-reasoning models", () => {
+    expect(wireFromModel({ ...sampleModel, reasoning: false }).thinking_levels)
+      .toEqual(["off"]);
   });
 });

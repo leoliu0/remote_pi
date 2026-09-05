@@ -1,19 +1,13 @@
-//! Helpers compartilhados: ambiente, caminhos e formatação de coluna.
-//!
-//! Porte fiel dos helpers do `tool/cockpit_cli.dart` — o formato de saída é
-//! consumido por humano E por agente, então largura de coluna e espaçamento
-//! importam.
+//! Shared helpers: environment, path resolution, and column formatting.
 
 use std::path::Path;
 
-/// Id da própria tab: `COCKPIT_TAB_ID` (novo) com fallback pro legado
-/// `COCKPIT_PANE_ID`. O app injeta os dois; o fallback cobre binário novo com
-/// app antigo (só PANE_ID) e vice-versa.
+/// Returns current tab ID from `COCKPIT_TAB_ID` with fallback to `COCKPIT_PANE_ID`.
 pub fn self_tab_id() -> Option<String> {
     env_non_empty("COCKPIT_TAB_ID").or_else(|| env_non_empty("COCKPIT_PANE_ID"))
 }
 
-/// Variável de ambiente, tratando vazio como ausente.
+/// Reads environment variable, treating empty string as absent.
 pub fn env_non_empty(key: &str) -> Option<String> {
     match std::env::var(key) {
         Ok(v) if !v.is_empty() => Some(v),
@@ -21,15 +15,13 @@ pub fn env_non_empty(key: &str) -> Option<String> {
     }
 }
 
-/// Escreve em stderr e sai com [code]. Usado nos erros de uso da CLI.
+/// Prints message to stderr and exits with given code.
 pub fn die(msg: &str, code: i32) -> ! {
     eprintln!("{msg}");
     std::process::exit(code)
 }
 
-/// Expande `~` e resolve caminhos relativos contra o cwd atual, produzindo um
-/// caminho absoluto. **Não normaliza `..`** — igual ao `File(p).absolute.path`
-/// do Dart, porque quem interpreta é o app.
+/// Expands `~` and resolves relative paths against current working directory.
 pub fn resolve_path(path: &str) -> String {
     let mut p = path.to_string();
     if p == "~" || p.starts_with("~/") {
@@ -51,12 +43,12 @@ pub fn resolve_path(path: &str) -> String {
     }
 }
 
-/// `HOME` (POSIX) ou `USERPROFILE` (Windows).
+/// Returns home directory path (`HOME` on POSIX, `USERPROFILE` on Windows).
 pub fn home_dir() -> Option<String> {
     env_non_empty("HOME").or_else(|| env_non_empty("USERPROFILE"))
 }
 
-/// Preenche à direita com espaços até [n] caracteres (nunca trunca).
+/// Right-pads string with spaces up to [n] characters without truncating.
 pub fn pad(s: &str, n: usize) -> String {
     let len = s.chars().count();
     if len >= n {
@@ -69,8 +61,7 @@ pub fn pad(s: &str, n: usize) -> String {
     }
 }
 
-/// Último segmento do caminho, ignorando separadores finais. Aceita `\` e `/`
-/// no Windows.
+/// Returns the last path segment, handling both `/` and `\` separators.
 pub fn basename(path: &str) -> String {
     let parts: Vec<&str> = if cfg!(windows) {
         path.split(['/', '\\']).filter(|p| !p.is_empty()).collect()
