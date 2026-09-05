@@ -45,6 +45,16 @@ const List<SlashCommandItem> kSlashCommands = [
     icon: LucideIcons.cpu,
   ),
   SlashCommandItem(
+    name: 'goal',
+    description: 'Toggle goal mode (set, resume, pause, or inspect objective)',
+    icon: LucideIcons.target,
+  ),
+  SlashCommandItem(
+    name: 'loop',
+    description: 'Run an autonomous prompt loop on a timer or condition',
+    icon: LucideIcons.repeat,
+  ),
+  SlashCommandItem(
     name: 'thinking',
     description: 'Configure thinking and reasoning level (off to max)',
     icon: LucideIcons.brain,
