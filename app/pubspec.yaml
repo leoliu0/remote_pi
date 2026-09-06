@@ -16,7 +16,7 @@ publish_to: "none" # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.2.34+2045
+version: 1.2.35+2046
 
 environment:
   sdk: ^3.11.5
@@ -76,7 +76,6 @@ dependencies:
   # Plan 32b — render the agent's Markdown replies (GFM + code blocks),
   # optimized for LLM output. `url_launcher` opens links tapped in the
   # rendered markdown in the system browser.
-  gpt_markdown: ^1.1.7
   url_launcher: ^6.3.0
 
   # Theme — brand wordmark font (Inter, the wireframe's RP_SANS). Served at

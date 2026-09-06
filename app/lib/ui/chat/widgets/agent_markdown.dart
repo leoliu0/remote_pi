@@ -110,9 +110,11 @@ class AgentMarkdown extends StatelessWidget {
       },
     );
 
+    if (selectable) {
+      return SelectionArea(child: widget);
+    }
     return widget;
   }
-
   static Future<void> _openLink(BuildContext context, String url) async {
     final messenger = ScaffoldMessenger.maybeOf(context);
     final uri = Uri.tryParse(url);
