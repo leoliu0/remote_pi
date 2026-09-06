@@ -305,11 +305,6 @@ class _ChatPageState extends State<ChatPage> {
           // loaded PeerRecord; we read it at tap time (loaded within ms of
           // mount for the connection) and no-op in the unlikely pre-load tap.
           IconButton(
-            icon: Icon(LucideIcons.sparkles, size: 18, color: colors.accent),
-            tooltip: 'Quick actions',
-            onPressed: () => showQuickActionsSheet(context),
-          ),
-          IconButton(
             icon: Icon(LucideIcons.info, size: 18, color: colors.muted2),
             tooltip: 'Session info',
             onPressed: () {
