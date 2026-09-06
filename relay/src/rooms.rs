@@ -23,7 +23,8 @@ pub struct RoomMeta {
     /// Opaque string from the Pi — the relay never interprets it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub goal: Option<String>,
-    /// Whether this room currently has an in-flight agent turn (plano 32).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub loop_status: Option<String>,
     /// A plain bool with the same merge-patch semantics as `thinking`: a
     /// `room_meta_update` that omits `working` leaves it unchanged — it never
     /// auto-clears. Defaults to `false` until the Pi reports otherwise, and is
@@ -51,6 +52,7 @@ pub struct RoomMetaPatch {
     /// `goal` mirrors `thinking`'s nullable string patch shape: absent = leave
     /// current, `Some(None)` = clear, `Some(Some(s))` = set.
     pub goal: Option<Option<String>>,
+    pub loop_status: Option<Option<String>>,
 }
 
 impl RoomMetaPatch {
@@ -59,7 +61,7 @@ impl RoomMetaPatch {
     /// `meta: {}`.
     pub fn is_empty(&self) -> bool {
         self.model.is_none() && self.thinking.is_none() && self.working.is_none()
-            && self.goal.is_none()
+            && self.goal.is_none() && self.loop_status.is_none()
     }
 }
 

@@ -13,6 +13,7 @@ import 'package:app/ui/chat/widgets/slash_commands.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:app/ui/chat/widgets/goal_menu_sheet.dart';
+import 'package:app/ui/chat/widgets/loop_menu_sheet.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 // InputBar — bottom message composer.
@@ -75,7 +76,8 @@ class InputBar extends StatefulWidget {
   final String? activeThinking;
   /// Goal Mode status: 'active' | 'paused' | 'idle' | null.
   final String? goalStatus;
-
+  /// Loop Mode status: 'active' | 'running' | 'paused' | 'waiting' | 'idle' | null.
+  final String? loopStatus;
   /// Fired whenever the typed composer text changes.
   final void Function(String text)? onDraftChanged;
   const InputBar({
@@ -99,6 +101,7 @@ class InputBar extends StatefulWidget {
     this.activeModel,
     this.activeThinking,
     this.goalStatus,
+    this.loopStatus,
     this.onDraftChanged,
   });
 
@@ -696,6 +699,40 @@ class _InputBarState extends State<InputBar> {
                       }
                     },
                   ),
+                  const SizedBox(width: 4),
+                  _LoopModeQuickButton(
+                    enabled: !widget.disabled,
+                    status: widget.loopStatus,
+                    onTap: () async {
+                      final action = await showLoopMenuSheet(
+                        context,
+                        loopStatus: widget.loopStatus,
+                      );
+                      if (action == null || !mounted) return;
+                      switch (action) {
+                        case LoopMenuAction.toggle:
+                          widget.onSend('/loop');
+                          break;
+                        case LoopMenuAction.pause:
+                          widget.onSend('/loop');
+                          break;
+                        case LoopMenuAction.newLoop:
+                          _controller.text = '/loop ';
+                          _controller.selection = TextSelection.collapsed(
+                            offset: _controller.text.length,
+                          );
+                          _focusNode.requestFocus();
+                          break;
+                        case LoopMenuAction.setCount:
+                          _controller.text = '/loop 10 ';
+                          _controller.selection = TextSelection.collapsed(
+                            offset: _controller.text.length,
+                          );
+                          _focusNode.requestFocus();
+                          break;
+                      }
+                    },
+                  ),
                   const Spacer(),
                   if (showQueueButton) ...[
                     _QueueButton(onTap: _queue),
@@ -1014,6 +1051,89 @@ class _GoalModeQuickButton extends StatelessWidget {
       height: 38,
       child: IconButton(
         key: const Key('input-bar-goal-mode'),
+        padding: EdgeInsets.zero,
+        iconSize: 18,
+        splashRadius: 18,
+        tooltip: tooltip,
+        icon: iconWidget,
+        onPressed: enabled ? onTap : null,
+      ),
+    );
+  }
+}
+class _LoopModeQuickButton extends StatelessWidget {
+  const _LoopModeQuickButton({
+    required this.enabled,
+    this.status,
+    required this.onTap,
+  });
+
+  final bool enabled;
+  final String? status;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final isActive = status == 'active' || status == 'running';
+    final isPaused = status == 'paused';
+
+    final String tooltip;
+    if (isActive) {
+      tooltip = 'Loop active — tap to manage (/loop)';
+    } else if (isPaused) {
+      tooltip = 'Loop paused — tap to resume (/loop)';
+    } else {
+      tooltip = 'Loop mode (/loop)';
+    }
+
+    Widget iconWidget;
+    if (isActive) {
+      iconWidget = Container(
+        width: 22,
+        height: 22,
+        decoration: BoxDecoration(
+          color: colors.accent,
+          shape: BoxShape.circle,
+        ),
+        child: Icon(LucideIcons.repeat, size: 13, color: colors.surface),
+      );
+    } else if (isPaused) {
+      iconWidget = Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Icon(
+            LucideIcons.repeat,
+            size: 18,
+            color: enabled ? colors.accent : colors.muted.withValues(alpha: 0.35),
+          ),
+          Positioned(
+            right: -2,
+            bottom: -2,
+            child: Container(
+              width: 7,
+              height: 7,
+              decoration: BoxDecoration(
+                color: colors.warning,
+                shape: BoxShape.circle,
+              ),
+            ),
+          ),
+        ],
+      );
+    } else {
+      iconWidget = Icon(
+        LucideIcons.repeat,
+        size: 18,
+        color: enabled ? colors.muted2 : colors.muted.withValues(alpha: 0.35),
+      );
+    }
+
+    return SizedBox(
+      width: 38,
+      height: 38,
+      child: IconButton(
+        key: const Key('input-bar-loop-mode'),
         padding: EdgeInsets.zero,
         iconSize: 18,
         splashRadius: 18,

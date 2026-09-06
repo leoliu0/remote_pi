@@ -231,7 +231,7 @@ let _myRoomId: string | null = null;   // this Pi's room id (derived from cwd)
 // open instead of starting null. The SDK fires `thinking_level_select`
 // on every change (initial load + user toggle), mirrored to room_meta
 // the same way model is — apps subscribe to one channel for both.
-let _myRoomMeta: { name: string; cwd: string; model?: string; thinking?: ThinkingLevel; working?: boolean; goal?: string } | null = null;
+let _myRoomMeta: { name: string; cwd: string; model?: string; thinking?: ThinkingLevel; working?: boolean; goal?: string; loop?: string } | null = null;
 let _currentModel: string | undefined = undefined;  // last-known model name
 let _currentThinking: ThinkingLevel | undefined = undefined;  // last-known thinking level
 /** True while the user's selected "auto" is the effective source of truth.
@@ -2525,6 +2525,13 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
       void _handleControl(event.text.slice(CTRL_PREFIX.length).trim());
       return { action: "handled" } as const;
     }
+    const trimmedText = event.text.trim();
+    if (trimmedText === "/loop" || trimmedText.startsWith("/loop ")) {
+      // User toggled or configured /loop
+      const current = _myRoomMeta?.loop;
+      const next = current === "active" || current === "running" ? "idle" : "active";
+      _publishLoopStatus(next);
+    }
     if (!_anyPeerActive()) return;
     if (event.source === "extension") return;
     // Don't re-broadcast terminal input if it matches the current in-flight turn from user_message
@@ -2598,6 +2605,22 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
       room_id: _myRoomId,
       meta: { goal: goalStatus },
     });
+  });
+  // Loop Mode state tracking and sync to room_meta
+  function _publishLoopStatus(status: string) {
+    if (_myRoomMeta?.loop === status) return;
+    if (_myRoomMeta) _myRoomMeta = { ..._myRoomMeta, loop: status };
+    if (!_relay || !_myRoomId) return;
+    _relay.sendControl({
+      type: "room_meta_update",
+      room_id: _myRoomId,
+      meta: { loop: status } as any,
+    });
+  }
+
+  (pi as { on: (event: string, handler: (event: unknown) => void) => void }).on("loop_updated", (event: any) => {
+    const status = event?.status ?? (event?.enabled ? "active" : "idle");
+    _publishLoopStatus(status);
   });
 
   pi.on("agent_start", () => {

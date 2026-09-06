@@ -62,12 +62,14 @@ class ActiveRoomMeta {
   /// up, no further app changes required.
   final ThinkingLevel? thinking;
   final String? goal;
+  final String? loop;
   const ActiveRoomMeta({
     this.peerEpk,
     this.roomId = 'main',
     this.model,
     this.thinking,
     this.goal,
+    this.loop,
   });
 
   @override
@@ -77,10 +79,11 @@ class ActiveRoomMeta {
       other.roomId == roomId &&
       other.model == model &&
       other.thinking == thinking &&
-      other.goal == goal;
+      other.goal == goal &&
+      other.loop == loop;
 
   @override
-  int get hashCode => Object.hash(peerEpk, roomId, model, thinking, goal);
+  int get hashCode => Object.hash(peerEpk, roomId, model, thinking, goal, loop);
 }
 
 /// Typed failure thrown by [ActionsRepository] when an action cannot
@@ -243,8 +246,8 @@ class ActionsRepository extends Repository implements IActionsRepository {
       model: active?.model,
       thinking: active?.thinking,
       goal: active?.goal,
+      loop: active?.loop,
     );
-
     // Plan/28 Wave D — detect external model changes. The local
     // `setModel` path already drops the cache directly; here we only
     // care about transitions of model name learned via room broadcasts.
