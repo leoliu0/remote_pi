@@ -4864,7 +4864,9 @@ async function _cmdJoin(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<void
     name: agentName,
     cwd: canonCwd,
     auditPath: audit,
-    takeoverExisting: process.env["REMOTE_PI_DAEMON"] === "1",
+    // When restarting or replacing an agent in the same cwd, take over the exact address
+    // (e.g. `/path@name`) instead of appending `#2`, `#3` collision ghost addresses.
+    takeoverExisting: true,
   });
 
   peer.onMessage((env) => {

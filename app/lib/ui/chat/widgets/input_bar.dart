@@ -12,6 +12,7 @@ import 'package:app/ui/core/themes/themes.dart';
 import 'package:app/ui/chat/widgets/slash_commands.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:app/ui/chat/widgets/goal_menu_sheet.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 // InputBar — bottom message composer.
@@ -666,24 +667,32 @@ class _InputBarState extends State<InputBar> {
                   _GoalModeQuickButton(
                     enabled: !widget.disabled,
                     status: widget.goalStatus,
-                    onTap: () {
-                      if (widget.goalStatus == 'paused') {
-                        // If current goal is paused, one-tap resume
-                        widget.onSend('/goal resume');
-                      } else if (widget.goalStatus == 'active') {
-                        // If active, prefill /goal to manage, pause, or view
-                        _controller.text = '/goal ';
-                        _controller.selection = TextSelection.collapsed(
-                          offset: _controller.text.length,
-                        );
-                        _focusNode.requestFocus();
-                      } else {
-                        // New goal: prefill /goal for user to type objective
-                        _controller.text = '/goal ';
-                        _controller.selection = TextSelection.collapsed(
-                          offset: _controller.text.length,
-                        );
-                        _focusNode.requestFocus();
+                    onTap: () async {
+                      final action = await showGoalMenuSheet(
+                        context,
+                        goalStatus: widget.goalStatus,
+                      );
+                      if (action == null || !mounted) return;
+                      switch (action) {
+                        case GoalMenuAction.resume:
+                          widget.onSend('/goal resume');
+                          break;
+                        case GoalMenuAction.pause:
+                          widget.onSend('/goal pause');
+                          break;
+                        case GoalMenuAction.details:
+                          widget.onSend('/goal');
+                          break;
+                        case GoalMenuAction.newGoal:
+                          _controller.text = '/goal ';
+                          _controller.selection = TextSelection.collapsed(
+                            offset: _controller.text.length,
+                          );
+                          _focusNode.requestFocus();
+                          break;
+                        case GoalMenuAction.drop:
+                          widget.onSend('/goal drop');
+                          break;
                       }
                     },
                   ),
