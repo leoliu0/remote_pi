@@ -11,9 +11,11 @@ import 'package:flutter_svg/flutter_svg.dart';
 /// Extensões do Cockpit que o material-icon-theme não conhece (o mapa `.g` é
 /// gerado — overrides manuais moram aqui). `.dbq` = arquivo de query da DB
 /// tab (plano 51); `.http`/`.rest` = arquivo de request da HTTP tab (o SVG
-/// existe nos assets, mas o mapa gerado não associa a extensão a ele).
+/// existe nos assets, mas o mapa gerado não associa a extensão a ele);
+/// `.kanban` = quadro de cards da tab de kanban.
 const Map<String, String> _extensionOverrides = {
   'dbq': 'database',
+  'kanban': 'todo',
   'http': 'http',
   'rest': 'http',
 };

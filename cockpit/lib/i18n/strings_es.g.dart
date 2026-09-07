@@ -123,6 +123,7 @@ class _Translations$cockpit$es extends Translations$cockpit$en {
 	@override late final _Translations$cockpit$dbRedisTable$es dbRedisTable = _Translations$cockpit$dbRedisTable$es._(_root);
 	@override late final _Translations$cockpit$dbQueryView$es dbQueryView = _Translations$cockpit$dbQueryView$es._(_root);
 	@override late final _Translations$cockpit$httpView$es httpView = _Translations$cockpit$httpView$es._(_root);
+	@override late final _Translations$cockpit$kanbanView$es kanbanView = _Translations$cockpit$kanbanView$es._(_root);
 	@override late final _Translations$cockpit$dbPanel$es dbPanel = _Translations$cockpit$dbPanel$es._(_root);
 	@override late final _Translations$cockpit$dbMongoView$es dbMongoView = _Translations$cockpit$dbMongoView$es._(_root);
 	@override late final _Translations$cockpit$dbConnectionDialog$es dbConnectionDialog = _Translations$cockpit$dbConnectionDialog$es._(_root);
@@ -569,6 +570,8 @@ class _Translations$cockpit$paneView$es extends Translations$cockpit$paneView$en
 	@override String get allTabs => 'Todas las pestañas';
 	@override String get pinTab => 'Fijar pestaña';
 	@override String get rename => 'Renombrar';
+	@override String get openAsMarkdown => 'Abrir como markdown';
+	@override String get openAsBoard => 'Abrir como tablero';
 	@override String get resetTitle => 'Restablecer título';
 	@override String get copyId => 'Copiar Id';
 	@override String get autoRelay => 'Auto-relay';
@@ -641,6 +644,7 @@ class _Translations$cockpit$fileTreePanel$es extends Translations$cockpit$fileTr
 	@override String get open => 'Abrir';
 	@override String get openWith => 'Abrir con';
 	@override String get openLayout => 'Abrir layout';
+	@override String get openAsMarkdown => 'Abrir como markdown';
 	@override String get showGitDiff => 'Mostrar diff de git';
 	@override String get createAgent => 'Crear agente';
 	@override String get createTerminal => 'Crear terminal';
@@ -828,6 +832,59 @@ class _Translations$cockpit$httpView$es extends Translations$cockpit$httpView$en
 	@override String get raw => 'Text';
 	@override String get truncatedSuffix => ' · truncado (respuesta demasiado grande)';
 	@override late final _Translations$cockpit$httpView$error$es error = _Translations$cockpit$httpView$error$es._(_root);
+}
+
+// Path: cockpit.kanbanView
+class _Translations$cockpit$kanbanView$es extends Translations$cockpit$kanbanView$en {
+	_Translations$cockpit$kanbanView$es._(TranslationsEs root) : this._root = root, super.internal(root);
+
+	final TranslationsEs _root; // ignore: unused_field
+
+	// Translations
+	@override String get boardView => 'Tablero';
+	@override String get listView => 'Lista';
+	@override String get refresh => 'Actualizar desde el disco';
+	@override String get manageLabels => 'Etiquetas';
+	@override String get labelsTitle => 'Etiquetas de este tablero';
+	@override String get labelNamePlaceholder => 'nombre de la etiqueta';
+	@override String labelUsage({required num n}) => (_root.$meta.cardinalResolver ?? PluralResolvers.cardinal('es'))(n,
+		one: '1 tarjeta',
+		other: '${n} tarjetas',
+	);
+	@override String get deleteLabel => 'Eliminar etiqueta';
+	@override String get newCard => 'nueva tarjeta';
+	@override String get newCardTitle => 'Nueva tarjeta';
+	@override String get newColumn => 'Nueva columna';
+	@override String get columnNameTitle => 'Nombre de la columna';
+	@override String get dragColumn => 'Arrastrar columna';
+	@override String get columnOptions => 'Opciones de la columna';
+	@override String get renameColumn => 'Renombrar columna';
+	@override String get moveColumnLeft => 'Mover a la izquierda';
+	@override String get moveColumnRight => 'Mover a la derecha';
+	@override String get deleteColumn => 'Eliminar columna';
+	@override String get newCardHere => 'Nueva tarjeta aquí';
+	@override String get duplicateCard => 'Duplicar';
+	@override String get cardLabels => 'Etiquetas';
+	@override String get deleteCard => 'Eliminar tarjeta';
+	@override String get advance => 'Pasar a la siguiente columna';
+	@override String get advanceBack => 'Volver una columna';
+	@override String get emptyColumn => 'Sin tarjetas';
+	@override String cardCount({required num n}) => (_root.$meta.cardinalResolver ?? PluralResolvers.cardinal('es'))(n,
+		one: '1 tarjeta',
+		other: '${n} tarjetas',
+	);
+	@override String get notes => 'Nota';
+	@override String get notesPlaceholder => 'Escribe una nota';
+	@override String get comments => 'Comentarios';
+	@override String get addComment => 'Añadir comentario';
+	@override String get commentPlaceholder => 'Escribe un comentario';
+	@override String get noComments => 'Aún no hay comentarios';
+	@override String get closeDetail => 'Cerrar';
+	@override String get notABoard => 'Este archivo aún no tiene columnas ## — se abre como markdown.';
+	@override String get startBoard => 'Empezar un tablero';
+	@override String get couldNotSave => 'No se pudo guardar el tablero';
+	@override String get unrecognizedBlock => 'No reconocido por el analizador — se arrastra entero, sin edición en línea.';
+	@override late final _Translations$cockpit$kanbanView$deleteColumnDialog$es deleteColumnDialog = _Translations$cockpit$kanbanView$deleteColumnDialog$es._(_root);
 }
 
 // Path: cockpit.dbPanel
@@ -1336,6 +1393,20 @@ class _Translations$cockpit$httpView$error$es extends Translations$cockpit$httpV
 	@override String get connectionFailedNoDetail => 'No se pudo alcanzar el servidor.';
 	@override String timeout({required Object seconds}) => 'El request superó el tiempo límite de ${seconds}s.';
 	@override String responseTooLarge({required Object bytes}) => 'La respuesta superó el límite de ${bytes} bytes.';
+}
+
+// Path: cockpit.kanbanView.deleteColumnDialog
+class _Translations$cockpit$kanbanView$deleteColumnDialog$es extends Translations$cockpit$kanbanView$deleteColumnDialog$en {
+	_Translations$cockpit$kanbanView$deleteColumnDialog$es._(TranslationsEs root) : this._root = root, super.internal(root);
+
+	final TranslationsEs _root; // ignore: unused_field
+
+	// Translations
+	@override String title({required Object name}) => '¿Eliminar «${name}»?';
+	@override String message({required Object count}) => 'Esta columna tiene ${count}. Elige qué pasa con ellas.';
+	@override String get moveCards => 'Mover a la columna anterior';
+	@override String get deleteAll => 'Eliminar junto con la columna';
+	@override String get emptyMessage => 'Esta columna está vacía.';
 }
 
 // Path: settings.page.header
@@ -1980,6 +2051,8 @@ extension on TranslationsEs {
 			'cockpit.paneView.allTabs' => 'Todas las pestañas',
 			'cockpit.paneView.pinTab' => 'Fijar pestaña',
 			'cockpit.paneView.rename' => 'Renombrar',
+			'cockpit.paneView.openAsMarkdown' => 'Abrir como markdown',
+			'cockpit.paneView.openAsBoard' => 'Abrir como tablero',
 			'cockpit.paneView.resetTitle' => 'Restablecer título',
 			'cockpit.paneView.copyId' => 'Copiar Id',
 			'cockpit.paneView.autoRelay' => 'Auto-relay',
@@ -2043,6 +2116,7 @@ extension on TranslationsEs {
 			'cockpit.fileTreePanel.open' => 'Abrir',
 			'cockpit.fileTreePanel.openWith' => 'Abrir con',
 			'cockpit.fileTreePanel.openLayout' => 'Abrir layout',
+			'cockpit.fileTreePanel.openAsMarkdown' => 'Abrir como markdown',
 			'cockpit.fileTreePanel.showGitDiff' => 'Mostrar diff de git',
 			'cockpit.fileTreePanel.createAgent' => 'Crear agente',
 			'cockpit.fileTreePanel.createTerminal' => 'Crear terminal',
@@ -2173,6 +2247,48 @@ extension on TranslationsEs {
 			'cockpit.httpView.error.connectionFailedNoDetail' => 'No se pudo alcanzar el servidor.',
 			'cockpit.httpView.error.timeout' => ({required Object seconds}) => 'El request superó el tiempo límite de ${seconds}s.',
 			'cockpit.httpView.error.responseTooLarge' => ({required Object bytes}) => 'La respuesta superó el límite de ${bytes} bytes.',
+			'cockpit.kanbanView.boardView' => 'Tablero',
+			'cockpit.kanbanView.listView' => 'Lista',
+			'cockpit.kanbanView.refresh' => 'Actualizar desde el disco',
+			'cockpit.kanbanView.manageLabels' => 'Etiquetas',
+			'cockpit.kanbanView.labelsTitle' => 'Etiquetas de este tablero',
+			'cockpit.kanbanView.labelNamePlaceholder' => 'nombre de la etiqueta',
+			'cockpit.kanbanView.labelUsage' => ({required num n}) => (_root.$meta.cardinalResolver ?? PluralResolvers.cardinal('es'))(n, one: '1 tarjeta', other: '${n} tarjetas', ), 
+			'cockpit.kanbanView.deleteLabel' => 'Eliminar etiqueta',
+			'cockpit.kanbanView.newCard' => 'nueva tarjeta',
+			'cockpit.kanbanView.newCardTitle' => 'Nueva tarjeta',
+			'cockpit.kanbanView.newColumn' => 'Nueva columna',
+			'cockpit.kanbanView.columnNameTitle' => 'Nombre de la columna',
+			'cockpit.kanbanView.dragColumn' => 'Arrastrar columna',
+			'cockpit.kanbanView.columnOptions' => 'Opciones de la columna',
+			'cockpit.kanbanView.renameColumn' => 'Renombrar columna',
+			'cockpit.kanbanView.moveColumnLeft' => 'Mover a la izquierda',
+			'cockpit.kanbanView.moveColumnRight' => 'Mover a la derecha',
+			'cockpit.kanbanView.deleteColumn' => 'Eliminar columna',
+			'cockpit.kanbanView.newCardHere' => 'Nueva tarjeta aquí',
+			'cockpit.kanbanView.duplicateCard' => 'Duplicar',
+			'cockpit.kanbanView.cardLabels' => 'Etiquetas',
+			'cockpit.kanbanView.deleteCard' => 'Eliminar tarjeta',
+			'cockpit.kanbanView.advance' => 'Pasar a la siguiente columna',
+			'cockpit.kanbanView.advanceBack' => 'Volver una columna',
+			'cockpit.kanbanView.emptyColumn' => 'Sin tarjetas',
+			'cockpit.kanbanView.cardCount' => ({required num n}) => (_root.$meta.cardinalResolver ?? PluralResolvers.cardinal('es'))(n, one: '1 tarjeta', other: '${n} tarjetas', ), 
+			'cockpit.kanbanView.notes' => 'Nota',
+			'cockpit.kanbanView.notesPlaceholder' => 'Escribe una nota',
+			'cockpit.kanbanView.comments' => 'Comentarios',
+			'cockpit.kanbanView.addComment' => 'Añadir comentario',
+			'cockpit.kanbanView.commentPlaceholder' => 'Escribe un comentario',
+			'cockpit.kanbanView.noComments' => 'Aún no hay comentarios',
+			'cockpit.kanbanView.closeDetail' => 'Cerrar',
+			'cockpit.kanbanView.notABoard' => 'Este archivo aún no tiene columnas ## — se abre como markdown.',
+			'cockpit.kanbanView.startBoard' => 'Empezar un tablero',
+			'cockpit.kanbanView.couldNotSave' => 'No se pudo guardar el tablero',
+			'cockpit.kanbanView.unrecognizedBlock' => 'No reconocido por el analizador — se arrastra entero, sin edición en línea.',
+			'cockpit.kanbanView.deleteColumnDialog.title' => ({required Object name}) => '¿Eliminar «${name}»?',
+			'cockpit.kanbanView.deleteColumnDialog.message' => ({required Object count}) => 'Esta columna tiene ${count}. Elige qué pasa con ellas.',
+			'cockpit.kanbanView.deleteColumnDialog.moveCards' => 'Mover a la columna anterior',
+			'cockpit.kanbanView.deleteColumnDialog.deleteAll' => 'Eliminar junto con la columna',
+			'cockpit.kanbanView.deleteColumnDialog.emptyMessage' => 'Esta columna está vacía.',
 			'cockpit.dbPanel.sectionDatabase' => 'BASE DE DATOS',
 			'cockpit.dbPanel.edit' => 'Editar…',
 			'cockpit.dbPanel.copyName' => 'Copiar nombre',
@@ -2217,6 +2333,8 @@ extension on TranslationsEs {
 			'cockpit.dbConnectionDialog.sshPort' => 'Puerto SSH',
 			'cockpit.dbConnectionDialog.sshUser' => 'Usuario SSH',
 			'cockpit.dbConnectionDialog.privateKey' => 'Clave privada',
+			_ => null,
+		} ?? switch (path) {
 			'cockpit.dbConnectionDialog.choosePrivateKeyPlaceholder' => 'Elige una clave privada…',
 			'cockpit.dbConnectionDialog.choosePrivateKeyDialogTitle' => 'Elegir clave privada SSH',
 			'cockpit.dbConnectionDialog.keyPassphrase' => 'Frase de contraseña de la clave',
@@ -2262,8 +2380,6 @@ extension on TranslationsEs {
 			'cockpit.findBar.badPattern' => 'Patrón inválido',
 			'cockpit.findBar.noResults' => 'Sin resultados',
 			'cockpit.contentSearch.sectionSearch' => 'BÚSQUEDA',
-			_ => null,
-		} ?? switch (path) {
 			'cockpit.contentSearch.searchInFiles' => 'Buscar en los archivos',
 			'cockpit.contentSearch.matchCase' => 'Coincidir mayúsculas',
 			'cockpit.contentSearch.wholeWord' => 'Palabra completa',

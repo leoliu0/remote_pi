@@ -43,6 +43,8 @@ import 'package:cockpit/app/cockpit/domain/entities/content_search.dart';
 import 'package:cockpit/app/cockpit/domain/entities/file_diff.dart';
 import 'package:cockpit/app/cockpit/domain/entities/file_node.dart';
 import 'package:cockpit/app/cockpit/domain/entities/file_view.dart';
+import 'package:cockpit/app/cockpit/domain/entities/kanban_document.dart';
+import 'package:cockpit/app/cockpit/domain/services/kanban_editor.dart';
 import 'package:cockpit/app/cockpit/domain/entities/git_commit.dart';
 import 'package:cockpit/app/cockpit/domain/entities/git_history_commit.dart';
 import 'package:cockpit/app/cockpit/domain/entities/git_history_file_change.dart';
@@ -1021,6 +1023,66 @@ class CockpitViewModel extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Guarda a visualização escolhida num `.kanban` (quadro ou lista) e a
+  /// persiste no layout — reabrir o app devolve a aba como o usuário a deixou.
+  void setKanbanListView(String sessionId, bool asList) {
+    final s = _sessions[sessionId];
+    if (s is! FileViewerSession) return;
+    s.setBoardAsList(asList);
+    _scheduleSave(s.projectId);
+  }
+
+  /// Adota o `title:` do frontmatter de um `.kanban` como rótulo da aba.
+  ///
+  /// Chamado em todo ponto onde a `view` de um viewer é preenchida (abrir,
+  /// reusar preview, restaurar layout, salvar, recarregar) — assim o nome vem
+  /// do ARQUIVO, e não só do layout: quem clonar o repo abre o quadro já com o
+  /// nome certo, e o agente que editar o frontmatter vê a aba acompanhar.
+  void _applyKanbanBoardTitle(FileViewerSession s) {
+    if (!s.path.toLowerCase().endsWith('.kanban')) return;
+    final text = switch (s.view) {
+      FileViewText(:final text) => text,
+      FileViewMarkdown(:final text) => text,
+      _ => null,
+    };
+    if (text == null) return;
+    final title = KanbanDocument.parse(text).title;
+    // Sem `title:` no arquivo o rótulo some: o arquivo é a fonte de verdade
+    // deste nome, então um rótulo velho no layout não pode sobreviver a ele.
+    s.restoreManualLabel(title);
+  }
+
+  /// Grava o rótulo da aba no frontmatter do `.kanban` (ou o remove, com
+  /// `null`). Silencioso para qualquer outra extensão.
+  Future<void> _writeKanbanBoardTitle(
+    FileViewerSession s,
+    String? title,
+  ) async {
+    if (!s.path.toLowerCase().endsWith('.kanban')) return;
+    final text = switch (s.view) {
+      FileViewText(:final text) => text,
+      FileViewMarkdown(:final text) => text,
+      _ => null,
+    };
+    if (text == null) return;
+    final doc = KanbanDocument.parse(text);
+    if ((doc.title ?? '') == (title ?? '')) return;
+    await saveFile(s.id, KanbanEditor.setBoardTitle(doc, title));
+  }
+
+  /// Abre [path] mostrando o TEXTO cru, mesmo quando a extensão tem editor
+  /// próprio (`.kanban`). Reusa o [openFile] e só liga a chave na sessão
+  /// resultante — enfiar o modo nos quatro caminhos de abertura (já aberta,
+  /// remota, preview reusado, aba nova) espalharia a decisão por todos eles.
+  Future<void> openFileAsSource(String path) async {
+    await openFile(path, isPreview: false);
+    for (final s in _sessions.values) {
+      if (s is FileViewerSession && s.path == path && !s.rawSource) {
+        s.toggleRawSource();
+      }
+    }
+  }
+
   Future<void> openFile(
     String path, {
     String? inPane,
@@ -1087,6 +1149,7 @@ class CockpitViewModel extends ChangeNotifier {
     if (isPreview && previewCandidate != null) {
       previewCandidate.path = path;
       previewCandidate.view = view;
+      _applyKanbanBoardTitle(previewCandidate);
       previewCandidate.dirty = false;
       previewCandidate.revealLine = null;
       previewCandidate.setScmDecorations(ScmLineDecorations.empty);
@@ -1114,6 +1177,7 @@ class CockpitViewModel extends ChangeNotifier {
       view: view,
       isPreview: isPreview,
     );
+    _applyKanbanBoardTitle(viewer);
     _ensureScmCoordinator(viewer);
     if (revealLine != null) viewer.reveal(revealLine, select: false);
     _sessions[viewer.id] = viewer;
@@ -1242,6 +1306,7 @@ class CockpitViewModel extends ChangeNotifier {
       return;
     }
     target.view = view;
+    _applyKanbanBoardTitle(target);
     target.loading = false;
     _ensureScmCoordinator(target);
     if (revealLine != null) {
@@ -2012,9 +2077,26 @@ class CockpitViewModel extends ChangeNotifier {
     final cur = _sessions[sessionId];
     if (cur is FileViewerSession && fresh is! FileViewUnsupported) {
       cur.view = fresh;
+      _applyKanbanBoardTitle(cur);
       notifyListeners();
     }
     return true;
+  }
+
+  /// Relê o arquivo de uma aba de viewer do disco (ou do host, em workspace
+  /// remoto) e reclassifica o `view`. É o "atualizar" da tab: em remoto o aviso
+  /// de mudança pode não chegar, mas pedir o arquivo de novo sempre funciona.
+  Future<void> reloadFile(String sessionId) async {
+    final s = _sessions[sessionId];
+    if (s is! FileViewerSession) return;
+    final fresh = await _readFile(s.path);
+    if (fresh is FileViewUnsupported) return;
+    final cur = _sessions[sessionId];
+    if (cur is! FileViewerSession) return;
+    cur.view = fresh;
+    _applyKanbanBoardTitle(cur);
+    cur.notifyListeners();
+    notifyListeners();
   }
 
   /// Extrai o [Encoding] original de uma [FileView] editável. Usado no save para
@@ -3978,6 +4060,7 @@ class CockpitViewModel extends ChangeNotifier {
     final s = _sessions[sessionId];
     if (s == null) return;
     s.setManualLabel(label);
+    if (s is FileViewerSession) unawaited(_writeKanbanBoardTitle(s, label));
     _scheduleSave(s.projectId);
     notifyListeners();
   }
@@ -3987,6 +4070,7 @@ class CockpitViewModel extends ChangeNotifier {
     final s = _sessions[sessionId];
     if (s == null) return;
     s.clearManualLabel();
+    if (s is FileViewerSession) unawaited(_writeKanbanBoardTitle(s, null));
     _scheduleSave(s.projectId);
     notifyListeners();
   }
@@ -5078,6 +5162,12 @@ class CockpitViewModel extends ChangeNotifier {
             final s = _sessions[id];
             if (s is! FileViewerSession) return; // fechou durante o read
             s.view = fresh;
+            _applyKanbanBoardTitle(s);
+            // A ABA é quem escuta a sessão (o viewer e o quadro se reconstroem
+            // pelo `_onSession` dela). Sem este notify, uma edição externa —
+            // um agente escrevendo o markdown, que é o caso comum — só
+            // aparecia depois de apertar "atualizar".
+            s.notifyListeners();
             notifyListeners();
           },
         );
@@ -5247,6 +5337,12 @@ class CockpitViewModel extends ChangeNotifier {
           path: path,
           view: view,
         );
+        viewer.boardAsList = desc['boardAsList'] as bool? ?? false;
+        viewer.rawSource = desc['rawSource'] as bool? ?? false;
+        // Rótulo salvo primeiro, frontmatter depois: num `.kanban` o `title:`
+        // do arquivo é a fonte de verdade e sobrescreve o que veio do layout.
+        viewer.restoreManualLabel(desc['label'] as String?);
+        _applyKanbanBoardTitle(viewer);
         // Same pipeline as openFile: SCM coordinator + live-reload.
         // Without this, restored tabs have no diff gutter until reopen.
         _ensureScmCoordinator(viewer);
@@ -5558,7 +5654,15 @@ class CockpitViewModel extends ChangeNotifier {
       };
     }
     if (s is FileViewerSession) {
-      return <String, dynamic>{'type': 'viewer', 'path': s.path};
+      return <String, dynamic>{
+        'type': 'viewer',
+        'path': s.path,
+        // Preferências de visualização da aba: sem elas, um quadro deixado em
+        // lista (ou em markdown cru) voltava no modo padrão a cada reinício.
+        if (s.boardAsList) 'boardAsList': true,
+        if (s.rawSource) 'rawSource': true,
+        if (s.manualLabel != null) 'label': s.manualLabel,
+      };
     }
     if (s is DiffViewerSession) {
       return <String, dynamic>{

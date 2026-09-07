@@ -17,6 +17,7 @@ import 'package:cockpit/app/cockpit/ui/viewmodels/cockpit_viewmodel.dart';
 import 'package:cockpit/app/core/utils/platform_kind.dart';
 import 'package:cockpit/app/cockpit/ui/viewmodels/setup_viewmodel.dart';
 import 'package:cockpit/app/cockpit/ui/widgets/http_request_view.dart';
+import 'package:cockpit/app/cockpit/ui/widgets/kanban_board_view.dart';
 import 'package:cockpit/app/cockpit/ui/widgets/agent_composer.dart';
 import 'package:cockpit/app/cockpit/ui/widgets/agent_setup_checklist.dart';
 import 'package:cockpit/app/cockpit/ui/widgets/agent_transcript.dart';
@@ -612,8 +613,15 @@ class _TabState extends State<_Tab> {
 
   void _startEditing() {
     final s = widget.item;
-    // Agentes e terminais podem editar o nome inline; demais abas não.
-    if (s == null || (s is! AgentSession && s is! TerminalSession)) return;
+    // Agentes, terminais e abas de ARQUIVO podem editar o nome inline. O
+    // rótulo manual é do [PaneItem], não do terminal — o menu já oferecia
+    // "Renomear" na aba de arquivo e este guard silenciava o clique.
+    if (s == null ||
+        (s is! AgentSession &&
+            s is! TerminalSession &&
+            s is! FileViewerSession)) {
+      return;
+    }
     // Semeia com o nome exibido (rótulo manual, se houver; senão o dinâmico).
     final seed = s.displayTitle;
     _ctrl.text = seed;
@@ -630,11 +638,12 @@ class _TabState extends State<_Tab> {
     final name = _ctrl.text.trim().replaceAll(' ', '-');
     setState(() => _editing = false);
     if (name.isEmpty) return;
-    // Terminal → rótulo manual travado; agente → renomeia a identidade.
-    if (s is TerminalSession) {
-      widget.onSetLabel(name);
-    } else {
+    // Agente → renomeia a IDENTIDADE dele; terminal e arquivo → rótulo manual
+    // travado na aba (o arquivo no disco não muda de nome por isto).
+    if (s is AgentSession) {
       widget.onRename(name);
+    } else {
+      widget.onSetLabel(name);
     }
   }
 
@@ -673,6 +682,32 @@ class _TabState extends State<_Tab> {
             label: tr.pinTab,
             icon: Icons.push_pin_outlined,
           ),
+        // Aba de arquivo também renomeia: o rótulo manual é do [PaneItem], não
+        // do terminal, e um quadro aberto o dia todo merece um nome melhor que
+        // o do arquivo.
+        if (viewer != null) ...[
+          AppMenuItem(
+            value: 'rename',
+            label: tr.rename,
+            icon: Icons.edit_outlined,
+          ),
+          if (viewer.titleLocked)
+            AppMenuItem(
+              value: 'reset-label',
+              label: tr.resetTitle,
+              icon: Icons.restart_alt,
+            ),
+          // Saída de emergência do editor próprio: ver e escrever o markdown
+          // cru. O arquivo é o mesmo; só muda quem o desenha.
+          if (viewer.path.toLowerCase().endsWith('.kanban'))
+            AppMenuItem(
+              value: 'raw-source',
+              label: viewer.rawSource ? tr.openAsBoard : tr.openAsMarkdown,
+              icon: viewer.rawSource
+                  ? Icons.view_column_outlined
+                  : Icons.notes_outlined,
+            ),
+        ],
         // Só em abas de terminal: o id (pane id) copiável pra usar na CLI
         // `cockpit` (`--tab-id`).
         if (terminal != null) ...[
@@ -719,6 +754,8 @@ class _TabState extends State<_Tab> {
         if (terminal != null) {
           await Clipboard.setData(ClipboardData(text: terminal.id));
         }
+      case 'raw-source':
+        viewer?.toggleRawSource();
       case 'rename':
         _startEditing();
       case 'reset-label':
@@ -863,11 +900,17 @@ class _TabState extends State<_Tab> {
             onTapUp: (_) => _handleTap(),
             onSecondaryTapUp: isEmpty ? null : (_) => _showTabMenu(menuCtx),
             onTertiaryTapUp: (_) => _requestClose(),
-            // Mobile: duplo-toque abre o menu da aba (equivalente ao clique
-            // direito do desktop, que não existe no touch).
-            onDoubleTap: (isMobilePlatform && !isEmpty)
-                ? () => _showTabMenu(menuCtx)
-                : null,
+            // Desktop: duplo-clique renomeia a aba direto — o menu já está a
+            // um clique-direito de distância, e renomear é o que se espera de
+            // um duplo-clique num rótulo.
+            //
+            // Mobile mantém o menu: lá não existe clique direito, e o
+            // duplo-toque é o único caminho até ele.
+            onDoubleTap: isEmpty
+                ? null
+                : (isMobilePlatform
+                      ? () => _showTabMenu(menuCtx)
+                      : _startEditing),
             child: tabBody,
           ),
         );
@@ -1502,6 +1545,41 @@ class _PaneBodyState extends State<_PaneBody> {
         active: widget.active,
         focused: widget.focused,
         onSave: (content) => vm.saveFile(item.id, content),
+      );
+    }
+
+    // Tab de quadro `.kanban`: colunas/cards sobre o markdown do arquivo.
+    // Mesma razão de reusar a FileViewerSession que a `.dbq` e a `.http`.
+    //
+    // Dentro de um `ListenableBuilder` porque a ESCOLHA do renderizador é
+    // estado da sessão (`rawSource`): sem escutar aqui, alternar entre quadro e
+    // markdown notificava a sessão, a barra de abas repintava e o corpo ficava
+    // como estava. Quem decide o que desenhar precisa reagir a quem muda.
+    if (item is FileViewerSession &&
+        item.path.toLowerCase().endsWith('.kanban')) {
+      final vm = context.read<CockpitViewModel>();
+      return ListenableBuilder(
+        listenable: item,
+        builder: (context, _) {
+          if (item.rawSource) {
+            return FileViewer(
+              session: item,
+              active: widget.active,
+              focused: widget.focused,
+              onSave: (content) => vm.saveFile(item.id, content),
+            );
+          }
+          return KanbanBoardView(
+            session: item,
+            active: widget.active,
+            focused: widget.focused,
+            workspaceRoot: vm.projectRootOf(item.projectId) ?? '',
+            onSave: (content) => vm.saveFile(item.id, content),
+            onReload: () => vm.reloadFile(item.id),
+            onViewModeChanged: (asList) =>
+                vm.setKanbanListView(item.id, asList),
+          );
+        },
       );
     }
 

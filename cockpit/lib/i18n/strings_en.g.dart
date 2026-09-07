@@ -170,6 +170,7 @@ class Translations$cockpit$en {
 	late final Translations$cockpit$dbRedisTable$en dbRedisTable = Translations$cockpit$dbRedisTable$en.internal(_root);
 	late final Translations$cockpit$dbQueryView$en dbQueryView = Translations$cockpit$dbQueryView$en.internal(_root);
 	late final Translations$cockpit$httpView$en httpView = Translations$cockpit$httpView$en.internal(_root);
+	late final Translations$cockpit$kanbanView$en kanbanView = Translations$cockpit$kanbanView$en.internal(_root);
 	late final Translations$cockpit$dbPanel$en dbPanel = Translations$cockpit$dbPanel$en.internal(_root);
 	late final Translations$cockpit$dbMongoView$en dbMongoView = Translations$cockpit$dbMongoView$en.internal(_root);
 	late final Translations$cockpit$dbConnectionDialog$en dbConnectionDialog = Translations$cockpit$dbConnectionDialog$en.internal(_root);
@@ -1031,6 +1032,12 @@ class Translations$cockpit$paneView$en {
 	/// en: 'Rename'
 	String get rename => 'Rename';
 
+	/// en: 'Open as markdown'
+	String get openAsMarkdown => 'Open as markdown';
+
+	/// en: 'Open as board'
+	String get openAsBoard => 'Open as board';
+
 	/// en: 'Reset Title'
 	String get resetTitle => 'Reset Title';
 
@@ -1228,6 +1235,9 @@ class Translations$cockpit$fileTreePanel$en {
 
 	/// en: 'Open layout'
 	String get openLayout => 'Open layout';
+
+	/// en: 'Open as markdown'
+	String get openAsMarkdown => 'Open as markdown';
 
 	/// en: 'Show git diff'
 	String get showGitDiff => 'Show git diff';
@@ -1656,6 +1666,134 @@ class Translations$cockpit$httpView$en {
 	String get truncatedSuffix => ' · truncated (response too large)';
 
 	late final Translations$cockpit$httpView$error$en error = Translations$cockpit$httpView$error$en.internal(_root);
+}
+
+// Path: cockpit.kanbanView
+class Translations$cockpit$kanbanView$en {
+	Translations$cockpit$kanbanView$en.internal(this._root);
+
+	final Translations _root; // ignore: unused_field
+
+	// Translations
+
+	/// en: 'Board'
+	String get boardView => 'Board';
+
+	/// en: 'List'
+	String get listView => 'List';
+
+	/// en: 'Refresh from disk'
+	String get refresh => 'Refresh from disk';
+
+	/// en: 'Labels'
+	String get manageLabels => 'Labels';
+
+	/// en: 'Labels in this board'
+	String get labelsTitle => 'Labels in this board';
+
+	/// en: 'label name'
+	String get labelNamePlaceholder => 'label name';
+
+	/// en: '(one) {1 card} (other) {${n} cards}'
+	String labelUsage({required num n}) => (_root.$meta.cardinalResolver ?? PluralResolvers.cardinal('en'))(n,
+		one: '1 card',
+		other: '${n} cards',
+	);
+
+	/// en: 'Delete label'
+	String get deleteLabel => 'Delete label';
+
+	/// en: 'new card'
+	String get newCard => 'new card';
+
+	/// en: 'New card'
+	String get newCardTitle => 'New card';
+
+	/// en: 'New column'
+	String get newColumn => 'New column';
+
+	/// en: 'Column name'
+	String get columnNameTitle => 'Column name';
+
+	/// en: 'Drag column'
+	String get dragColumn => 'Drag column';
+
+	/// en: 'Column options'
+	String get columnOptions => 'Column options';
+
+	/// en: 'Rename column'
+	String get renameColumn => 'Rename column';
+
+	/// en: 'Move left'
+	String get moveColumnLeft => 'Move left';
+
+	/// en: 'Move right'
+	String get moveColumnRight => 'Move right';
+
+	/// en: 'Delete column'
+	String get deleteColumn => 'Delete column';
+
+	/// en: 'New card here'
+	String get newCardHere => 'New card here';
+
+	/// en: 'Duplicate'
+	String get duplicateCard => 'Duplicate';
+
+	/// en: 'Labels'
+	String get cardLabels => 'Labels';
+
+	/// en: 'Delete card'
+	String get deleteCard => 'Delete card';
+
+	/// en: 'Move to next column'
+	String get advance => 'Move to next column';
+
+	/// en: 'Move back a column'
+	String get advanceBack => 'Move back a column';
+
+	/// en: 'No cards'
+	String get emptyColumn => 'No cards';
+
+	/// en: '(one) {1 card} (other) {${n} cards}'
+	String cardCount({required num n}) => (_root.$meta.cardinalResolver ?? PluralResolvers.cardinal('en'))(n,
+		one: '1 card',
+		other: '${n} cards',
+	);
+
+	/// en: 'Note'
+	String get notes => 'Note';
+
+	/// en: 'Write a note'
+	String get notesPlaceholder => 'Write a note';
+
+	/// en: 'Comments'
+	String get comments => 'Comments';
+
+	/// en: 'Add comment'
+	String get addComment => 'Add comment';
+
+	/// en: 'Write a comment'
+	String get commentPlaceholder => 'Write a comment';
+
+	/// en: 'No comments yet'
+	String get noComments => 'No comments yet';
+
+	/// en: 'Close'
+	String get closeDetail => 'Close';
+
+	/// en: 'This file has no ## columns yet — it opens as markdown.'
+	String get notABoard => 'This file has no ## columns yet — it opens as markdown.';
+
+	/// en: 'Start a board'
+	String get startBoard => 'Start a board';
+
+	/// en: 'Could not save the board'
+	String get couldNotSave => 'Could not save the board';
+
+	/// en: 'Not recognized by the parser — drags whole, no inline editing.'
+	String get unrecognizedBlock => 'Not recognized by the parser — drags whole, no inline editing.';
+
+	late final Translations$cockpit$kanbanView$deleteColumnDialog$en deleteColumnDialog = Translations$cockpit$kanbanView$deleteColumnDialog$en.internal(_root);
 }
 
 // Path: cockpit.dbPanel
@@ -2708,6 +2846,30 @@ class Translations$cockpit$httpView$error$en {
 
 	/// en: 'The response is larger than the ${bytes} byte limit.'
 	String responseTooLarge({required Object bytes}) => 'The response is larger than the ${bytes} byte limit.';
+}
+
+// Path: cockpit.kanbanView.deleteColumnDialog
+class Translations$cockpit$kanbanView$deleteColumnDialog$en {
+	Translations$cockpit$kanbanView$deleteColumnDialog$en.internal(this._root);
+
+	final Translations _root; // ignore: unused_field
+
+	// Translations
+
+	/// en: 'Delete “${name}”?'
+	String title({required Object name}) => 'Delete “${name}”?';
+
+	/// en: 'This column has ${count}. Choose what happens to them.'
+	String message({required Object count}) => 'This column has ${count}. Choose what happens to them.';
+
+	/// en: 'Move to the previous column'
+	String get moveCards => 'Move to the previous column';
+
+	/// en: 'Delete with the column'
+	String get deleteAll => 'Delete with the column';
+
+	/// en: 'This column is empty.'
+	String get emptyMessage => 'This column is empty.';
 }
 
 // Path: settings.page.header
@@ -3889,6 +4051,8 @@ extension on Translations {
 			'cockpit.paneView.allTabs' => 'All tabs',
 			'cockpit.paneView.pinTab' => 'Pin tab',
 			'cockpit.paneView.rename' => 'Rename',
+			'cockpit.paneView.openAsMarkdown' => 'Open as markdown',
+			'cockpit.paneView.openAsBoard' => 'Open as board',
 			'cockpit.paneView.resetTitle' => 'Reset Title',
 			'cockpit.paneView.copyId' => 'Copy Id',
 			'cockpit.paneView.autoRelay' => 'Auto-relay',
@@ -3952,6 +4116,7 @@ extension on Translations {
 			'cockpit.fileTreePanel.open' => 'Open',
 			'cockpit.fileTreePanel.openWith' => 'Open with',
 			'cockpit.fileTreePanel.openLayout' => 'Open layout',
+			'cockpit.fileTreePanel.openAsMarkdown' => 'Open as markdown',
 			'cockpit.fileTreePanel.showGitDiff' => 'Show git diff',
 			'cockpit.fileTreePanel.createAgent' => 'Create agent',
 			'cockpit.fileTreePanel.createTerminal' => 'Create terminal',
@@ -4082,6 +4247,48 @@ extension on Translations {
 			'cockpit.httpView.error.connectionFailedNoDetail' => 'Could not reach the server.',
 			'cockpit.httpView.error.timeout' => ({required Object seconds}) => 'The request timed out after ${seconds}s.',
 			'cockpit.httpView.error.responseTooLarge' => ({required Object bytes}) => 'The response is larger than the ${bytes} byte limit.',
+			'cockpit.kanbanView.boardView' => 'Board',
+			'cockpit.kanbanView.listView' => 'List',
+			'cockpit.kanbanView.refresh' => 'Refresh from disk',
+			'cockpit.kanbanView.manageLabels' => 'Labels',
+			'cockpit.kanbanView.labelsTitle' => 'Labels in this board',
+			'cockpit.kanbanView.labelNamePlaceholder' => 'label name',
+			'cockpit.kanbanView.labelUsage' => ({required num n}) => (_root.$meta.cardinalResolver ?? PluralResolvers.cardinal('en'))(n, one: '1 card', other: '${n} cards', ), 
+			'cockpit.kanbanView.deleteLabel' => 'Delete label',
+			'cockpit.kanbanView.newCard' => 'new card',
+			'cockpit.kanbanView.newCardTitle' => 'New card',
+			'cockpit.kanbanView.newColumn' => 'New column',
+			'cockpit.kanbanView.columnNameTitle' => 'Column name',
+			'cockpit.kanbanView.dragColumn' => 'Drag column',
+			'cockpit.kanbanView.columnOptions' => 'Column options',
+			'cockpit.kanbanView.renameColumn' => 'Rename column',
+			'cockpit.kanbanView.moveColumnLeft' => 'Move left',
+			'cockpit.kanbanView.moveColumnRight' => 'Move right',
+			'cockpit.kanbanView.deleteColumn' => 'Delete column',
+			'cockpit.kanbanView.newCardHere' => 'New card here',
+			'cockpit.kanbanView.duplicateCard' => 'Duplicate',
+			'cockpit.kanbanView.cardLabels' => 'Labels',
+			'cockpit.kanbanView.deleteCard' => 'Delete card',
+			'cockpit.kanbanView.advance' => 'Move to next column',
+			'cockpit.kanbanView.advanceBack' => 'Move back a column',
+			'cockpit.kanbanView.emptyColumn' => 'No cards',
+			'cockpit.kanbanView.cardCount' => ({required num n}) => (_root.$meta.cardinalResolver ?? PluralResolvers.cardinal('en'))(n, one: '1 card', other: '${n} cards', ), 
+			'cockpit.kanbanView.notes' => 'Note',
+			'cockpit.kanbanView.notesPlaceholder' => 'Write a note',
+			'cockpit.kanbanView.comments' => 'Comments',
+			'cockpit.kanbanView.addComment' => 'Add comment',
+			'cockpit.kanbanView.commentPlaceholder' => 'Write a comment',
+			'cockpit.kanbanView.noComments' => 'No comments yet',
+			'cockpit.kanbanView.closeDetail' => 'Close',
+			'cockpit.kanbanView.notABoard' => 'This file has no ## columns yet — it opens as markdown.',
+			'cockpit.kanbanView.startBoard' => 'Start a board',
+			'cockpit.kanbanView.couldNotSave' => 'Could not save the board',
+			'cockpit.kanbanView.unrecognizedBlock' => 'Not recognized by the parser — drags whole, no inline editing.',
+			'cockpit.kanbanView.deleteColumnDialog.title' => ({required Object name}) => 'Delete “${name}”?',
+			'cockpit.kanbanView.deleteColumnDialog.message' => ({required Object count}) => 'This column has ${count}. Choose what happens to them.',
+			'cockpit.kanbanView.deleteColumnDialog.moveCards' => 'Move to the previous column',
+			'cockpit.kanbanView.deleteColumnDialog.deleteAll' => 'Delete with the column',
+			'cockpit.kanbanView.deleteColumnDialog.emptyMessage' => 'This column is empty.',
 			'cockpit.dbPanel.sectionDatabase' => 'DATABASE',
 			'cockpit.dbPanel.edit' => 'Edit…',
 			'cockpit.dbPanel.copyName' => 'Copy name',
@@ -4126,6 +4333,8 @@ extension on Translations {
 			'cockpit.dbConnectionDialog.sshPort' => 'SSH Port',
 			'cockpit.dbConnectionDialog.sshUser' => 'SSH User',
 			'cockpit.dbConnectionDialog.privateKey' => 'Private key',
+			_ => null,
+		} ?? switch (path) {
 			'cockpit.dbConnectionDialog.choosePrivateKeyPlaceholder' => 'Choose a private key…',
 			'cockpit.dbConnectionDialog.choosePrivateKeyDialogTitle' => 'Choose SSH private key',
 			'cockpit.dbConnectionDialog.keyPassphrase' => 'Key passphrase',
@@ -4171,8 +4380,6 @@ extension on Translations {
 			'cockpit.findBar.badPattern' => 'Bad pattern',
 			'cockpit.findBar.noResults' => 'No results',
 			'cockpit.contentSearch.sectionSearch' => 'SEARCH',
-			_ => null,
-		} ?? switch (path) {
 			'cockpit.contentSearch.searchInFiles' => 'Search in files',
 			'cockpit.contentSearch.matchCase' => 'Match case',
 			'cockpit.contentSearch.wholeWord' => 'Whole word',

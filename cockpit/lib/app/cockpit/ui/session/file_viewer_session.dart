@@ -88,6 +88,28 @@ class FileViewerSession extends PaneItem {
   /// Usado pelo "Salvar e fechar". Retorna `true` no sucesso.
   Future<bool> Function()? saveDraft;
 
+  /// `true` = mostrar o arquivo como TEXTO, mesmo quando a extensão tem um
+  /// editor próprio (hoje só o `.kanban`). É a saída de emergência: o quadro
+  /// entende a forma que o parser modela, e escrever markdown livre na nota —
+  /// ou consertar um arquivo que ficou torto — precisa do texto cru.
+  bool rawSource = false;
+
+  void toggleRawSource() {
+    rawSource = !rawSource;
+    notifyListeners();
+  }
+
+  /// `true` = o `.kanban` está sendo visto como LISTA em vez de quadro.
+  /// Preferência de visualização por aba; a VM a persiste no layout, então ela
+  /// sobrevive a fechar e reabrir o app.
+  bool boardAsList = false;
+
+  void setBoardAsList(bool value) {
+    if (value == boardAsList) return;
+    boardAsList = value;
+    notifyListeners();
+  }
+
   /// `true` se esta é uma aba de preview (VSCode-style). Preview é sobrescrito
   /// ao clicar em outro arquivo; duplo-clique transforma em aba normal.
   bool isPreview;

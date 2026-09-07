@@ -1128,6 +1128,7 @@ class _TreePanel extends StatelessWidget {
           stagedPaths: vm.stagedAbsolutePaths(),
           unstagedPaths: vm.unstagedAbsolutePaths(),
           onOpenWith: vm.openWithDefaultApp,
+          onOpenAsSource: vm.openFileAsSource,
           onOpenLayout: (path) async {
             final res = await vm.applyLayoutFile(path);
             if (!context.mounted) return;

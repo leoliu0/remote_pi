@@ -84,6 +84,7 @@ class FileTreePanel extends StatefulWidget {
     this.unstagedPaths = const <String>[],
     required this.onOpenWith,
     this.onOpenLayout,
+    this.onOpenAsSource,
     required this.onCreateInFolder,
     required this.onCreate,
     required this.onRename,
@@ -263,6 +264,9 @@ class FileTreePanel extends StatefulWidget {
 
   /// "Open layout" (só arquivos `.ckp`): aplica o layout de orquestração.
   final ValueChanged<String>? onOpenLayout;
+
+  /// Abre um `.kanban` como markdown cru (menu de contexto do arquivo).
+  final ValueChanged<String>? onOpenAsSource;
 
   /// Menu de contexto de uma **pasta**: cria uma aba (agente/terminal) nela.
   final void Function(String relativeSub, bool terminal) onCreateInFolder;
@@ -979,6 +983,7 @@ class _FileTreePanelState extends State<FileTreePanel> {
       onSelectFile: widget.onSelectFile,
       onOpenWith: widget.onOpenWith,
       onOpenLayout: widget.onOpenLayout,
+      onOpenAsSource: widget.onOpenAsSource,
       onCreateInFolder: widget.onCreateInFolder,
       onStartCreate: _startCreate,
       onCancelCreate: _cancelCreate,
@@ -1558,6 +1563,7 @@ class _TreeEdit {
     required this.onSelectFile,
     required this.onOpenWith,
     this.onOpenLayout,
+    this.onOpenAsSource,
     required this.onCreateInFolder,
     required this.onStartCreate,
     required this.onCancelCreate,
@@ -1594,6 +1600,7 @@ class _TreeEdit {
   final ValueChanged<String> onShowDiff;
   final ValueChanged<String> onOpenWith;
   final ValueChanged<String>? onOpenLayout;
+  final ValueChanged<String>? onOpenAsSource;
   final void Function(String relativeSub, bool terminal) onCreateInFolder;
 
   final void Function(String parentPath, bool isFolder) onStartCreate;
@@ -1726,6 +1733,11 @@ class _DirViewState extends State<_DirView> {
                         !node.name.toLowerCase().endsWith('.ckp')
                     ? null
                     : () => edit.onOpenLayout!(node.path),
+                onOpenAsSource:
+                    edit.onOpenAsSource == null ||
+                        !node.name.toLowerCase().endsWith('.kanban')
+                    ? null
+                    : () => edit.onOpenAsSource!(node.path),
                 onStartRename: () => edit.onStartRename(node.path),
                 onCommitRename: (name) => edit.onCommitRename(node.path, name),
                 onCancelRename: edit.onCancelRename,
@@ -1870,6 +1882,7 @@ class _Row extends StatefulWidget {
     this.onDoubleTap,
     this.onOpenWith,
     this.onOpenLayout,
+    this.onOpenAsSource,
     this.onCreateInFolder,
     this.onNewFile,
     this.onNewFolder,
@@ -1903,6 +1916,7 @@ class _Row extends StatefulWidget {
 
   /// "Open layout" (só arquivos `.ckp`). `null` = item não aparece.
   final VoidCallback? onOpenLayout;
+  final VoidCallback? onOpenAsSource;
 
   /// Só pastas: criar agente/terminal nela (relativo, terminal?).
   final void Function(String relativeSub, bool terminal)? onCreateInFolder;
@@ -1992,6 +2006,13 @@ class _RowState extends State<_Row> {
             label: tr.openWith,
             icon: Icons.launch_outlined,
           ),
+          // Só arquivos `.kanban`: escapa do quadro e edita o markdown cru.
+          if (widget.onOpenAsSource != null)
+            AppMenuItem(
+              value: 'as-source',
+              label: tr.openAsMarkdown,
+              icon: Icons.notes_outlined,
+            ),
           // Só arquivos `.ckp`: aplica o layout de orquestração de panes.
           if (widget.onOpenLayout != null)
             AppMenuItem(
@@ -2080,6 +2101,8 @@ class _RowState extends State<_Row> {
           widget.onOpenWith?.call();
         case 'layout':
           widget.onOpenLayout?.call();
+        case 'as-source':
+          widget.onOpenAsSource?.call();
         case 'newfile':
           widget.onNewFile?.call();
         case 'newfolder':

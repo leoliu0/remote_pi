@@ -251,7 +251,21 @@ class SidecarTerminalConnector implements TurnStatusSource {
     if (home == null) return null;
     final dir = Directory('$home/.cockpit');
     if (!dir.existsSync()) dir.createSync(recursive: true);
-    return '${dir.path}/cockpit-server.sock';
+    // Namespaceado por debug/release, pela mesma razão do `status.sock` e do
+    // `bin/` da CLI: `~/.cockpit` é o HOME real (não é isolado por bundle id),
+    // então uma build de dev e a instalada disputavam ESTE socket. E aqui a
+    // disputa é pior que sobrescrever um arquivo: cada app vê o servidor do
+    // outro como alheio (`_isOurBinary` compara o caminho do executável) e o
+    // ENCERRA para subir o seu — em cima do app vizinho, que perde o sidecar e
+    // os terminais dele. Abrir a build de dev com a instalada aberta derrubava
+    // as duas em revezamento.
+    //
+    // Só o socket LOCAL leva o sufixo: o caminho do socket no host REMOTO
+    // (`posix_host_shell`/`windows_host_shell`) é o da máquina do outro lado,
+    // que roda release — sufixar lá quebraria conexão remota a partir de um
+    // debug.
+    final suffix = kDebugMode ? '-debug' : '';
+    return '${dir.path}/cockpit-server$suffix.sock';
   }
 
   /// Resolve o binário do servidor no bundle `bin/`+`lib/` (dart build cli).
