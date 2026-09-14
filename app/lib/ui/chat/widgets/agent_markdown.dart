@@ -5,7 +5,9 @@ import 'package:flutter/material.dart';
 import 'package:app/ui/chat/widgets/chat_image.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
+import 'package:flutter_math_fork/flutter_math.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:markdown/markdown.dart' as md;
 import 'package:url_launcher/url_launcher.dart';
 
 /// Strips `<think>...</think>`, `<thought>...</thought>`, and `<thinking>...</thinking>`
@@ -102,6 +104,10 @@ class AgentMarkdown extends StatelessWidget {
       data: data,
       selectable: selectable,
       styleSheet: styleSheet,
+      inlineSyntaxes: [
+        DisplayMathSyntax(),
+        InlineMathSyntax(),
+      ],
       onTapLink: (text, href, title) {
         if (href != null) _openLink(context, href);
       },
@@ -110,6 +116,8 @@ class AgentMarkdown extends StatelessWidget {
       },
       builders: {
         'code': _CodeElementBuilder(context),
+        'display-math': DisplayMathElementBuilder(context),
+        'inline-math': InlineMathElementBuilder(context),
       },
     );
 
@@ -142,7 +150,10 @@ class _CodeElementBuilder extends MarkdownElementBuilder {
     // Only intercept multiline fenced code blocks (<pre><code>...)
     final text = mdElement.textContent;
     if (mdElement.attributes['class'] != null || text.contains('\n')) {
-      final language = mdElement.attributes['class']?.replaceFirst('language-', '') ?? '';
+      final language = mdElement.attributes['class']?.replaceFirst('language-', '').toLowerCase() ?? '';
+      if (language == 'math' || language == 'latex' || language == 'tex') {
+        return _MathBlock(code: text.trim());
+      }
       return _CodeBlock(language: language, code: text.trimRight());
     }
     return null;
@@ -201,6 +212,191 @@ class _CodeBlock extends StatelessWidget {
     );
   }
 }
+class _MathBlock extends StatelessWidget {
+  const _MathBlock({required this.code});
+
+  final String code;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final typo = context.typo;
+
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.symmetric(vertical: 6),
+      decoration: BoxDecoration(
+        color: colors.codeBg,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: colors.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 6, 6, 0),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'latex',
+                    style: typo.monoSmall.copyWith(
+                      fontSize: 10,
+                      color: colors.muted,
+                      letterSpacing: 0.3,
+                    ),
+                  ),
+                ),
+                _CopyButton(code: code),
+              ],
+            ),
+          ),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.fromLTRB(14, 8, 14, 14),
+            child: Center(
+              child: Math.tex(
+                code,
+                textStyle: typo.mono.copyWith(fontSize: 16.0, color: colors.text),
+                mathStyle: MathStyle.display,
+                onErrorFallback: (err) => Text(
+                  code,
+                  style: typo.mono.copyWith(color: colors.highlight),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Syntax matching block/display LaTeX math: `$$...$$` or `\[...\]`.
+class DisplayMathSyntax extends md.InlineSyntax {
+  DisplayMathSyntax() : super(r'(?:\$\$([\s\S]+?)\$\$|\\\[([\s\S]+?)\\\])');
+
+  @override
+  bool onMatch(md.InlineParser parser, Match match) {
+    final raw = match.group(1) ?? match.group(2) ?? '';
+    parser.addNode(md.Element.text('display-math', raw));
+    return true;
+  }
+}
+
+/// Syntax matching inline LaTeX math: `$..$` or `\(...\)`.
+class InlineMathSyntax extends md.InlineSyntax {
+  InlineMathSyntax()
+      : super(r'(?:(?<!\\)\$(?!\s)([^\$\n]+?)(?<!\s)(?<!\\)\$|\\\((.+?)\\\))');
+
+  @override
+  bool onMatch(md.InlineParser parser, Match match) {
+    final raw = match.group(1) ?? match.group(2) ?? '';
+    final trimmed = raw.trim();
+    if (trimmed.isEmpty) return false;
+
+    // Guard against currency amounts (e.g. $100 or $50.00)
+    if (RegExp(r'^\d[\d,\.]*$').hasMatch(trimmed)) {
+      return false;
+    }
+
+    // Guard against prose between two separate dollar currency amounts:
+    // e.g. "$100 and bonus is $50" -> if it starts with a digit and has no math operators
+    if (RegExp(r'^\d').hasMatch(trimmed) &&
+        !RegExp(r'[\\=^_<>+\-*/]').hasMatch(trimmed)) {
+      return false;
+    }
+
+    // If it contains spaces with plain words and no math symbols or backslashes
+    if (trimmed.contains(' ') &&
+        !RegExp(r'[\\=^_<>+\-*/{}()]').hasMatch(trimmed)) {
+      return false;
+    }
+
+    parser.addNode(md.Element.text('inline-math', trimmed));
+    return true;
+  }
+}
+
+/// Renders display LaTeX math formulas in full width with horizontal scroll support.
+class DisplayMathElementBuilder extends MarkdownElementBuilder {
+  final BuildContext context;
+  DisplayMathElementBuilder(this.context);
+
+  @override
+  Widget visitElementAfterWithContext(
+    BuildContext context,
+    md.Element element,
+    TextStyle? preferredStyle,
+    TextStyle? parentStyle,
+  ) {
+    final tex = element.textContent.trim();
+    final colors = context.colors;
+    final style = parentStyle ?? Theme.of(context).textTheme.bodyMedium;
+
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: colors.codeBg,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: colors.border),
+      ),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Math.tex(
+          tex,
+          textStyle: style?.copyWith(
+            fontSize: 16.0,
+            color: colors.text,
+          ),
+          mathStyle: MathStyle.display,
+          onErrorFallback: (err) => Text(
+            tex,
+            style: style?.copyWith(
+              fontFamily: kMonoFamily,
+              color: colors.highlight,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Renders inline LaTeX math formulas.
+class InlineMathElementBuilder extends MarkdownElementBuilder {
+  final BuildContext context;
+  InlineMathElementBuilder(this.context);
+
+  @override
+  Widget visitElementAfterWithContext(
+    BuildContext context,
+    md.Element element,
+    TextStyle? preferredStyle,
+    TextStyle? parentStyle,
+  ) {
+    final tex = element.textContent.trim();
+    final colors = context.colors;
+    final style = parentStyle ?? Theme.of(context).textTheme.bodyMedium;
+
+    return Math.tex(
+      tex,
+      textStyle: style?.copyWith(
+        color: colors.text,
+      ),
+      mathStyle: MathStyle.text,
+      onErrorFallback: (err) => Text(
+        '\$$tex\$',
+        style: style?.copyWith(
+          fontFamily: kMonoFamily,
+          color: colors.highlight,
+        ),
+      ),
+    );
+  }
+}
+
 
 class _CopyButton extends StatefulWidget {
   const _CopyButton({required this.code});

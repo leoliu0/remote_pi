@@ -1,6 +1,7 @@
 // Plan/32b — AgentMarkdown renders fenced code with a copy button.
 
 import 'package:app/ui/chat/widgets/agent_markdown.dart';
+import 'package:flutter_math_fork/flutter_math.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -71,6 +72,26 @@ void main() {
     await pump(tester, r'Formula inline $E = mc^2$ and display: $$\\sum_{i=1}^n x_i$$');
     await tester.pump();
     expect(find.byType(AgentMarkdown), findsOneWidget);
+    expect(find.byType(Math), findsNWidgets(2));
+  });
+
+  testWidgets(r'preserves subscripts with underscores without converting to italics', (tester) async {
+    await pump(tester, r'The coefficient is $\beta_1$ and $\beta_2$.');
+    await tester.pump();
+    expect(find.byType(Math), findsNWidgets(2));
+  });
+
+  testWidgets('currency amounts like \$100 are not parsed as math', (tester) async {
+    await pump(tester, r'The cost is $100 and bonus is $50.');
+    await tester.pump();
+    expect(find.byType(Math), findsNothing);
+    expect(find.textContaining(r'$100'), findsOneWidget);
+  });
+
+  testWidgets('fenced math code block renders display math', (tester) async {
+    await pump(tester, "```latex\n\\int_0^1 x^2 dx = \\frac{1}{3}\n```");
+    await tester.pump();
+    expect(find.byType(Math), findsOneWidget);
   });
 
   group('stripThinkingTrace', () {
