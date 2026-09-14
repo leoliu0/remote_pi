@@ -103,6 +103,23 @@ void main() {
     expect(find.textContaining('finance prose'), findsOneWidget);
   });
 
+  testWidgets('spans that regex-match but every guard rejects render as prose (parser loop guard)', (tester) async {
+    // Each of these MATCHES the inline-math regex but must be rejected by a
+    // guard. Pre-fix, the guards' `return false` made package:markdown loop
+    // on the same position forever — this test would hang the isolate.
+    const spans = [
+      ('Price settled at \$1,234.56\$ today.', 'Price settled'),
+      ('Cost is \$100 million\$ at most.', 'Cost is'),
+      ('He said \$one two three\$ loudly.', 'He said'),
+    ];
+    for (final (s, prefix) in spans) {
+      await pump(tester, s);
+      await tester.pumpAndSettle();
+      expect(find.byType(Math), findsNothing, reason: s);
+      expect(find.textContaining(prefix), findsOneWidget, reason: s);
+    }
+  });
+
   testWidgets(r'preserves subscripts with underscores without converting to italics', (tester) async {
     await pump(tester, r'The coefficient is $\beta_1$ and $\beta_2$.');
     await tester.pump();
