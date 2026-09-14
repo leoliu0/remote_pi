@@ -100,9 +100,9 @@ class AgentMarkdown extends StatelessWidget {
       tableCellsPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
     );
 
-    final widget = MarkdownBody(
+    final body = MarkdownBody(
       data: data,
-      selectable: selectable,
+      selectable: false,
       styleSheet: styleSheet,
       inlineSyntaxes: [
         DisplayMathSyntax(),
@@ -122,9 +122,9 @@ class AgentMarkdown extends StatelessWidget {
     );
 
     if (selectable) {
-      return SelectionArea(child: widget);
+      return SelectionArea(child: body);
     }
-    return widget;
+    return body;
   }
   static Future<void> _openLink(BuildContext context, String url) async {
     final messenger = ScaffoldMessenger.maybeOf(context);
@@ -257,7 +257,7 @@ class _MathBlock extends StatelessWidget {
             child: Center(
               child: Math.tex(
                 code,
-                textStyle: typo.mono.copyWith(fontSize: 16.0, color: colors.text),
+                textStyle: TextStyle(fontSize: 16.0, color: colors.text),
                 mathStyle: MathStyle.display,
                 onErrorFallback: (err) => Text(
                   code,
@@ -332,9 +332,10 @@ class DisplayMathElementBuilder extends MarkdownElementBuilder {
   ) {
     final tex = element.textContent.trim();
     final colors = context.colors;
-    final style = parentStyle ?? Theme.of(context).textTheme.bodyMedium;
+    final typo = context.typo;
 
     return Container(
+      width: double.infinity,
       margin: const EdgeInsets.symmetric(vertical: 8),
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       decoration: BoxDecoration(
@@ -346,17 +347,14 @@ class DisplayMathElementBuilder extends MarkdownElementBuilder {
         scrollDirection: Axis.horizontal,
         child: Math.tex(
           tex,
-          textStyle: style?.copyWith(
+          textStyle: TextStyle(
             fontSize: 16.0,
             color: colors.text,
           ),
           mathStyle: MathStyle.display,
           onErrorFallback: (err) => Text(
             tex,
-            style: style?.copyWith(
-              fontFamily: kMonoFamily,
-              color: colors.highlight,
-            ),
+            style: typo.mono.copyWith(color: colors.highlight),
           ),
         ),
       ),
@@ -378,19 +376,21 @@ class InlineMathElementBuilder extends MarkdownElementBuilder {
   ) {
     final tex = element.textContent.trim();
     final colors = context.colors;
-    final style = parentStyle ?? Theme.of(context).textTheme.bodyMedium;
+    final typo = context.typo;
+    final fontSize = parentStyle?.fontSize ?? 14.0;
 
     return Math.tex(
       tex,
-      textStyle: style?.copyWith(
+      textStyle: TextStyle(
+        fontSize: fontSize,
         color: colors.text,
       ),
       mathStyle: MathStyle.text,
       onErrorFallback: (err) => Text(
         '\$$tex\$',
-        style: style?.copyWith(
-          fontFamily: kMonoFamily,
+        style: typo.mono.copyWith(
           color: colors.highlight,
+          fontSize: fontSize,
         ),
       ),
     );

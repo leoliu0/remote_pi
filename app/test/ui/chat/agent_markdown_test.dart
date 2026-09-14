@@ -69,9 +69,28 @@ void main() {
     expect(find.textContaining('bold summary'), findsOneWidget);
   });
   testWidgets(r'renders LaTeX math equations ($...$ and $$...$$)', (tester) async {
+    tester.view.physicalSize = const Size(390 * 3, 844 * 3);
+    tester.view.devicePixelRatio = 3.0;
+    addTearDown(() => tester.view.resetPhysicalSize());
     await pump(tester, r'Formula inline $E = mc^2$ and display: $$\\sum_{i=1}^n x_i$$');
-    await tester.pump();
+    await tester.pumpAndSettle();
     expect(find.byType(AgentMarkdown), findsOneWidget);
+    expect(find.byType(Math), findsNWidgets(2));
+  });
+
+  testWidgets(r'selectable AgentMarkdown renders LaTeX math inside SelectionArea without crashing', (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: AgentMarkdown(
+            r'Formula $E = mc^2$ and $$\\frac{a}{b}$$ in selectable mode',
+            selectable: true,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.byType(SelectionArea), findsOneWidget);
     expect(find.byType(Math), findsNWidgets(2));
   });
 
