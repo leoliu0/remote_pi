@@ -122,15 +122,6 @@ class Preferences extends ChangeNotifier {
     return _readKey(key);
   }
 
-  Future<void> _writeKey(String key, String? value) async {
-    try {
-      if (value == null) {
-        await _store.delete(key: key).timeout(_kStoreTimeout);
-      } else {
-        await _store.write(key: key, value: value).timeout(_kStoreTimeout);
-      }
-    } catch (_) {}
-  }
 
   static String _draftKey(String? peerEpk, String? roomId) {
     return 'prefs.draft.${peerEpk ?? ""}:${roomId ?? "main"}';
@@ -276,33 +267,25 @@ class Preferences extends ChangeNotifier {
         if (fileRelay == null) await _writeRelayFile(relayCleaned);
         if (hiveRelay == null) _writeRelayHive(relayCleaned);
       }
-      final onboarded = all.containsKey(_kOnboardingCompletedKey)
-          ? all[_kOnboardingCompletedKey]
-          : await _store.read(key: _kOnboardingCompletedKey);
+      final onboarded = await _storeGet(all, _kOnboardingCompletedKey);
       final onboardedBool = onboarded == 'true';
       if (onboardedBool != _onboardingCompleted) {
         _onboardingCompleted = onboardedBool;
         changed = true;
       }
-      final theme = all.containsKey(_kThemeModeKey)
-          ? all[_kThemeModeKey]
-          : await _store.read(key: _kThemeModeKey);
+      final theme = await _storeGet(all, _kThemeModeKey);
       final themeMode = _themeModeFromString(theme);
       if (themeMode != _themeMode) {
         _themeMode = themeMode;
         changed = true;
       }
-      final scaleRaw = all.containsKey(_kFontScaleKey)
-          ? all[_kFontScaleKey]
-          : await _store.read(key: _kFontScaleKey);
+      final scaleRaw = await _storeGet(all, _kFontScaleKey);
       final scale = AppFontScale.fromName(scaleRaw);
       if (scale != _fontScale) {
         _fontScale = scale;
         changed = true;
       }
-      final fontFamRaw = all.containsKey(_kFontFamilyKey)
-          ? all[_kFontFamilyKey]
-          : await _store.read(key: _kFontFamilyKey);
+      final fontFamRaw = await _storeGet(all, _kFontFamilyKey);
       final fontFam = AppFontFamily.fromName(fontFamRaw);
       if (fontFam != _fontFamily) {
         _fontFamily = fontFam;

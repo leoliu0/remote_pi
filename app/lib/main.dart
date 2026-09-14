@@ -1,3 +1,5 @@
+import 'dart:ui' show PlatformDispatcher;
+
 import 'package:app/config/dependencies.dart';
 import 'package:app/data/local/boxes.dart';
 import 'package:app/data/mesh/mesh_sync_service.dart';
@@ -14,8 +16,25 @@ import 'package:provider/provider.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Global guard: an uncaught async error must never terminate the app —
+  // returning true marks it handled ("sometimes cannot enter the app"
+  // hardening for release builds, where the red screen is disabled).
+  PlatformDispatcher.instance.onError = (error, stack) {
+    debugPrint('[Main] uncaught async error: $error');
+    return true;
+  };
+
+  // Pre-runApp work is time-boxed: a wedged platform call (Hive open,
+  // secure storage) must not leave the user on a blank screen forever.
+  // On timeout we proceed with whatever initialised — readers lazily
+  // open boxes / re-read storage themselves, same as the existing
+  // failure path in LocalBoxes.init().
   try {
-    await LocalBoxes.init();
+    await LocalBoxes.init().timeout(
+      const Duration(seconds: 6),
+      onTimeout: () {},
+    );
   } catch (e) {
     debugPrint('[Main] LocalBoxes.init error: $e');
   }

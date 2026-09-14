@@ -62,7 +62,13 @@ class _BootState extends ChangeNotifier {
     void Function()? installWatcherAfterBoot,
   }) async {
     try {
-      await prefs.load();
+      // Boot must be fully bounded: a hung platform read here would leave
+      // the router on /boot forever ("stuck on splash"). Every await below
+      // carries its own timeout; this one covers prefs.load() as a whole.
+      await prefs.load().timeout(
+        const Duration(seconds: 8),
+        onTimeout: () {},
+      );
       OwnerIdentityBootResult? ownerResult;
       try {
         ownerResult = await ownerBridge.boot().timeout(
@@ -389,7 +395,6 @@ class _BootSplash extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    print('[_BootSplash] build called');
     return Scaffold(
       body: Center(
         child: Column(

@@ -1,4 +1,7 @@
 import 'dart:io';
+import 'dart:async';
+
+import 'package:fake_async/fake_async.dart';
 
 import 'package:app/data/preferences/preferences.dart';
 import 'package:app/ui/core/themes/app_font_family.dart';
@@ -66,6 +69,26 @@ class _FakeSecureStorage implements FlutterSecureStorage {
   dynamic noSuchMethod(Invocation i) => super.noSuchMethod(i);
 }
 
+/// Regression (2026-09-14 boot-splash freeze): when Android Keystore
+/// `readAll` comes back empty, `load()` used to fall back to raw
+/// `_store.read()` calls with NO timeout. A single hung platform read
+/// left `_BootState.load` incomplete → router stuck on /boot forever.
+/// `load()` must always complete even if every individual read hangs.
+class _HangingReadStorage extends _FakeSecureStorage {
+  @override
+  Future<String?> read({
+    required String key,
+    IOSOptions? iOptions,
+    AndroidOptions? aOptions,
+    LinuxOptions? lOptions,
+    WebOptions? webOptions,
+    MacOsOptions? mOptions,
+    WindowsOptions? wOptions,
+  }) =>
+      Completer<String?>().future;
+}
+
+
 void main() {
   group('Preferences', () {
     test('defaults to hideToolCalls=false before load()', () {
@@ -79,6 +102,17 @@ void main() {
       final p = Preferences(store);
       await p.load();
       expect(p.hideToolCalls, isTrue);
+    });
+
+    test('load() completes when every secure-storage read hangs (boot-splash freeze)', () {
+      final p = Preferences(_HangingReadStorage());
+      FakeAsync().run((async) {
+        var completed = false;
+        p.load().then((_) => completed = true);
+        // Far beyond the sum of all per-read timeouts — must be done.
+        async.elapse(const Duration(seconds: 30));
+        expect(completed, isTrue);
+      });
     });
 
     test('setHideToolCalls writes to storage and notifies', () async {
