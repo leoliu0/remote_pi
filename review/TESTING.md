@@ -79,6 +79,23 @@ backgrounded reconnect, online-when-working, tile delete button).
 running relay + paired Pi); covered by `connection_manager_test` fake-channel
 tests instead.
 
+### 2026-09-14 — math-render freeze fix: emulator e2e (pair → chat → live agent turn)
+
+**Device:** RemotePi_Pixel emulator (Android API 36, x86_64), APK `deb737a0` (`f1d2b012`).
+**Setup:** scratch `omp` in `/tmp/rp-e2e-math` paired to the app via paste-code
+(relay `http://178.157.59.181:3000`). All 6 live Pi sessions visible after pair.
+
+| # | Step | Result |
+|---|------|--------|
+| 1 | Cold start ×4 (incl. after `pm clear`) | Home in ≤0.7s each (`TotalTime` 654/616/631ms), no splash hang — [01](screens/2026-09-14-e2e-01-launch.png), [15](screens/2026-09-14-e2e-15-onboard.png) |
+| 2 | Paste-code pair (`/remote-pi pair --ttl 600`) | Paired; `Relay · Connected`, 6/6 sessions online — [22](screens/2026-09-14-e2e-22-pair3.png) |
+| 3 | Open **NFP_CEO** (previously froze/crashed on entry) | Opens, history renders, inline math (`$F$ ≈ 25`) styled, app pid stable — [23](screens/2026-09-14-e2e-23-nfpceo.png) |
+| 4 | Live agent turn: stray `$$` + 420-char span | Rendered as plain text, UI stayed responsive (no isolate freeze) — [26](screens/2026-09-14-e2e-26-reply.png) |
+| 5 | Live agent turn: `$E = mc^2$` + `$$x^2+y^2=z^2$$` | Both rendered as real math (italic inline, block w/ superscripts), no raw dollars — [30](screens/2026-09-14-e2e-30.png) |
+
+**Regression tests:** `agent_markdown_test.dart` 18/18 (incl. parser-loop guards),
+`nfp_ceo_smoke_test.dart` (all real NFP_CEO texts, selectable) — full suite 647/647.
+
 ### 2026-08-29 — version bump 1.2.5+13 (mobile)
 
 **Build:** app-release.apk **1.2.5 (13)**. Same tree as the persist/reconnect
