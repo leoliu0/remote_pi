@@ -488,4 +488,85 @@ describe("extension_ui_bridge", () => {
       expect(sent).toHaveLength(0);
     });
   });
+
+  describe("Plan Review Bridge", () => {
+    it("broadcasts extension_ui_request when triggerPlanReview is called", () => {
+      const bus = fakeBus();
+      const sent: ServerMessage[] = [];
+      const bridge = createExtensionUiBridge(fakePi(bus), (m) => sent.push(m))!;
+
+      bridge.triggerPlanReview("local://PLAN.md", "Feature Plan", "# Feature Plan\n\n- Task 1");
+
+      expect(sent).toHaveLength(1);
+      const req = sent[0] as any;
+      expect(req.type).toBe("extension_ui_request");
+      expect(req.id).toBe("plan-review");
+      expect(req.title).toBe("Plan Review: Feature Plan");
+      expect(req.ask.questions[0].options).toHaveLength(4);
+      expect(req.ask.questions[0].options[0].label).toBe("Approve and execute");
+      expect(req.ask.questions[0].options[0].preview).toBe("# Feature Plan\n\n- Task 1");
+    });
+
+    it("calls onPlanAction when mobile responds with Approve", () => {
+      const bus = fakeBus();
+      const sent: ServerMessage[] = [];
+      let recordedAction: string | undefined;
+      const bridge = createExtensionUiBridge(fakePi(bus), (m) => sent.push(m), {
+        onPlanAction: (action) => {
+          recordedAction = action;
+        },
+      })!;
+
+      bridge.triggerPlanReview("local://PLAN.md", "Feature Plan", "Content");
+      sent.length = 0;
+
+      bridge.respond({
+        type: "extension_ui_response",
+        id: "plan-review",
+        value: "Approve and execute",
+      });
+
+      expect(recordedAction).toBe("approve");
+      expect(sent).toHaveLength(1);
+      expect(sent[0]).toMatchObject({
+        type: "extension_ui_request",
+        id: "plan-review",
+        method: "notify",
+        message: "Plan review completed.",
+      });
+    });
+
+    it("calls onPlanAction with refine and feedback when mobile responds with Refine", () => {
+      const bus = fakeBus();
+      const sent: ServerMessage[] = [];
+      let recordedAction: string | undefined;
+      let recordedFeedback: string | undefined;
+      const bridge = createExtensionUiBridge(fakePi(bus), (m) => sent.push(m), {
+        onPlanAction: (action, feedback) => {
+          recordedAction = action;
+          recordedFeedback = feedback;
+        },
+      })!;
+
+      bridge.triggerPlanReview("local://PLAN.md", "Feature Plan", "Content");
+
+      bridge.respond({
+        type: "extension_ui_response",
+        id: "plan-review",
+        ask: {
+          kind: "answer",
+          flow_id: "plan-review",
+          answers: {
+            action: {
+              values: ["Refine plan"],
+              customText: "Please add unit tests",
+            },
+          },
+        },
+      });
+
+      expect(recordedAction).toBe("refine");
+      expect(recordedFeedback).toBe("Please add unit tests");
+    });
+  });
 });

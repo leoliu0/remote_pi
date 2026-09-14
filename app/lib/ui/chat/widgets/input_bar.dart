@@ -14,6 +14,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:app/ui/chat/widgets/goal_menu_sheet.dart';
 import 'package:app/ui/chat/widgets/loop_menu_sheet.dart';
+import 'package:app/ui/chat/widgets/plan_menu_sheet.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 // InputBar — bottom message composer.
@@ -78,6 +79,8 @@ class InputBar extends StatefulWidget {
   final String? goalStatus;
   /// Loop Mode status: 'active' | 'running' | 'paused' | 'waiting' | 'idle' | null.
   final String? loopStatus;
+  /// Plan Mode status: 'active' | 'review' | 'idle' | null.
+  final String? planStatus;
   /// Fired whenever the typed composer text changes.
   final void Function(String text)? onDraftChanged;
   const InputBar({
@@ -102,6 +105,7 @@ class InputBar extends StatefulWidget {
     this.activeThinking,
     this.goalStatus,
     this.loopStatus,
+    this.planStatus,
     this.onDraftChanged,
   });
 
@@ -699,6 +703,30 @@ class _InputBarState extends State<InputBar> {
                     },
                   ),
                   const SizedBox(width: 4),
+                  _PlanModeQuickButton(
+                    enabled: !widget.disabled,
+                    status: widget.planStatus,
+                    onTap: () async {
+                      if (widget.planStatus == 'review') {
+                        widget.onSend('/plan-review');
+                        return;
+                      }
+                      final action = await showPlanMenuSheet(
+                        context,
+                        planStatus: widget.planStatus,
+                      );
+                      if (action == null || !mounted) return;
+                      switch (action) {
+                        case PlanMenuAction.toggle:
+                          widget.onSend('/plan');
+                          break;
+                        case PlanMenuAction.review:
+                          widget.onSend('/plan-review');
+                          break;
+                      }
+                    },
+                  ),
+                  const SizedBox(width: 4),
                   _LoopModeQuickButton(
                     enabled: !widget.disabled,
                     status: widget.loopStatus,
@@ -1060,6 +1088,73 @@ class _GoalModeQuickButton extends StatelessWidget {
     );
   }
 }
+class _PlanModeQuickButton extends StatelessWidget {
+  const _PlanModeQuickButton({
+    required this.enabled,
+    this.status,
+    required this.onTap,
+  });
+
+  final bool enabled;
+  final String? status;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final isReview = status == 'review';
+    final isActive = status == 'active';
+
+    final String tooltip;
+    if (isReview) {
+      tooltip = 'Plan ready for review — tap to review (/plan-review)';
+    } else if (isActive) {
+      tooltip = 'Plan mode active — tap to manage (/plan)';
+    } else {
+      tooltip = 'Toggle plan mode (/plan)';
+    }
+
+    Widget iconWidget;
+    if (isReview) {
+      iconWidget = Container(
+        width: 22,
+        height: 22,
+        decoration: BoxDecoration(
+          color: colors.accent,
+          shape: BoxShape.circle,
+        ),
+        child: Icon(LucideIcons.fileCheck, size: 13, color: colors.surface),
+      );
+    } else if (isActive) {
+      iconWidget = Icon(
+        LucideIcons.listTodo,
+        size: 18,
+        color: enabled ? colors.accent : colors.muted.withValues(alpha: 0.35),
+      );
+    } else {
+      iconWidget = Icon(
+        LucideIcons.listTodo,
+        size: 18,
+        color: enabled ? colors.muted2 : colors.muted.withValues(alpha: 0.35),
+      );
+    }
+
+    return SizedBox(
+      width: 38,
+      height: 38,
+      child: IconButton(
+        key: const Key('input-bar-plan-mode'),
+        padding: EdgeInsets.zero,
+        iconSize: 18,
+        splashRadius: 18,
+        tooltip: tooltip,
+        icon: iconWidget,
+        onPressed: enabled ? onTap : null,
+      ),
+    );
+  }
+}
+
 class _LoopModeQuickButton extends StatelessWidget {
   const _LoopModeQuickButton({
     required this.enabled,

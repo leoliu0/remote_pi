@@ -239,7 +239,7 @@ let _myRoomId: string | null = null;   // this Pi's room id (derived from cwd)
 // open instead of starting null. The SDK fires `thinking_level_select`
 // on every change (initial load + user toggle), mirrored to room_meta
 // the same way model is — apps subscribe to one channel for both.
-let _myRoomMeta: { name: string; cwd: string; model?: string; thinking?: ThinkingLevel; working?: boolean; goal?: string; loop?: string } | null = null;
+let _myRoomMeta: { name: string; cwd: string; model?: string; thinking?: ThinkingLevel; working?: boolean; goal?: string; loop?: string; plan?: string } | null = null;
 let _currentModel: string | undefined = undefined;  // last-known model name
 let _currentThinking: ThinkingLevel | undefined = undefined;  // last-known thinking level
 /** True while the user's selected "auto" is the effective source of truth.
@@ -2572,7 +2572,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   // Pi that doesn't use the extension. Dispose any prior bridge first so a
   // factory re-run (new pi session) can't leak subscriptions or double-send.
   _extensionUiBridge?.dispose();
-  _extensionUiBridge = createExtensionUiBridge(pi, _broadcastToActive);
+  _extensionUiBridge = createExtensionUiBridge(pi, _broadcastToActive, _makeExtensionUiBridgeOptions());
 
   // Plano 19: ensure ~/.pi/remote/{sessions,skills}/ exist and deploy the
   // agent-network skill on first load. resources_discover lets Pi find it.
@@ -2832,18 +2832,40 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     if (tcid && name) _handleToolStart(tcid, name, args);
   });
 
+  const _activeToolArgs = new Map<string, unknown>();
+
   pi.on("tool_execution_start", (event) => {
+    _activeToolArgs.set(event.toolCallId, event.args);
     _handleToolStart(event.toolCallId, event.toolName, event.args);
   });
 
   pi.on("tool_execution_end", (event) => {
     _emittedToolRequests.delete(event.toolCallId);
+    const rawArgs = _activeToolArgs.get(event.toolCallId);
+    _activeToolArgs.delete(event.toolCallId);
     if (!_anyPeerActive()) return;
     const text = _stringifyToolResult(event.result);
     const msg: ServerMessage = event.isError
       ? { type: "tool_result", tool_call_id: event.toolCallId, error: text }
       : { type: "tool_result", tool_call_id: event.toolCallId, result: text };
     _broadcastToActive(msg);
+
+    // Plan Mode: detect when the agent proposes a plan for review
+    try {
+      const isPropose =
+        event.toolName === "propose" ||
+        (event.toolName === "write" &&
+          rawArgs &&
+          typeof rawArgs === "object" &&
+          String((rawArgs as { path?: unknown }).path ?? "").includes("propose"));
+      if (isPropose && !event.isError) {
+        const details = (event.result as { details?: { planFilePath?: string; title?: string } })?.details;
+        const planFilePath = details?.planFilePath ?? "local://PLAN.md";
+        const title = details?.title ?? "Proposed Plan";
+        _publishPlanStatus("review");
+        _extensionUiBridge?.triggerPlanReview(planFilePath, title);
+      }
+    } catch {}
   });
 
   // Cumulative session buffer fed via `message_end`, which fires once per
@@ -3012,7 +3034,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     // reuses this module instance does NOT re-run the factory, so rebind the
     // bridge here; fresh-module hosts already created theirs in the factory.
     if (!_extensionUiBridge) {
-      _extensionUiBridge = createExtensionUiBridge(pi, _broadcastToActive);
+      _extensionUiBridge = createExtensionUiBridge(pi, _broadcastToActive, _makeExtensionUiBridgeOptions());
     }
     // Rearm a reused-but-disposed instance. The session_shutdown teardown (below)
     // sets _disposed=true assuming the host re-evaluates THIS module fresh for the
@@ -3621,6 +3643,149 @@ export function _detectGoalStatus(ctx?: unknown): "active" | "paused" | "idle" |
 
   return undefined;
 }
+/**
+ * Resolves the active plan mode status ("active" | "review" | "idle") from the
+ * session or recent sessionManager mode_change entries so initial roomMeta
+ * and hello payloads reliably report plan state.
+ */
+export function _detectPlanStatus(ctx?: unknown): "active" | "review" | "idle" | undefined {
+  if (_myRoomMeta?.plan === "review") return "review";
+  if (!ctx || typeof ctx !== "object") return undefined;
+  const anyCtx = ctx as Record<string, unknown>;
+
+  // 1. Direct getPlanModeState if available on session / context
+  const session = (anyCtx["session"] ?? anyCtx) as {
+    getPlanModeState?: () => { enabled?: boolean; planFilePath?: string };
+  };
+  try {
+    const rawPlan = session?.getPlanModeState?.();
+    if (rawPlan?.enabled === true) return "active";
+  } catch {}
+
+  // 2. Search sessionManager history for the latest mode_change entry
+  const sm = (anyCtx["sessionManager"] ?? (anyCtx["session"] as { sessionManager?: unknown } | undefined)?.sessionManager) as {
+    getEntries?: () => Array<{ type?: string; mode?: string }>;
+  } | undefined;
+  try {
+    const entries = sm?.getEntries?.();
+    if (Array.isArray(entries)) {
+      for (let i = entries.length - 1; i >= 0; i--) {
+        const entry = entries[i];
+        if (entry && entry.type === "mode_change") {
+          if (entry.mode === "plan") return "active";
+          if (entry.mode === "none") return "idle";
+        }
+      }
+    }
+  } catch {}
+
+  return undefined;
+}
+
+/**
+ * Injects a raw key sequence into stdin of the terminal (e.g. \r for Enter, \x1b for Esc).
+ */
+export function _injectTerminalKey(key: string): boolean {
+  if (typeof process !== "undefined" && process.stdin && process.stdin.listenerCount("data") > 0) {
+    try {
+      process.stdin.emit("data", key);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+
+/**
+ * Resolves the plan file content from disk using various search paths.
+ */
+export function _resolvePlanContent(planFilePath?: string): string | null {
+  const rawPath = planFilePath || "local://PLAN.md";
+  const rel = rawPath.replace(/^local:\/\//, "");
+  const cwd =
+    (_lastEventCtx as { cwd?: string } | undefined)?.cwd ??
+    (_lastCtx as { cwd?: string } | undefined)?.cwd ??
+    process.cwd();
+
+  // 1. Direct path in cwd
+  const direct = resolve(cwd, rel);
+  if (existsSync(direct)) {
+    try { return readFileSync(direct, "utf8"); } catch {}
+  }
+
+  // 2. SessionManager artifacts dir
+  const sm = ((_lastEventCtx ?? _lastCtx) as { sessionManager?: unknown } | undefined)?.sessionManager as {
+    getArtifactsDir?: () => string | null;
+    getSessionId?: () => string | null;
+  } | undefined;
+  const artDir = sm?.getArtifactsDir?.();
+  if (artDir) {
+    const artPlan = join(artDir, "local", rel);
+    if (existsSync(artPlan)) {
+      try { return readFileSync(artPlan, "utf8"); } catch {}
+    }
+  }
+
+  // 3. /tmp/omp-local/<sessionId>/rel
+  const sid = sm?.getSessionId?.();
+  if (sid) {
+    const tmpPlan = join(tmpdir(), "omp-local", sid, rel);
+    if (existsSync(tmpPlan)) {
+      try { return readFileSync(tmpPlan, "utf8"); } catch {}
+    }
+  }
+
+  // 4. .pi or .omp plans directory
+  const dotPiPlan = join(cwd, ".pi", "plans", rel);
+  if (existsSync(dotPiPlan)) {
+    try { return readFileSync(dotPiPlan, "utf8"); } catch {}
+  }
+  const dotOmpPlan = join(cwd, ".omp", "plans", rel);
+  if (existsSync(dotOmpPlan)) {
+    try { return readFileSync(dotOmpPlan, "utf8"); } catch {}
+  }
+
+  return null;
+}
+
+function _publishPlanStatus(status: string): void {
+  if (_myRoomMeta?.plan === status) return;
+  if (_myRoomMeta) _myRoomMeta = { ..._myRoomMeta, plan: status };
+  if (!_relay || !_myRoomId) return;
+  _relay.sendControl({
+    type: "room_meta_update",
+    room_id: _myRoomId,
+    meta: { plan: status } as any,
+  });
+}
+
+function _makeExtensionUiBridgeOptions() {
+  return {
+    onPlanAction: (action: "approve" | "approve_compact" | "refine" | "reject", feedback?: string) => {
+      if (action === "approve") {
+        _injectTerminalKey("\r");
+        _publishPlanStatus("idle");
+      } else if (action === "approve_compact") {
+        _injectTerminalKey("\x1b[B\r");
+        _publishPlanStatus("idle");
+      } else if (action === "refine") {
+        _injectTerminalKey("\x1b");
+        _publishPlanStatus("active");
+        if (feedback && feedback.trim()) {
+          setTimeout(() => {
+            _tryExecuteTerminalInput(feedback.trim());
+          }, 200);
+        }
+      } else {
+        _injectTerminalKey("\x1b");
+        _publishPlanStatus("idle");
+      }
+    },
+    resolvePlanContent: (path?: string) => _resolvePlanContent(path),
+  };
+}
+
 
 async function _cmdStart(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<void> {
   if (_state !== "idle") {
@@ -3758,7 +3923,7 @@ async function _cmdStart(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<voi
     }
   } catch { /* defensive — never block /remote-pi start on this */ }
 
-  const roomMeta: { name: string; cwd: string; model?: string; thinking?: ThinkingLevel; goal?: string } = { name: sessionName, cwd };
+  const roomMeta: { name: string; cwd: string; model?: string; thinking?: ThinkingLevel; goal?: string; loop?: string; plan?: string } = { name: sessionName, cwd };
   const modelName = _currentModelName();
   if (modelName) roomMeta.model = modelName;
   if (_currentThinking) roomMeta.thinking = _currentThinking;
@@ -3770,6 +3935,16 @@ async function _cmdStart(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<voi
       _detectGoalStatus(_lastCtx);
     if (detectedGoal) {
       roomMeta.goal = detectedGoal;
+    }
+  } catch {}
+  try {
+    const detectedPlan =
+      _detectPlanStatus(ctx) ??
+      _detectPlanStatus(_pi) ??
+      _detectPlanStatus(_lastEventCtx) ??
+      _detectPlanStatus(_lastCtx);
+    if (detectedPlan) {
+      roomMeta.plan = detectedPlan;
     }
   } catch {}
   // Persist so _attemptReconnect can replay the same hello payload — without
@@ -5443,6 +5618,15 @@ export function _routeClientMessageFrom(
       if (trimmedText && _tryExecuteTerminalInput(trimmedText)) {
         if (trimmedText.startsWith("/")) {
           _safeNotify(`[remote-pi] Terminal command: "${trimmedText}"`, "info");
+        }
+        if (trimmedText === "/plan-review") {
+          _publishPlanStatus("review");
+          _extensionUiBridge?.triggerPlanReview();
+        } else if (trimmedText === "/plan") {
+          setTimeout(() => {
+            const current = _detectPlanStatus(_liveCtx()) ?? "idle";
+            _publishPlanStatus(current);
+          }, 300);
         }
         _echoUserMessage(msg, shouldSteer);
         break;

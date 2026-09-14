@@ -51,21 +51,25 @@ interface ActiveFlow {
   title: string | null;
   questions: AskQuestionWire[];
 }
+export interface ExtensionUiBridgeOptions {
+  onPlanAction?: (
+    action: "approve" | "approve_compact" | "refine" | "reject",
+    feedback?: string,
+  ) => void;
+  resolvePlanContent?: (planFilePath?: string) => string | null;
+}
 
 export interface ExtensionUiBridge {
-  /** Route an inbound `extension_ui_response` from a peer back to pi-ask. */
+  /** Route an inbound `extension_ui_response` from a peer back to pi-ask or plan review. */
   respond(msg: ExtensionUiResponseWire): void;
   /**
    * Requests for flows still awaiting an answer, for `session_sync` to replay.
-   *
-   * The `started` broadcast fires exactly once. A peer that connects *after*
-   * a flow opened never saw it: history replayed, but the interactive frame
-   * did not, so the phone showed the ask_user tool call as plain text while
-   * the desktop sat blocked on the TUI dialog. Replaying on sync closes that
-   * hole — the common real-world case is the agent asking while the app is
-   * closed.
    */
   pendingRequests(): ServerMessage[];
+  /** Trigger interactive plan review on mobile. */
+  triggerPlanReview(planFilePath?: string, title?: string, content?: string): void;
+  /** Dismiss any open plan review on mobile. */
+  dismissPlanReview(): void;
   /** Drop all subscriptions + state (best-effort teardown). */
   dispose(): void;
 }
@@ -78,6 +82,7 @@ export interface ExtensionUiBridge {
 export function createExtensionUiBridge(
   pi: ExtensionAPI,
   broadcast: (msg: ServerMessage) => void,
+  options?: ExtensionUiBridgeOptions,
 ): ExtensionUiBridge | null {
   const eventsRaw = (pi as { events?: EventBus }).events;
   if (
@@ -207,8 +212,44 @@ export function createExtensionUiBridge(
   });
 
   function respond(msg: ExtensionUiResponseWire): void {
-    const ask = msg.ask;
+    // Plan Review path: intercept responses to the plan review flow
+    if (msg.id === "plan-review" || activeFlows.get(msg.id)?.source === "plan-review") {
+      clearFlowTtl(msg.id);
+      activeFlows.delete(msg.id);
+      let chosen: "approve" | "approve_compact" | "refine" | "reject" = "approve";
+      let feedback: string | undefined = undefined;
+      const isCancelled = "cancelled" in msg && (msg as { cancelled?: boolean }).cancelled === true;
+      if (isCancelled) {
+        chosen = "reject";
+      } else if (msg.ask?.kind === "answer") {
+        const ans =
+          msg.ask.answers?.["action"]?.values?.[0] ||
+          msg.ask.answers?.["action"]?.customText;
+        feedback = msg.ask.answers?.["action"]?.customText;
+        if (ans?.includes("compact")) chosen = "approve_compact";
+        else if (ans?.includes("Refine") || (feedback && feedback.trim())) chosen = "refine";
+        else if (ans?.includes("Reject") || ans?.includes("Cancel")) chosen = "reject";
+        else chosen = "approve";
+      } else if ("value" in msg && typeof msg.value === "string") {
+        const val = msg.value;
+        if (val.includes("compact")) chosen = "approve_compact";
+        else if (val.includes("Refine")) chosen = "refine";
+        else if (val.includes("Reject") || val.includes("Cancel")) chosen = "reject";
+        else chosen = "approve";
+      }
 
+      options?.onPlanAction?.(chosen, feedback);
+
+      broadcast({
+        type: "extension_ui_request",
+        id: msg.id,
+        method: "notify",
+        message: "Plan review completed.",
+      });
+      return;
+    }
+
+    const ask = msg.ask;
     // Explicit cancel — with or without the ask envelope. A strict client
     // (no envelope) only carries the request id, which IS the flowId by this
     // bridge's contract; confirm via activeFlows before trusting it.
@@ -282,12 +323,71 @@ export function createExtensionUiBridge(
     }
   }
 
+  function triggerPlanReview(planFilePath?: string, title?: string, content?: string): void {
+    const flowId = "plan-review";
+    clearFlowTtl(flowId);
+    const planContent = content ?? options?.resolvePlanContent?.(planFilePath);
+    const previewText = planContent || "Plan proposal ready for review.";
+    const flow: ActiveFlow = {
+      flowId,
+      toolCallId: null,
+      source: "plan-review",
+      title: title ? `Plan Review: ${title}` : "Plan Review",
+      questions: [
+        {
+          id: "action",
+          label: "Action",
+          prompt: "Review the proposed plan below and select an action:",
+          type: "preview",
+          required: true,
+          options: [
+            {
+              value: "Approve and execute",
+              label: "Approve and execute",
+              description: "Exit plan mode and begin implementation with all tools.",
+              preview: previewText,
+            },
+            {
+              value: "Approve and compact context",
+              label: "Approve and compact context",
+              description: "Compact chat history before executing the plan.",
+            },
+            {
+              value: "Refine plan",
+              label: "Refine plan",
+              description: "Request changes with custom feedback (enter below).",
+            },
+            {
+              value: "Reject / Cancel",
+              label: "Reject / Cancel",
+              description: "Reject proposal and cancel review.",
+            },
+          ],
+        },
+      ],
+    };
+    activeFlows.set(flowId, flow);
+    armFlowTtl(flowId);
+    broadcast(requestForFlow(flow));
+  }
+
+  function dismissPlanReview(): void {
+    clearFlowTtl("plan-review");
+    if (activeFlows.delete("plan-review")) {
+      broadcast({
+        type: "extension_ui_request",
+        id: "plan-review",
+        method: "notify",
+        message: "Plan review dismissed.",
+      });
+    }
+  }
+
   return {
     respond,
-    // Insertion order = the order the flows opened, so a client replaying more
-    // than one renders them oldest-first. pi-ask resolves one flow at a time in
-    // practice, so this is a defensive detail rather than a live case.
     pendingRequests: () => [...activeFlows.values()].map(requestForFlow),
+    triggerPlanReview,
+    dismissPlanReview,
     dispose() {
       unsubStarted();
       unsubCompleted();

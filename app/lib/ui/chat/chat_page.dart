@@ -607,6 +607,7 @@ class _ChatPageState extends State<ChatPage> {
       activeThinking: vm.activeRoom?.thinking?.name,
       goalStatus: vm.activeRoom?.goal,
       loopStatus: vm.activeRoom?.loop,
+      planStatus: vm.activeRoom?.plan,
       onCancel: cancelId != null ? () => vm.cancel(cancelId) : null,
       queuedMessages: isReady ? state.queuedMessages : const [],
       onSetQueued: (text) {

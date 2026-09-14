@@ -39,6 +39,7 @@ sealed class ControlInbound {
             (j['working'] as bool?) ?? (metaJson?['working'] as bool?);
         final rawGoal = (j['goal'] as String?) ?? (metaJson?['goal'] as String?);
         final rawLoop = (j['loop'] as String?) ?? (metaJson?['loop'] as String?);
+        final rawPlan = (j['plan'] as String?) ?? (metaJson?['plan'] as String?);
         return RoomAnnounced(
           peer: j['peer'] as String,
           roomId: j['room_id'] as String,
@@ -52,6 +53,7 @@ sealed class ControlInbound {
           working: rawWorking,
           goal: rawGoal,
           loop: rawLoop,
+          plan: rawPlan,
         );
       }(),
       'room_ended' => RoomEnded(
@@ -71,6 +73,7 @@ sealed class ControlInbound {
         final hasThinking = meta?.containsKey('thinking') ?? false;
         final hasGoal = meta?.containsKey('goal') ?? false;
         final hasLoop = meta?.containsKey('loop') ?? false;
+        final hasPlan = meta?.containsKey('plan') ?? false;
         final rawThinking = meta?['thinking'] as String?;
         return RoomMetaUpdated(
           peer: j['peer'] as String,
@@ -82,10 +85,12 @@ sealed class ControlInbound {
           working: meta?['working'] as bool?,
           goal: meta?['goal'] as String?,
           loop: meta?['loop'] as String?,
+          plan: meta?['plan'] as String?,
           hasModel: hasModel,
           hasThinking: hasThinking,
           hasGoal: hasGoal,
           hasLoop: hasLoop,
+          hasPlan: hasPlan,
         );
       }(),
       _ => null,
@@ -202,6 +207,7 @@ class RoomInfo {
   final bool working;
   final String? goal;
   final String? loop;
+  final String? plan;
 
   const RoomInfo({
     required this.roomId,
@@ -213,6 +219,7 @@ class RoomInfo {
     this.working = false,
     this.goal,
     this.loop,
+    this.plan,
   });
 
   factory RoomInfo.fromJson(Map<String, dynamic> j) {
@@ -229,6 +236,7 @@ class RoomInfo {
       working: (j['working'] as bool?) ?? false,
       goal: j['goal'] as String?,
       loop: j['loop'] as String?,
+      plan: j['plan'] as String?,
     );
   }
 
@@ -242,6 +250,7 @@ class RoomInfo {
     'working': working,
     if (goal != null) 'goal': goal,
     if (loop != null) 'loop': loop,
+    if (plan != null) 'plan': plan,
   };
 
   RoomInfo copyWith({
@@ -253,6 +262,7 @@ class RoomInfo {
     bool? working,
     Object? goal = _kRoomInfoUnset,
     Object? loop = _kRoomInfoUnset,
+    Object? plan = _kRoomInfoUnset,
   }) => RoomInfo(
     roomId: roomId,
     name: name ?? this.name,
@@ -265,6 +275,7 @@ class RoomInfo {
     working: working ?? this.working,
     goal: identical(goal, _kRoomInfoUnset) ? this.goal : goal as String?,
     loop: identical(loop, _kRoomInfoUnset) ? this.loop : loop as String?,
+    plan: identical(plan, _kRoomInfoUnset) ? this.plan : plan as String?,
   );
 
   @override
@@ -278,8 +289,8 @@ class RoomInfo {
       other.thinking == thinking &&
       other.working == working &&
       other.goal == goal &&
-      other.loop == loop;
-
+      other.loop == loop &&
+      other.plan == plan;
   @override
   int get hashCode => Object.hash(
         roomId,
@@ -291,6 +302,7 @@ class RoomInfo {
         working,
         goal,
         loop,
+        plan,
       );
 }
 
@@ -315,6 +327,7 @@ class RoomAnnounced extends ControlInbound {
   final bool? working;
   final String? goal;
   final String? loop;
+  final String? plan;
   const RoomAnnounced({
     required this.peer,
     required this.roomId,
@@ -326,6 +339,7 @@ class RoomAnnounced extends ControlInbound {
     this.working,
     this.goal,
     this.loop,
+    this.plan,
   });
 }
 
@@ -385,6 +399,8 @@ class RoomMetaUpdated extends ControlInbound {
   final bool hasGoal;
   final String? loop;
   final bool hasLoop;
+  final String? plan;
+  final bool hasPlan;
   const RoomMetaUpdated({
     required this.peer,
     required this.roomId,
@@ -393,10 +409,12 @@ class RoomMetaUpdated extends ControlInbound {
     this.working,
     this.goal,
     this.loop,
+    this.plan,
     this.hasModel = true,
     this.hasThinking = true,
     this.hasGoal = false,
     this.hasLoop = false,
+    this.hasPlan = false,
   });
 }
 
