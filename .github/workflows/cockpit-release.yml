@@ -131,12 +131,6 @@ jobs:
 
       # Internal CLI (`cockpit-cli`, crate in cockpit/cli) is built as a UNIVERSAL binary.
       - name: Rust + Intel target (universal internal CLI)
-      - uses: mlugg/setup-zig@v2
-        with:
-          version: 0.16.0
-
-      # Internal CLI (`cockpit-cli`, crate in cockpit/cli) is built as a UNIVERSAL binary.
-      - name: Rust + Intel target (universal internal CLI)
         run: |
           rustup toolchain install stable --profile minimal --no-self-update
           rustup default stable
