@@ -101,6 +101,9 @@ class _TerminalWorkingBanner extends StatefulWidget {
 class _TerminalWorkingBannerState extends State<_TerminalWorkingBanner>
     with SingleTickerProviderStateMixin {
   late final AnimationController _controller;
+  late final Timer _spinnerTimer;
+  int _spinnerTick = 0;
+  static const _brailleFrames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
   @override
   void initState() {
@@ -109,10 +112,14 @@ class _TerminalWorkingBannerState extends State<_TerminalWorkingBanner>
       vsync: this,
       duration: const Duration(milliseconds: 1600),
     )..repeat();
+    _spinnerTimer = Timer.periodic(const Duration(milliseconds: 80), (_) {
+      if (mounted) setState(() => _spinnerTick++);
+    });
   }
 
   @override
   void dispose() {
+    _spinnerTimer.cancel();
     _controller.dispose();
     super.dispose();
   }
@@ -129,24 +136,61 @@ class _TerminalWorkingBannerState extends State<_TerminalWorkingBanner>
 
         return Container(
           key: const Key('thinking-indicator'),
+          width: double.infinity,
           margin: const EdgeInsets.only(bottom: 8),
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
           decoration: BoxDecoration(
             color: colors.codeBg,
             borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: colors.accent.withValues(alpha: 0.2)),
+            border: Border.all(color: colors.accent.withValues(alpha: 0.25)),
           ),
           child: Row(
-            mainAxisSize: MainAxisSize.min,
             children: [
-              if (widget.onCancel != null)
+              Text(
+                _brailleFrames[_spinnerTick % _brailleFrames.length],
+                style: typo.mono.copyWith(
+                  color: colors.accent,
+                  fontSize: 13.5,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: ShaderMask(
+                  blendMode: BlendMode.srcIn,
+                  shaderCallback: (bounds) {
+                    return LinearGradient(
+                      begin: Alignment(dx - 0.6, 0),
+                      end: Alignment(dx + 0.6, 0),
+                      colors: [
+                        colors.muted,
+                        colors.accent,
+                        colors.muted,
+                      ],
+                      stops: const [0.0, 0.5, 1.0],
+                    ).createShader(bounds);
+                  },
+                  child: Text(
+                    widget.label,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: typo.mono.copyWith(
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w500,
+                      height: 1.3,
+                    ),
+                  ),
+                ),
+              ),
+              if (widget.onCancel != null) ...[
+                const SizedBox(width: 8),
                 Material(
                   color: Colors.transparent,
                   child: InkWell(
                     onTap: widget.onCancel,
                     borderRadius: BorderRadius.circular(4),
                     child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
                       decoration: BoxDecoration(
                         color: colors.error.withValues(alpha: 0.15),
                         borderRadius: BorderRadius.circular(4),
@@ -181,33 +225,7 @@ class _TerminalWorkingBannerState extends State<_TerminalWorkingBanner>
                     ),
                   ),
                 ),
-              if (widget.onCancel != null) const SizedBox(width: 8),
-              Flexible(
-                child: ShaderMask(
-                  blendMode: BlendMode.srcIn,
-                  shaderCallback: (bounds) {
-                    return LinearGradient(
-                      begin: Alignment(dx - 0.6, 0),
-                      end: Alignment(dx + 0.6, 0),
-                      colors: [
-                        colors.muted,
-                        colors.accent,
-                        colors.muted,
-                      ],
-                      stops: const [0.0, 0.5, 1.0],
-                    ).createShader(bounds);
-                  },
-                  child: Text(
-                    widget.label,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: typo.mono.copyWith(
-                      fontSize: 13.0,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                ),
-              ),
+              ],
             ],
           ),
         );

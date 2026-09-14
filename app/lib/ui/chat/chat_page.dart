@@ -496,25 +496,49 @@ class _ChatPageState extends State<ChatPage> {
               break;
             }
             if (m is ToolEvent) {
-              if (m.args is Map &&
-                  m.args['i'] is String &&
-                  (m.args['i'] as String).trim().isNotEmpty) {
-                workingLabel = (m.args['i'] as String).trim();
+              final args = m.args is Map ? (m.args as Map) : null;
+              final intent = args?['i'];
+              if (intent is String && intent.trim().isNotEmpty) {
+                workingLabel = intent.trim();
               } else {
-                workingLabel = switch (m.tool.toLowerCase()) {
-                  'read' => 'Reading file…',
-                  'bash' => 'Running command…',
-                  'edit' => 'Editing file…',
-                  'write' => 'Writing file…',
-                  'grep' => 'Searching files…',
-                  'glob' => 'Finding files…',
-                  'ask' => 'Waiting for input…',
-                  _ => '${m.tool}…',
+                final tool = m.tool.toLowerCase();
+                String truncate(String s, [int max = 35]) {
+                  final clean = s.trim().replaceAll(RegExp(r'\s+'), ' ');
+                  return clean.length <= max ? clean : '${clean.substring(0, max)}…';
+                }
+                workingLabel = switch (tool) {
+                  'read' => args?['path'] is String
+                      ? 'Reading ${truncate(args!['path'] as String)}'
+                      : 'Reading file…',
+                  'bash' => args?['command'] is String
+                      ? 'Running: ${truncate(args!['command'] as String)}'
+                      : 'Running command…',
+                  'edit' => args?['path'] is String
+                      ? 'Editing ${truncate(args!['path'] as String)}'
+                      : 'Editing file…',
+                  'write' => args?['path'] is String
+                      ? 'Writing ${truncate(args!['path'] as String)}'
+                      : 'Writing file…',
+                  'grep' => args?['pattern'] is String
+                      ? 'Searching "${truncate(args!['pattern'] as String)}"'
+                      : 'Searching files…',
+                  'glob' => args?['path'] is String
+                      ? 'Finding: ${truncate(args!['path'] as String)}'
+                      : 'Finding files…',
+                  'task' => 'Running subagents…',
+                  'eval' => args?['title'] is String
+                      ? 'Evaluating: ${truncate(args!['title'] as String)}'
+                      : 'Evaluating code…',
+                  'hub' => 'Coordinating mesh agents…',
+                  'todo' => 'Updating tasks…',
+                  'ask' => 'Waiting for user input…',
+                  _ => 'Executing ${m.tool}…',
                 };
               }
               break;
             }
           }
+          workingLabel ??= 'Working…';
         }
         final cancelId = vm.cancelTargetId;
         final onCancel = cancelId != null ? () => vm.cancel(cancelId) : null;
