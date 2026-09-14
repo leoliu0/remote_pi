@@ -35,6 +35,15 @@ class _BootState extends ChangeNotifier {
   bool _onboarded = false;
   bool _syncAvailable = true;
   bool _identityWasGenerated = false;
+  String _phase = 'starting';
+  final int startedAtMs = DateTime.now().millisecondsSinceEpoch;
+
+  /// Diagnostic: which boot step we are currently awaiting. Rendered by
+  /// the splash watchdog so an intermittent hang on a real device tells
+  /// us exactly which step never completed (and whether Dart timers are
+  /// still firing at all — the elapsed counter freezing means the
+  /// platform main thread is blocked, not a Dart await).
+  String get phase => _phase;
 
   bool get ready => _ready;
   bool get hasPeer => _hasPeer;
@@ -62,13 +71,18 @@ class _BootState extends ChangeNotifier {
     void Function()? installWatcherAfterBoot,
   }) async {
     try {
+      _phase = 'prefs';
       // Boot must be fully bounded: a hung platform read here would leave
       // the router on /boot forever ("stuck on splash"). Every await below
       // carries its own timeout; this one covers prefs.load() as a whole.
-      await prefs.load().timeout(
-        const Duration(seconds: 8),
-        onTimeout: () {},
-      );
+      try {
+        await prefs.load().timeout(
+          const Duration(seconds: 8),
+          onTimeout: () {},
+        );
+      } catch (_) {}
+
+      _phase = 'identity';
       OwnerIdentityBootResult? ownerResult;
       try {
         ownerResult = await ownerBridge.boot().timeout(
@@ -91,6 +105,7 @@ class _BootState extends ChangeNotifier {
         installWatcherAfterBoot?.call();
       } catch (_) {}
 
+      _phase = 'mesh-sync';
       try {
         await meshSync.pullOnDemand().timeout(
           const Duration(seconds: 3),
@@ -98,6 +113,7 @@ class _BootState extends ChangeNotifier {
         );
       } catch (_) {}
 
+      _phase = 'peers';
       final peers = await storage.listPeers();
       _hasPeer = peers.isNotEmpty;
       if (_hasPeer && !prefs.onboardingCompleted) {
@@ -108,6 +124,7 @@ class _BootState extends ChangeNotifier {
       // Never block the app boot on unexpected initialization errors
     } finally {
       _ready = true;
+      _phase = 'done';
       notifyListeners();
     }
 
@@ -204,7 +221,7 @@ GoRouter buildRouter(
     },
     routes: [
       // Splash while boot.load() is in flight
-      GoRoute(path: '/boot', builder: (ctx, st) => const _BootSplash()),
+      GoRoute(path: '/boot', builder: (ctx, st) => _BootSplash(boot: boot)),
 
       // Plan 23 — first-launch gate when iCloud Keychain / Google
       // Backup is off. Sticky route: redirect keeps the user here
@@ -390,17 +407,49 @@ class _DetailPane extends StatelessWidget {
   }
 }
 
-class _BootSplash extends StatelessWidget {
-  const _BootSplash();
+/// Splash with a boot watchdog: after 3 s it shows the current boot
+/// phase and an elapsed-seconds counter (ticking from a Dart timer).
+///
+/// Diagnostic contract for the intermittent "stuck on splash" reports:
+///  • counter ticking, phase label stuck  → Dart alive; that step's
+///    await never completed (platform channel dropped).
+///  • counter frozen                      → platform main thread
+///    blocked (native), or the rasterizer died — no Dart fix applies.
+class _BootSplash extends StatefulWidget {
+  final _BootState boot;
+  const _BootSplash({required this.boot});
+
+  @override
+  State<_BootSplash> createState() => _BootSplashState();
+}
+
+class _BootSplashState extends State<_BootSplash> {
+  Timer? _ticker;
+  int _elapsed = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted) setState(() => _elapsed += 1);
+    });
+  }
+
+  @override
+  void dispose() {
+    _ticker?.cancel();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
+    final colors = context.colors;
     return Scaffold(
       body: Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(LucideIcons.radio, size: 40, color: context.colors.accent),
+            Icon(LucideIcons.radio, size: 40, color: colors.accent),
             const SizedBox(height: 16),
             Text(
               'Remote Pi',
@@ -408,7 +457,7 @@ class _BootSplash extends StatelessWidget {
                 fontFamily: kMonoFamily,
                 fontSize: 18,
                 fontWeight: FontWeight.w600,
-                color: context.colors.text,
+                color: colors.text,
               ),
             ),
             const SizedBox(height: 24),
@@ -416,10 +465,22 @@ class _BootSplash extends StatelessWidget {
               width: 24,
               height: 24,
               child: CircularProgressIndicator(
-                color: context.colors.accent,
+                color: colors.accent,
                 strokeWidth: 2,
               ),
             ),
+            if (_elapsed >= 3) ...[
+              const SizedBox(height: 24),
+              Text(
+                'initialising: ${widget.boot.phase} · ${_elapsed}s',
+                key: const Key('boot-watchdog'),
+                style: TextStyle(
+                  fontFamily: kMonoFamily,
+                  fontSize: 12,
+                  color: colors.muted,
+                ),
+              ),
+            ],
           ],
         ),
       ),

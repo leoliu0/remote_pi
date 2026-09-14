@@ -94,6 +94,15 @@ void main() {
     expect(find.byType(Math), findsNWidgets(2));
   });
 
+  testWidgets('two stray \$\$ far apart render as prose, not Math (freeze guard)', (tester) async {
+    final prose = 'Payment \$\$${'x' * 600}\$\$ received. '
+        'Nothing mathematical here, just finance prose with dollar signs.';
+    await pump(tester, prose);
+    await tester.pumpAndSettle();
+    expect(find.byType(Math), findsNothing);
+    expect(find.textContaining('finance prose'), findsOneWidget);
+  });
+
   testWidgets(r'preserves subscripts with underscores without converting to italics', (tester) async {
     await pump(tester, r'The coefficient is $\beta_1$ and $\beta_2$.');
     await tester.pump();

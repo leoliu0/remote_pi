@@ -100,14 +100,20 @@ class AgentMarkdown extends StatelessWidget {
       tableCellsPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
     );
 
+    // Freeze guard: the math inline syntaxes run at every parser
+    // position; register them ONLY when the text actually contains a
+    // math delimiter. Prose-only messages (the common case) then pay
+    // zero regex cost.
+    final hasMathDelimiter =
+        data.contains(r'$') || data.contains(r'\(') || data.contains(r'\[');
+
     final body = MarkdownBody(
       data: data,
       selectable: false,
       styleSheet: styleSheet,
-      inlineSyntaxes: [
-        DisplayMathSyntax(),
-        InlineMathSyntax(),
-      ],
+      inlineSyntaxes: hasMathDelimiter
+          ? [DisplayMathSyntax(), InlineMathSyntax()]
+          : null,
       onTapLink: (text, href, title) {
         if (href != null) _openLink(context, href);
       },
@@ -279,6 +285,15 @@ class DisplayMathSyntax extends md.InlineSyntax {
   @override
   bool onMatch(md.InlineParser parser, Match match) {
     final raw = match.group(1) ?? match.group(2) ?? '';
+    // Stray `$$` pair over prose: keep the literal text. NEVER return
+    // false here — package:markdown's tryMatch only consumes when
+    // onMatch returns true, and still reports the match as handled, so
+    // a false return makes the parser loop on the same position
+    // forever (synchronous freeze on the UI thread).
+    if (raw.length > 400) {
+      parser.addNode(md.Text(match.group(0)!));
+      return true;
+    }
     parser.addNode(md.Element.text('display-math', raw));
     return true;
   }
@@ -293,24 +308,39 @@ class InlineMathSyntax extends md.InlineSyntax {
   bool onMatch(md.InlineParser parser, Match match) {
     final raw = match.group(1) ?? match.group(2) ?? '';
     final trimmed = raw.trim();
-    if (trimmed.isEmpty) return false;
+
+    // package:markdown's tryMatch treats a regex hit as "handled" and
+    // only consumes when onMatch returns true — returning false here
+    // loops the parser on the same position forever (synchronous UI
+    // freeze). Every rejection MUST emit the literal text instead.
+    bool rejectAsText() {
+      parser.addNode(md.Text(match.group(0)!));
+      return true;
+    }
+
+    if (trimmed.isEmpty) return rejectAsText();
+
+    // Freeze guard: a stray `$...$` span over long prose (finance text)
+    // would hand hundreds of symbols to Math.tex on the UI thread.
+    // Real inline formulas are short.
+    if (trimmed.length > 120) return rejectAsText();
 
     // Guard against currency amounts (e.g. $100 or $50.00)
     if (RegExp(r'^\d[\d,\.]*$').hasMatch(trimmed)) {
-      return false;
+      return rejectAsText();
     }
 
     // Guard against prose between two separate dollar currency amounts:
     // e.g. "$100 and bonus is $50" -> if it starts with a digit and has no math operators
     if (RegExp(r'^\d').hasMatch(trimmed) &&
         !RegExp(r'[\\=^_<>+\-*/]').hasMatch(trimmed)) {
-      return false;
+      return rejectAsText();
     }
 
     // If it contains spaces with plain words and no math symbols or backslashes
     if (trimmed.contains(' ') &&
         !RegExp(r'[\\=^_<>+\-*/{}()]').hasMatch(trimmed)) {
-      return false;
+      return rejectAsText();
     }
 
     parser.addNode(md.Element.text('inline-math', trimmed));
