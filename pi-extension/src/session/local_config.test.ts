@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadLocalConfig, localConfigExists, saveLocalConfig } from "./local_config.js";
+import { _detectGoalStatus } from "../index.js";
 
 const ENV = "REMOTE_PI_DIRECT_CONFIG";
 
@@ -147,5 +148,63 @@ describe("saveLocalConfig — unaffected by env (still writes the file)", () => 
     saveLocalConfig(cwd, { agent_name: "saved" });
     delete process.env[ENV]; // ensure we read the file back, not any env
     expect(loadLocalConfig(cwd)).toEqual({ agent_name: "saved", auto_start_relay: true });
+  });
+});
+
+describe("_detectGoalStatus", () => {
+  test("detects active goal from direct getGoalModeState", () => {
+    const ctx = {
+      getGoalModeState: () => ({ enabled: true, goal: { status: "active" } }),
+    };
+    expect(_detectGoalStatus(ctx)).toBe("active");
+  });
+
+  test("detects paused goal from direct getGoalModeState", () => {
+    const ctx = {
+      getGoalModeState: () => ({ enabled: false, goal: { status: "paused" } }),
+    };
+    expect(_detectGoalStatus(ctx)).toBe("paused");
+  });
+
+  test("detects paused goal from sessionManager entries fallback", () => {
+    const ctx = {
+      sessionManager: {
+        getEntries: () => [
+          { type: "user_message", id: "1" },
+          { type: "mode_change", id: "2", mode: "goal_paused", data: { goal: { status: "paused" } } },
+        ],
+      },
+    };
+    expect(_detectGoalStatus(ctx)).toBe("paused");
+  });
+
+  test("detects active goal from sessionManager entries fallback", () => {
+    const ctx = {
+      sessionManager: {
+        getEntries: () => [
+          { type: "user_message", id: "1" },
+          { type: "mode_change", id: "2", mode: "goal_paused" },
+          { type: "mode_change", id: "3", mode: "goal" },
+        ],
+      },
+    };
+    expect(_detectGoalStatus(ctx)).toBe("active");
+  });
+
+  test("detects idle when latest mode_change is none", () => {
+    const ctx = {
+      sessionManager: {
+        getEntries: () => [
+          { type: "mode_change", id: "1", mode: "goal" },
+          { type: "mode_change", id: "2", mode: "none" },
+        ],
+      },
+    };
+    expect(_detectGoalStatus(ctx)).toBe("idle");
+  });
+
+  test("returns undefined when no context or entries provided", () => {
+    expect(_detectGoalStatus(null)).toBeUndefined();
+    expect(_detectGoalStatus({})).toBeUndefined();
   });
 });

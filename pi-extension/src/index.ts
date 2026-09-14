@@ -2693,9 +2693,9 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   // `goal_updated` whenever the goal loop starts/stops/pauses.
   // We compute status: 'active' | 'paused' | 'idle' and mirror it to room_meta.
   (pi as { on: (event: string, handler: (event: unknown) => void) => void }).on("goal_updated", (event) => {
-    const raw = event as { state?: { enabled?: boolean; goal?: { status?: string } } } | undefined;
+    const raw = event as { state?: { enabled?: boolean; goal?: { status?: string } }; goal?: { status?: string } } | undefined;
     const enabled = raw?.state?.enabled === true;
-    const status = raw?.state?.goal?.status;
+    const status = raw?.state?.goal?.status ?? raw?.goal?.status;
     let goalStatus: string | undefined = undefined;
     if (enabled) {
       goalStatus = "active";
@@ -3581,6 +3581,47 @@ async function _cmdSetup(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<voi
   );
 }
 
+/**
+ * Resolves the active goal status ("active" | "paused" | "idle") from the
+ * session or recent sessionManager mode_change entries so initial roomMeta
+ * and hello payloads reliably report goal state before any goal_updated event.
+ */
+export function _detectGoalStatus(ctx?: unknown): "active" | "paused" | "idle" | undefined {
+  if (!ctx || typeof ctx !== "object") return undefined;
+  const anyCtx = ctx as Record<string, unknown>;
+
+  // 1. Direct getGoalModeState if available on session / context
+  const session = (anyCtx["session"] ?? anyCtx) as {
+    getGoalModeState?: () => { enabled?: boolean; goal?: { status?: string } };
+  };
+  try {
+    const rawGoal = session?.getGoalModeState?.();
+    if (rawGoal?.enabled === true) return "active";
+    if (rawGoal?.goal?.status === "paused") return "paused";
+    if (rawGoal?.goal) return "idle";
+  } catch {}
+
+  // 2. Search sessionManager history for the latest mode_change entry
+  const sm = (anyCtx["sessionManager"] ?? (anyCtx["session"] as { sessionManager?: unknown } | undefined)?.sessionManager) as {
+    getEntries?: () => Array<{ type?: string; mode?: string }>;
+  } | undefined;
+  try {
+    const entries = sm?.getEntries?.();
+    if (Array.isArray(entries)) {
+      for (let i = entries.length - 1; i >= 0; i--) {
+        const entry = entries[i];
+        if (entry && entry.type === "mode_change") {
+          if (entry.mode === "goal") return "active";
+          if (entry.mode === "goal_paused") return "paused";
+          if (entry.mode === "none") return "idle";
+        }
+      }
+    }
+  } catch {}
+
+  return undefined;
+}
+
 async function _cmdStart(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<void> {
   if (_state !== "idle") {
     ctx.ui.notify("[remote-pi] Already started.", "warning");
@@ -3722,13 +3763,13 @@ async function _cmdStart(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<voi
   if (modelName) roomMeta.model = modelName;
   if (_currentThinking) roomMeta.thinking = _currentThinking;
   try {
-    const rawGoal = (_pi as { getGoalModeState?: () => { enabled?: boolean; goal?: { status?: string } } })?.getGoalModeState?.();
-    if (rawGoal?.enabled === true) {
-      roomMeta.goal = "active";
-    } else if (rawGoal?.goal?.status === "paused") {
-      roomMeta.goal = "paused";
-    } else if (rawGoal) {
-      roomMeta.goal = "idle";
+    const detectedGoal =
+      _detectGoalStatus(ctx) ??
+      _detectGoalStatus(_pi) ??
+      _detectGoalStatus(_lastEventCtx) ??
+      _detectGoalStatus(_lastCtx);
+    if (detectedGoal) {
+      roomMeta.goal = detectedGoal;
     }
   } catch {}
   // Persist so _attemptReconnect can replay the same hello payload — without
