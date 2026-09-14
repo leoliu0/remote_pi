@@ -108,7 +108,7 @@ void main() {
     expectCollapsed(tester);
   });
 
-  testWidgets('quick actions button hides (collapses) while streaming', (
+  testWidgets('quick actions button stays visible while streaming when input is empty', (
     tester,
   ) async {
     await pumpBar(
@@ -118,7 +118,7 @@ void main() {
       onOpenQuickActions: () {},
     );
     await tester.pumpAndSettle();
-    expectCollapsed(tester);
+    expectExpanded(tester);
   });
 
   // Plan/43 — `streaming` (the whole working turn, fed by vm.isWorking) keeps

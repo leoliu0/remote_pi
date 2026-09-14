@@ -15,14 +15,7 @@ import 'package:url_launcher/url_launcher.dart';
 String stripThinkingTrace(String text, {bool isLiveStreaming = false}) {
   var cleaned = text.replaceAll(
     RegExp(
-      r'^\s*<(?:think|thought|thinking)>[\s\S]*?<\/(?:think|thought|thinking)>\s*',
-      caseSensitive: false,
-    ),
-    '',
-  );
-  cleaned = cleaned.replaceAll(
-    RegExp(
-      r'(?:^|\n)<(?:think|thought|thinking)>[\s\S]*?<\/(?:think|thought|thinking)>',
+      r'<\s*(?:think|thought|thinking|antThinking)\b[^>]*>[\s\S]*?<\/\s*(?:think|thought|thinking|antThinking)\s*>',
       caseSensitive: false,
     ),
     '',
@@ -32,9 +25,19 @@ String stripThinkingTrace(String text, {bool isLiveStreaming = false}) {
     // a newline. The daemon now wraps streamed reasoning in <think> tags; a
     // block that opened after visible text must still hide while it grows.
     cleaned = cleaned.replaceAll(
-      RegExp(r'(?:^|\n)\s*<(?:think|thought|thinking)>[\s\S]*$', caseSensitive: false),
+      RegExp(r'(?:^|\n)\s*<(?:think|thought|thinking|antThinking)\b[^>]*>[\s\S]*$', caseSensitive: false),
       '',
     );
+  } else {
+    // If a finalized message starts with an unclosed think block (e.g. tool
+    // execution or steer split the turn before </think> arrived), drop the
+    // unclosed block so reasoning never leaks into chat history.
+    if (cleaned.trimLeft().startsWith(RegExp(r'<\s*(?:think|thought|thinking|antThinking)\b', caseSensitive: false))) {
+      cleaned = cleaned.replaceAll(
+        RegExp(r'^\s*<(?:think|thought|thinking|antThinking)\b[^>]*>[\s\S]*$', caseSensitive: false),
+        '',
+      );
+    }
   }
   return cleaned.trim();
 }

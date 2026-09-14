@@ -88,6 +88,21 @@ void main() {
         'Output only',
       );
     });
+    test('strips antThinking and mid-line/indented think blocks', () {
+      expect(
+        stripThinkingTrace('<antThinking>claude reasoning</antThinking>Actual answer'),
+        'Actual answer',
+      );
+      expect(
+        stripThinkingTrace('Here is my plan: <think>secret thoughts</think>I will write code.'),
+        'Here is my plan: I will write code.',
+      );
+      expect(
+        stripThinkingTrace('Line 1\n  <think>secret</think>\nLine 2'),
+        'Line 1\n  \nLine 2',
+      );
+    });
+
 
     test('strips unclosed opening tag ONLY during live streaming', () {
       expect(

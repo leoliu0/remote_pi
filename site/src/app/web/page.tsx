@@ -43,10 +43,10 @@ export default function WebPage() {
       .then((res) => res.json())
       .then((data) => {
         if (gen !== fetchGen.current) return;
+        if (data && typeof data.relayConnected === "boolean") {
+          setIsRelayConnected(data.relayConnected);
+        }
         if (data && data.localPiDetected && Array.isArray(data.sessions)) {
-          if (typeof data.relayConnected === "boolean") {
-            setIsRelayConnected(data.relayConnected);
-          }
           if (data.device) {
             setDeviceName(data.device);
           }

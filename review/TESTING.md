@@ -344,3 +344,99 @@ Aligned `supportedThinkingLevels` with Pi-AI's exact logic:
 
 
 
+### 2026-09-08 — Mobile messages wake idle terminals
+
+**Cause:** OMP 18.1.14 queues explicit `deliverAs: "steer"` even when idle.
+The extension forced that mode for mobile text, so delivery did not start a turn.
+
+**Fix:** `_wakeAgent` checks the fresh SDK context's `isIdle()` immediately before
+handoff, after any image preparation. Confirmed busy uses steering; idle omits
+the delivery mode. Removed automatic resend fallbacks; rejected queued messages
+require explicit replacement or clearing before another delivery attempt.
+
+**Regression verification:** The initial regression run failed 5 cases before
+production changes; the upstream-Pi compatibility regression failed 2 cases
+before its correction. Final orchestrator run:
+`pnpm exec vitest run src/extension.test.ts` — **207 passed**.
+The extension implementation worker ran `pnpm build` successfully.
+SDK-method smoke checks used real installed OMP/upstream Pi methods with the
+downstream prompt boundary stubbed; these are not full live upstream-Pi tests.
+
+**Physical phone verification:** Authorized wireless ADB on the user's phone.
+Opened the separate `delivery-check` room; no test prompts sent to `tex`, `trust`,
+or the orchestrator. Sent `MOBILE-DELIVERY-CHECK-0908-A`, then restarted only the
+test terminal with the final compatibility build and sent
+`MOBILE-DELIVERY-CHECK-0908-FINAL`. Both reached the live OMP terminal and received
+model replies on the phone. The final terminal JSONL contains exactly one user
+message and one assistant response with the final marker.
+
+- [Phone room list](screens/2026-09-08-phone-delivery-02-rooms.png)
+- [Initial probe composed](screens/2026-09-08-phone-delivery-04-compose.png)
+- [Initial reply](screens/2026-09-08-phone-delivery-05-reply.png)
+- [Final probe composed](screens/2026-09-08-phone-delivery-07-final-compose.png)
+- [Final phone reply](screens/2026-09-08-phone-delivery-08-final-reply.png)
+
+**Scope/limitations:** Physical-phone check covers idle text delivery. Busy,
+image, rejection, and queue behavior are regression-test coverage, not live
+phone scenarios. Phone screenshots also show duplicate assistant rendering;
+the terminal persisted only one response. That separate display defect is not
+fixed here. Existing user terminal processes were not restarted or interrupted;
+they must restart with `omp -c` to load the rebuilt extension. No APK change.
+
+### 2026-09-08 — Duplicate streamed reply persistence
+
+**Fix:** App synchronously captures assistant segment identity and reuses it for
+the final message through the existing serialized persistence queue. Removed
+the global latest-assistant lookup that could duplicate a reply or overwrite
+the previous turn.
+
+**Verification:** Implementation worker recorded seven failing regressions
+before production edits; the corrected sync-service test file passed all 42
+tests. The release APK built successfully and was installed on the physical
+phone with `adb install -r`.
+
+**Physical phone verification:** Opened a separate `render-check` room and sent
+`CHECK-RENDER-ONCE`; the controlled live OMP terminal replied `RENDER-OK`.
+The production accessibility tree contained exactly one prompt and one reply,
+and the screenshot visually confirms one assistant rendering:
+[single reply](screens/2026-09-08-render-fix-02-single-reply.png).
+Existing stored duplicates are not purged by this fix.
+
+### 2026-09-14 — Terminal animated indicator parity (Braille spinner + shimmer wave)
+
+**Fix:** Aligned mobile animated working banner with the authentic terminal OMP/Codex appearance:
+1. Removed "Thinking & analyzing…" wording; replaced default with clean `Working…` (or active tool intent/action).
+2. Replaced starburst with the terminal's authentic 10-frame Braille spinner (`⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏`) ticking at 80ms (12.5 fps).
+3. Implemented true text shimmer animation (`ShaderMask` + `LinearGradient`) sweeping accent light horizontally across the monospace label.
+
+**Verification:** Updated `app/test/ui/chat/streaming_bubble_test.dart` to assert `Working…` and custom labels. All 638 tests passed.
+
+**Physical phone verification:** Rebuilt and installed release APK onto connected phone.
+1. Captured live phone screen showing interrupted thinking traces leaking and phantom vertical gaps.
+2. Fixed `stripThinkingTrace` to strip unclosed thinking blocks in finalized messages (`isLiveStreaming: false`), eliminating leaked reasoning traces.
+3. Filtered empty/stripped assistant messages from `visible` in `chat_page.dart` and prevented empty streaming bubble from taking list slots, eliminating compounding vertical blank space.
+4. Fixed banner flashing between tool executions: retains current turn's tool intent continuously until the turn finishes.
+5. Replaced static terminal `ESC` badge with an interactive, tappable `[ ■ Stop ]` button wired directly to `vm.cancel()`:
+   - Tapping the inline Stop badge cancels the running tool/turn immediately.
+   - Styled with error red square and monospace label, alongside the live sweeping shimmer intent text.
+6. Verified live on phone:
+   - Leaked thinking traces completely gone.
+   - Spacing clean without phantom gaps.
+   - Steady, non-flashing banner featuring the interactive Stop button and shimmer:
+   [Interactive Stop button & shimmer banner](screens/2026-09-14-phone-interactive-stop-button.png).
+
+### 2026-09-14 — Interactive terminal input delivery for all mobile messages
+
+**Fix:** Incoming text messages from mobile were previously only injected into the terminal input pipeline if they began with `/` (`_tryExecuteTerminalSlashCommand`). Standard messages went through `_wakeAgent` (`pi.sendUserMessage`), which bypassed the terminal prompt and steered into active subagents (e.g. `BackendReviewer`) when background tasks were running.
+1. Expanded terminal injection to all text messages via `_tryExecuteTerminalInput(text)`: when an interactive terminal is active (`hasTerminalListener && hasUiMethods`), messages are injected directly into the terminal editor (`setEditorText`) and submitted via carriage return (`process.stdin.emit("data", "\r")`), ensuring the message runs through `InputController` and `InteractiveMode` as if typed on the PC keyboard.
+2. Preserved fallback to `_wakeAgent` when no interactive TUI is active (headless, daemon mode).
+3. Fixed queue draining head-of-line blocking: failing items in `_maybeDrainQueuedItem` append to the back of the queue instead of front, and active terminals drain via terminal injection.
+4. Removed dead code `_hasUnclosedThinkBlock` in `streaming_bubble.dart`.
+5. Added `all_rooms` unit test in `relay/src/peers/registry.rs`.
+
+**Verification:**
+- `pi-extension`: Added 5 unit tests covering terminal input execution, draft restoration, fallback to `_wakeAgent`, and queue draining. Vitest suite passes 845 tests.
+- `app`: Added widget tests for Stop button visibility when working vs finished. Flutter test suite passes 640 tests.
+- `relay`: Added `all_rooms_returns_active_rooms_grouped_by_peer` test in `registry.rs`. Cargo test passes 112 tests.
+- `site`: Tested session list and relay connection handling. Test suite passes 11 tests.
+- Real terminal verification: Verified live on PC screen that user message sent from Android phone (`let's see if it's fixed`) appeared in the `remote-pi` terminal window (`0x03a00004`) and initiated an interactive user turn.

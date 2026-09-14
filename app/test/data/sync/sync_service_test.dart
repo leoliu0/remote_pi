@@ -90,8 +90,8 @@ void main() {
     return (conn: conn, ch: ch, sync: sync, epk: epk);
   }
 
-  List<MessageRecord> messages(String epk) {
-    final box = LocalBoxes().openMsgsBox(epk, 'main');
+  List<MessageRecord> messages(String epk, [String room = 'main']) {
+    final box = LocalBoxes().openMsgsBox(epk, room);
     final out = [
       for (final v in box.values)
         MessageRecord.fromJson((v as Map).cast<String, dynamic>()),
@@ -106,6 +106,151 @@ void main() {
         ? SessionIndexRecord.fromJson(raw.cast<String, dynamic>())
         : null;
   }
+
+  group('assistant turn identity', () {
+    test('back-to-back done and message persist one authoritative reply', () async {
+      final s = await setup();
+      addTearDown(s.conn.dispose);
+      addTearDown(s.sync.dispose);
+
+      // No settling between frames: the final delta is still coalesced and
+      // the done write has not updated the asynchronous persistence index.
+      s.ch.push(AgentChunk(inReplyTo: 'u1', delta: 'Here:'));
+      s.ch.push(AgentChunk(inReplyTo: 'u1', delta: '\n\n'));
+      s.ch.push(AgentDone(inReplyTo: 'u1'));
+      const fullText = 'Here:\n\n![chart](data:image/png;base64,QUJD)';
+      s.ch.push(AgentMessage(inReplyTo: 'u1', text: fullText));
+      await _settle();
+
+      final rows = messages(s.epk);
+      expect(rows.map((r) => r.text), [fullText]);
+      expect(rows.single.role, MsgRole.assistant);
+      expect(s.sync.streaming, isNull);
+    });
+
+    test('back-to-back completion never overwrites the previous turn', () async {
+      final s = await setup();
+      addTearDown(s.conn.dispose);
+      addTearDown(s.sync.dispose);
+      s.ch.push(AgentChunk(inReplyTo: 'u1', delta: 'Previous answer'));
+      s.ch.push(AgentDone(inReplyTo: 'u1'));
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+      final previous = messages(s.epk).single;
+
+      s.ch.push(AgentChunk(inReplyTo: 'u2', delta: 'Next'));
+      s.ch.push(AgentDone(inReplyTo: 'u2'));
+      s.ch.push(AgentMessage(inReplyTo: 'u2', text: 'Next answer'));
+      await _settle();
+
+      final rows = messages(s.epk);
+      expect(rows.map((r) => r.text), ['Previous answer', 'Next answer']);
+      expect(rows.first.id, previous.id);
+      expect(rows.last.id, isNot(previous.id));
+    });
+
+    test('identical replies in distinct turns remain separate', () async {
+      final s = await setup();
+      addTearDown(s.conn.dispose);
+      addTearDown(s.sync.dispose);
+      for (final id in ['u1', 'u2']) {
+        s.ch.push(AgentChunk(inReplyTo: id, delta: 'Same answer'));
+        s.ch.push(AgentDone(inReplyTo: id));
+        s.ch.push(AgentMessage(inReplyTo: id, text: 'Same answer'));
+      }
+      await _settle();
+
+      final rows = messages(s.epk);
+      expect(rows.map((r) => r.text), ['Same answer', 'Same answer']);
+      expect(rows.first.id, isNot(rows.last.id));
+    });
+
+    test('buffered segments retain tool order and next turn identity', () async {
+      final s = await setup();
+      addTearDown(s.conn.dispose);
+      addTearDown(s.sync.dispose);
+      s.ch.push(AgentChunk(inReplyTo: 'u1', delta: 'Before tool'));
+      s.ch.push(ToolRequest(toolCallId: 't1', tool: 'Read', args: {}));
+      s.ch.push(ToolResult(toolCallId: 't1', result: {'ok': true}));
+      s.ch.push(AgentChunk(inReplyTo: 'u1', delta: 'After '));
+      s.ch.push(AgentChunk(inReplyTo: 'u1', delta: 'tool'));
+      s.ch.push(AgentDone(inReplyTo: 'u1'));
+      s.ch.push(AgentMessage(
+        inReplyTo: 'u1',
+        text: 'Before tool\n\nAfter tool',
+      ));
+      // The next turn can start before the working-off debounce runs.
+      s.ch.push(AgentChunk(inReplyTo: 'u2', delta: 'Next'));
+      s.ch.push(AgentDone(inReplyTo: 'u2'));
+      s.ch.push(AgentMessage(inReplyTo: 'u2', text: 'Next answer'));
+      await _settle();
+
+      final rows = messages(s.epk);
+      expect(rows.map((r) => r.role), [
+        MsgRole.assistant, MsgRole.tool, MsgRole.assistant, MsgRole.assistant,
+      ]);
+      expect(rows.where((r) => r.role == MsgRole.assistant).map((r) => r.text),
+          ['Before tool', 'After tool', 'Next answer']);
+      expect(rows[1].tool?.status, ToolEventStatus.completed);
+      expect(s.sync.streaming, isNull);
+    });
+
+    test('idle transition preserves multi-segment completion identity', () async {
+      final s = await setup();
+      addTearDown(s.conn.dispose);
+      addTearDown(s.sync.dispose);
+      s.ch.push(AgentChunk(inReplyTo: 'u1', delta: 'Before tool'));
+      s.ch.push(ToolRequest(toolCallId: 't1', tool: 'Read', args: {}));
+      s.ch.push(ToolResult(toolCallId: 't1', result: {'ok': true}));
+      s.ch.push(AgentChunk(inReplyTo: 'u1', delta: 'After tool'));
+      s.ch.push(AgentDone(inReplyTo: 'u1'));
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+      expect(s.sync.isWorking, isFalse);
+
+      s.ch.push(AgentMessage(
+        inReplyTo: 'u1',
+        text: 'Before tool\n\nAfter tool',
+      ));
+      await _settle();
+      expect(
+        messages(s.epk).where((r) => r.role == MsgRole.assistant).map((r) => r.text),
+        ['Before tool', 'After tool'],
+      );
+    });
+
+    test('message-only turn cannot target a previous assistant row', () async {
+      final s = await setup();
+      addTearDown(s.conn.dispose);
+      addTearDown(s.sync.dispose);
+      s.ch.push(AgentMessage(inReplyTo: 'u1', text: 'Previous answer'));
+      await _settle();
+      s.ch.push(AgentDone(inReplyTo: 'u2'));
+      s.ch.push(AgentMessage(inReplyTo: 'u2', text: 'Next answer'));
+      await _settle();
+      expect(messages(s.epk).map((r) => r.text),
+          ['Previous answer', 'Next answer']);
+    });
+
+    test('same reply id in another room cannot reuse segment state', () async {
+      final s = await setup();
+      addTearDown(s.conn.dispose);
+      addTearDown(s.sync.dispose);
+      s.ch.push(AgentChunk(inReplyTo: 'u1', delta: 'Main answer'));
+      s.ch.push(AgentDone(inReplyTo: 'u1'));
+      await _settle();
+      final mainId = messages(s.epk).single.id;
+
+      await s.sync.activate(s.epk, 'other');
+      s.ch.push(AgentChunk(inReplyTo: 'u1', delta: 'Other'));
+      s.ch.push(AgentDone(inReplyTo: 'u1'));
+      s.ch.push(AgentMessage(inReplyTo: 'u1', text: 'Other answer'));
+      await _settle();
+
+      expect(messages(s.epk).map((r) => r.text), ['Main answer']);
+      final other = messages(s.epk, 'other');
+      expect(other.map((r) => r.text), ['Other answer']);
+      expect(other.single.id, isNot(mainId));
+    });
+  });
 
   test(
     'user_message echo writes one MessageRecord + updates the index',

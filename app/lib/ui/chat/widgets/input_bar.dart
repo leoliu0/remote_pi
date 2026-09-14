@@ -531,7 +531,6 @@ class _InputBarState extends State<InputBar> {
         _empty &&
         !hasImage &&
         canInteract &&
-        !widget.streaming &&
         !showStrip &&
         hasQuickActions;
 

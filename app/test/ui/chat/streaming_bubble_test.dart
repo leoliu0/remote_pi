@@ -14,15 +14,14 @@ void main() {
     );
   }
 
-  testWidgets('empty buffer shows thinking indicator and blinking cursor', (
+  testWidgets('empty buffer without workingLabel shows blinking cursor (no working text)', (
     tester,
   ) async {
     await pump(tester, const StreamingMessage(inReplyTo: 'x'));
-    await tester.pump(); // single frame — the cursor animation repeats forever
+    await tester.pump();
     expect(find.byKey(const Key('streaming-cursor')), findsOneWidget);
-    expect(find.text('Thinking & analyzing…'), findsOneWidget);
+    expect(find.byKey(const Key('thinking-indicator')), findsNothing);
   });
-
   testWidgets('cursor sits one line BELOW the response (not inline)', (
     tester,
   ) async {
@@ -39,7 +38,7 @@ void main() {
     expect(cursor.left, closeTo(md.left, 1));
   });
 
-  testWidgets('brief mode omits thinking indicator and strips thinking tags', (
+  testWidgets('brief mode strips thinking tags and hides indicator once visible text arrives', (
     tester,
   ) async {
     await tester.pumpWidget(
@@ -56,12 +55,38 @@ void main() {
       ),
     );
     await tester.pump();
-    expect(find.text('Thinking & analyzing…'), findsNothing);
+    expect(find.text('Working…'), findsNothing);
     expect(find.textContaining('visible reply'), findsOneWidget);
     expect(find.textContaining('internal reason'), findsNothing);
   });
 
-  testWidgets('brief mode with empty buffer omits thinking indicator', (
+  testWidgets('working turn with workingLabel shows interactive Stop button', (
+    tester,
+  ) async {
+    var cancelled = false;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: StreamingBubble(
+            streaming: const StreamingMessage(inReplyTo: 'x'),
+            brief: true,
+            isWorking: true,
+            workingLabel: 'Searching files…',
+            onCancel: () => cancelled = true,
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(find.byKey(const Key('thinking-indicator')), findsOneWidget);
+    expect(find.text('Searching files…'), findsOneWidget);
+    expect(find.text('Stop'), findsOneWidget);
+
+    await tester.tap(find.text('Stop'));
+    await tester.pump();
+    expect(cancelled, isTrue);
+  });
+  testWidgets('custom workingLabel is displayed in thinking indicator', (
     tester,
   ) async {
     await tester.pumpWidget(
@@ -70,11 +95,58 @@ void main() {
           body: StreamingBubble(
             streaming: StreamingMessage(inReplyTo: 'x'),
             brief: true,
+            isWorking: true,
+            workingLabel: 'Searching files…',
           ),
         ),
       ),
     );
     await tester.pump();
-    expect(find.text('Thinking & analyzing…'), findsNothing);
+    expect(find.byKey(const Key('thinking-indicator')), findsOneWidget);
+    expect(find.text('Searching files…'), findsOneWidget);
+  });
+
+  testWidgets('working turn without onCancel hides Stop button', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Scaffold(
+          body: StreamingBubble(
+            streaming: StreamingMessage(inReplyTo: 'x'),
+            brief: true,
+            isWorking: true,
+            workingLabel: 'Searching files…',
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(find.text('Searching files…'), findsOneWidget);
+    expect(find.text('Stop'), findsNothing);
+  });
+
+  testWidgets('finished stream with onCancel hides Stop button when isWorking is false', (
+    tester,
+  ) async {
+    var cancelled = false;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: StreamingBubble(
+            streaming: const StreamingMessage(
+              inReplyTo: 'x',
+              buffer: 'Finished streaming text',
+            ),
+            brief: true,
+            isWorking: false,
+            onCancel: () => cancelled = true,
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(find.text('Stop'), findsNothing);
+    expect(find.textContaining('Finished streaming text'), findsOneWidget);
   });
 }

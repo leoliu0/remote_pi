@@ -235,6 +235,24 @@ impl PeerRegistry {
         }
         by_room.into_values().collect()
     }
+    /// Returns all active rooms grouped by peer_id for all currently connected peers.
+    pub fn all_rooms(&self) -> HashMap<String, Vec<RoomMeta>> {
+        let lock = self.senders.lock().unwrap();
+        let mut result: HashMap<String, HashMap<String, RoomMeta>> = HashMap::new();
+        for ((p, _), v) in lock.iter() {
+            if let Some((_, meta, _)) = v.last() {
+                result
+                    .entry(p.clone())
+                    .or_default()
+                    .insert(meta.room_id.clone(), meta.clone());
+            }
+        }
+        result
+            .into_iter()
+            .map(|(p, rooms)| (p, rooms.into_values().collect()))
+            .collect()
+    }
+
 
     /// Broadcasts `msg` to every live connection at `(dest_peer, dest_room)`
     /// **except** the one whose conn_id equals `from_conn_id` (skip-sender).
@@ -730,5 +748,25 @@ mod tests {
             v["meta"]["working"], true,
             "absent `working` in a patch must not clear it"
         );
+    }
+
+    #[tokio::test]
+    async fn all_rooms_returns_active_rooms_grouped_by_peer() {
+        let reg = make_registry();
+        let peer1 = "peer_1".to_string();
+        let peer2 = "peer_2".to_string();
+
+        let (tx1, _) = mpsc::unbounded_channel::<Message>();
+        let (tx2, _) = mpsc::unbounded_channel::<Message>();
+        let (tx3, _) = mpsc::unbounded_channel::<Message>();
+
+        reg.register(peer1.clone(), make_meta("room_a"), tx1).await;
+        reg.register(peer1.clone(), make_meta("room_b"), tx2).await;
+        reg.register(peer2.clone(), make_meta("room_c"), tx3).await;
+
+        let all = reg.all_rooms();
+        assert_eq!(all.len(), 2);
+        assert_eq!(all.get(&peer1).unwrap().len(), 2);
+        assert_eq!(all.get(&peer2).unwrap().len(), 1);
     }
 }

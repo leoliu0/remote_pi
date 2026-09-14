@@ -12,6 +12,7 @@ import 'package:app/ui/chat/voice/viewmodels/voice_input_viewmodel.dart';
 import 'package:app/ui/chat/widgets/attach_sheet.dart';
 import 'package:app/ui/chat/widgets/input_bar.dart';
 import 'package:app/ui/chat/widgets/message_bubble.dart';
+import 'package:app/ui/chat/widgets/agent_markdown.dart';
 import 'package:app/ui/chat/widgets/streaming_bubble.dart';
 import 'package:app/ui/chat/widgets/tool_request_card.dart';
 import 'package:app/ui/chat/widgets/extension_ui_sheet.dart';
@@ -451,26 +452,33 @@ class _ChatPageState extends State<ChatPage> {
         onAction: () => context.go('/pair'),
       ),
       ChatReady(:final messages, :final streaming) => () {
-        final visible = toolDisplay == ToolCallDisplay.hidden
-            ? messages.where((m) => m is! ToolEvent).toList()
-            : toolDisplay == ToolCallDisplay.brief
-                ? messages.where((m) {
-                    if (m is! ToolEvent) return true;
-                    final name = m.tool.toLowerCase();
-                    const readOnlyTools = {
-                      'read',
-                      'grep',
-                      'glob',
-                      'find',
-                      'ls',
-                      'view',
-                      'mcp__read',
-                      'mcp__grep',
-                      'mcp__glob',
-                    };
-                    return !readOnlyTools.contains(name);
-                  }).toList()
-                : messages;
+        final isBriefOrHidden = toolDisplay != ToolCallDisplay.full;
+        final visible = messages.where((m) {
+          if (m is ToolEvent) {
+            if (toolDisplay == ToolCallDisplay.hidden) return false;
+            if (toolDisplay == ToolCallDisplay.brief) {
+              final name = m.tool.toLowerCase();
+              const readOnlyTools = {
+                'read',
+                'grep',
+                'glob',
+                'find',
+                'ls',
+                'view',
+                'mcp__read',
+                'mcp__grep',
+                'mcp__glob',
+              };
+              return !readOnlyTools.contains(name);
+            }
+            return true;
+          }
+          if (m is AssistantMsg) {
+            final text = isBriefOrHidden ? stripThinkingTrace(m.text) : m.text;
+            return text.trim().isNotEmpty;
+          }
+          return true;
+        }).toList();
         // Empty body → the default placeholder (Pi brand icon + "Nothing
         // here"), shown whenever there's nothing to render — including while
         // reconnecting (the reconnect handshake never swaps the body).
@@ -480,13 +488,45 @@ class _ChatPageState extends State<ChatPage> {
             message: 'Nothing here',
           );
         }
+        String? workingLabel;
+        if (vm.isWorking) {
+          for (final m in messages.reversed) {
+            if (m is UserMsg) {
+              // Don't leak older turns' tool intents into a fresh turn
+              break;
+            }
+            if (m is ToolEvent) {
+              if (m.args is Map &&
+                  m.args['i'] is String &&
+                  (m.args['i'] as String).trim().isNotEmpty) {
+                workingLabel = (m.args['i'] as String).trim();
+              } else {
+                workingLabel = switch (m.tool.toLowerCase()) {
+                  'read' => 'Reading file…',
+                  'bash' => 'Running command…',
+                  'edit' => 'Editing file…',
+                  'write' => 'Writing file…',
+                  'grep' => 'Searching files…',
+                  'glob' => 'Finding files…',
+                  'ask' => 'Waiting for input…',
+                  _ => '${m.tool}…',
+                };
+              }
+              break;
+            }
+          }
+        }
+        final cancelId = vm.cancelTargetId;
+        final onCancel = cancelId != null ? () => vm.cancel(cancelId) : null;
         return _MessageList(
           controller: _scrollController,
           messages: visible,
           streaming: streaming,
           isWorking: vm.isWorking,
           onDecide: (id, decision) => vm.approveTool(id, decision),
-          briefToolCalls: toolDisplay == ToolCallDisplay.brief,
+          briefToolCalls: toolDisplay != ToolCallDisplay.full,
+          workingLabel: workingLabel,
+          onCancel: onCancel,
         );
       }(),
     };
@@ -678,6 +718,8 @@ class _MessageList extends StatelessWidget {
   final void Function(String, ApproveDecision) onDecide;
   final bool briefToolCalls;
 
+  final String? workingLabel;
+
   const _MessageList({
     this.controller,
     required this.messages,
@@ -685,11 +727,21 @@ class _MessageList extends StatelessWidget {
     required this.isWorking,
     required this.onDecide,
     this.briefToolCalls = false,
+    this.workingLabel,
+    this.onCancel,
   });
+
+  final VoidCallback? onCancel;
 
   @override
   Widget build(BuildContext context) {
-    final hasActiveTurn = streaming != null || isWorking;
+    final hasActiveBubble = (streaming != null &&
+            (briefToolCalls
+                    ? stripThinkingTrace(streaming!.buffer)
+                    : streaming!.buffer)
+                .isNotEmpty) ||
+        (isWorking && (workingLabel != null || streaming != null));
+    final hasActiveTurn = hasActiveBubble;
     final totalCount = messages.length + (hasActiveTurn ? 1 : 0);
 
     return ListView.separated(
@@ -706,6 +758,8 @@ class _MessageList extends StatelessWidget {
               streaming: streaming,
               isWorking: isWorking,
               brief: briefToolCalls,
+              workingLabel: workingLabel,
+              onCancel: onCancel,
             ),
           );
         }

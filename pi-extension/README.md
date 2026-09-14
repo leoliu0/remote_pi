@@ -109,6 +109,16 @@ from your phone. The phone and the Pi process find each other through a
 **relay**: a small WebSocket server that ferries messages between them.
 Pairing is one-time and per device, via QR code.
 
+Mobile text, image, and drained queued prompts check the live session's
+`isIdle()` synchronously immediately before SDK handoff, after image preparation.
+Idle sends omit `deliverAs` so Oh My Pi starts a turn instead of stranding it in
+an explicit queue. Confirmed busy sends use `deliverAs: "steer"` for compatibility
+with upstream Pi 0.79. Missing state falls back to OMP's default start/auto-steer
+behavior; room metadata and the mobile wire mode never select SDK delivery.
+Failed handoffs are not retried with alternate modes because acceptance may
+precede an error. A failed queued item remains editable but blocks automatic
+draining until the mobile client replaces or clears it.
+
 Communication uses WebSocket over TLS to the relay. Fields such as `ct` are
 wire containers, not a systemwide end-to-end confidentiality guarantee: current
 Pi-forward, cross-PC, app, and control envelopes visible to the relay are not
@@ -423,6 +433,7 @@ real name to the peer.
 | `/remote-pi relay [start\|stop\|status]` | Relay-only control — leaves local mesh membership untouched (no verb = toggle) |
 | `/remote-pi relay url <url>` | Same as `set-relay` |
 | `/remote-pi config` | Show the effective relay URL and its source (env / config / default) |
+| `/remote-pi web` | Open the web client in browser (auto-detects local server on port 3000, falls back to hosted) |
 
 ### Daemon fleet (one supervisor, N background Pis — see [Daemon mode](#daemon-mode))
 

@@ -124,6 +124,7 @@ function getOrCreateRelay(sessionId: string, targetEpk: string, relayUrl: string
 
     ws.on("open", () => {
       state!.connected = true;
+      broadcast(state!, { type: "init", connected: true, presence: state!.presence });
       ws.send(JSON.stringify({ type: "hello", pubkey: pubKeyB64 }));
     });
 
@@ -139,16 +140,18 @@ function getOrCreateRelay(sessionId: string, targetEpk: string, relayUrl: string
           const sigB64 = Buffer.from(sig).toString("base64");
           ws.send(JSON.stringify({ type: "auth", sig: sigB64 }));
           state!.authenticated = true;
+          broadcast(state!, { type: "init", connected: true, authenticated: true, presence: state!.presence });
           setTimeout(() => {
             const subscribeEpks = Array.from(new Set([
               state!.targetEpk,
               "vTZygijDajc/5j3QC55NXvDI+Hcigl5tG3QZjQV0wAc=",
+              "qcy7AN3OQ6NHuHwQyZebY67WL0u9k6X2mYUhfy2WkHY=",
               "B5qrLfEnAjdF1X3lcAzpJ/RqaknlWcEuqV5e/SZYg0Y=",
             ]));
             ws.send(JSON.stringify({ type: "subscribe_presence", peers: subscribeEpks }));
             ws.send(JSON.stringify({ type: "subscribe_rooms", peers: subscribeEpks }));
             ws.send(JSON.stringify({ type: "presence_check", peers: subscribeEpks }));
-            ws.send(JSON.stringify({ type: "rooms_check", peers: subscribeEpks }));
+            ws.send(JSON.stringify({ type: "rooms_check" }));
             // Send session_sync inner
             const syncPayload = { type: "session_sync", id: `sync_${Date.now()}`, limit: 1000 };
             const outer = {
@@ -261,6 +264,7 @@ function getOrCreateRelay(sessionId: string, targetEpk: string, relayUrl: string
     ws.on("close", () => {
       state!.connected = false;
       state!.authenticated = false;
+      broadcast(state!, { type: "init", connected: false, presence: "offline" });
       broadcast(state!, { type: "presence", presence: "offline" });
     });
   } catch (err: any) {

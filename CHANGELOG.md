@@ -16,6 +16,14 @@ one Pi" into a **mesh of coding agents** running on multiple machines, with
 the phone acting purely as the initial authenticator. Covers plans 23, 24, 25,
 and 27 (see [`plan/`](plan/) directory for design history).
 
+### Fixed
+
+- Mobile prompts now inject directly into the interactive terminal editor and input pipeline (`_tryExecuteTerminalInput`), executing natively as interactive turns or steers instead of bypassing the prompt and steering background subagents.
+- Mobile prompts no longer remain queued without starting an idle OMP session.
+- Fixed queue draining head-of-line blocking on wake failures in `pi-extension`.
+- Eliminated vertical gaps and leaked reasoning traces in mobile chat by filtering empty assistant turns and stripping unclosed `<think>` blocks in finalized messages.
+- Added authentic terminal Braille spinner (`⠋⠙⠹...`), text shimmer wave animation, and inline interactive `[■ Stop]` cancel button to the mobile working indicator.
+- Added global rooms discovery to relay (`all_rooms`) for empty-peer checks and updated web client relay bridge connection handling.
 ### Added
 
 #### Owner-key sync (plan/23)

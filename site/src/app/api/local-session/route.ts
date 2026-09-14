@@ -12,14 +12,15 @@ ed.hashes.sha512 = (...messages: Uint8Array[]) => sha512(ed.etc.concatBytes(...m
 
 const PEER_DEVICES: Record<string, string> = {
   "vTZygijDajc/5j3QC55NXvDI+Hcigl5tG3QZjQV0wAc=": "x3d",
-  "B5qrLfEnAjdF1X3lcAzpJ/RqaknlWcEuqV5e/SZYg0Y=": "uts",
+  "qcy7AN3OQ6NHuHwQyZebY67WL0u9k6X2mYUhfy2WkHY=": "uts",
+  "B5qrLfEnAjdF1X3lcAzpJ/RqaknlWcEuqV5e/SZYg0Y=": "uts (old)",
 };
 
 function getKnownPeers(): Array<{ epk: string; device: string }> {
   const homeDir = os.homedir();
   const peers: Array<{ epk: string; device: string }> = [
     { epk: "vTZygijDajc/5j3QC55NXvDI+Hcigl5tG3QZjQV0wAc=", device: "x3d" },
-    { epk: "B5qrLfEnAjdF1X3lcAzpJ/RqaknlWcEuqV5e/SZYg0Y=", device: "uts" },
+    { epk: "qcy7AN3OQ6NHuHwQyZebY67WL0u9k6X2mYUhfy2WkHY=", device: "uts" },
   ];
 
   try {
@@ -77,7 +78,7 @@ async function queryRelayPeers(
   const roomsByPeer: Record<string, RelayRoom[]> = {};
   const presenceByPeer: Record<string, boolean> = {};
   const roomsReceived = new Set<string>();
-
+  let relayConnected = false;
   const snapshot = (connected: boolean): MultiQueryResult => ({
     isRelayConnected: connected,
     roomsByPeer: { ...roomsByPeer },
@@ -94,11 +95,11 @@ async function queryRelayPeers(
   };
 
   const timeout = setTimeout(() => {
-    finish(snapshot(roomsReceived.size > 0));
+    finish(snapshot(relayConnected || roomsReceived.size > 0));
   }, 1500);
 
   ws.on("error", () => {
-    if (roomsReceived.size > 0) {
+    if (relayConnected || roomsReceived.size > 0) {
       finish(snapshot(true));
     } else {
       finish({
@@ -112,6 +113,7 @@ async function queryRelayPeers(
 
   ws.on("open", () => {
     ws.send(JSON.stringify({ type: "hello", pubkey: clientPubB64 }));
+    relayConnected = true;
   });
 
   ws.on("message", async (data: Buffer | string) => {
@@ -121,12 +123,14 @@ async function queryRelayPeers(
         const nonce = new Uint8Array(Buffer.from(msg.nonce, "base64"));
         const sig = await ed.signAsync(nonce, clientPriv);
         const sigB64 = Buffer.from(sig).toString("base64");
+        relayConnected = true;
         ws.send(JSON.stringify({ type: "auth", sig: sigB64 }));
 
+        // Subscribe and check rooms across all peers on the relay
         ws.send(JSON.stringify({ type: "subscribe_presence", peers: epkList }));
         ws.send(JSON.stringify({ type: "subscribe_rooms", peers: epkList }));
         ws.send(JSON.stringify({ type: "presence_check", peers: epkList }));
-        ws.send(JSON.stringify({ type: "rooms_check", peers: epkList }));
+        ws.send(JSON.stringify({ type: "rooms_check" }));
       } else if (msg.type === "presence") {
         if (Array.isArray(msg.states)) {
           for (const s of msg.states) {
@@ -167,18 +171,21 @@ export async function GET() {
     const sessions: any[] = [];
     const seenRoomIds = new Set<string>();
 
-    // 1. Live sessions from relay for all machines (x3d, uts, etc.)
-    for (const p of knownPeers) {
-      const rooms = roomsByPeer[p.epk] || [];
+    // 1. Live sessions from relay for all machines (x3d, uts, and any other peer on relay)
+    const allRelayPeers = new Set([...knownPeers.map((p) => p.epk), ...Object.keys(roomsByPeer)]);
+    for (const epk of allRelayPeers) {
+      const peerMeta = knownPeers.find((p) => p.epk === epk);
+      const device = peerMeta?.device || PEER_DEVICES[epk] || "Remote PC";
+      const rooms = roomsByPeer[epk] || [];
       for (const r of rooms) {
         seenRoomIds.add(r.room_id);
         const isWorking = !!r.working;
         const status: "working" | "online" | "offline" = isWorking ? "working" : "online";
         sessions.push({
-          id: `${p.epk}_${r.room_id}`,
+          id: `${epk}_${r.room_id}`,
           name: r.name || (r.cwd ? path.basename(r.cwd) : r.room_id),
-          device: p.device,
-          remoteEpk: p.epk,
+          device,
+          remoteEpk: epk,
           relayUrl,
           roomId: r.room_id,
           cwd: r.cwd,

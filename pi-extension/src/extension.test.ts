@@ -223,6 +223,7 @@ const {
   _findMostRecentSessionFile,
   _loadMessagesFromJsonlFile,
   _setCurrentModelForTest,
+  _pollModelAndThinkingChangesForTest,
   _setPiForTest,
   _getCurrentTurnIdForTest,
   _getPendingSteerIdsForTest,
@@ -245,6 +246,8 @@ const {
   CTRL_PREFIX,
   _isSubagentSession,
   _getDisposedForTest,
+  _tryExecuteTerminalSlashCommand,
+  _tryExecuteTerminalInput,
 } = indexModule;
 const { acquireCwdLock } = await import("./session/cwd_lock.js");
 
@@ -381,10 +384,12 @@ describe("extension default export", () => {
     (extension as ExtensionFactory)(pi);
     // 8 plan-25 + 2 daemon registry (W1) + 6 fleet ops (W2) + 2 install (W3)
     // + 1 cross-PC inventory (plan-25 W D) + 1 cron (plan-39) + 1 rename (plan/41)
-    // + 1 relay control (issue #119) + 11 /rc commands.
-    expect(registeredCommands).toHaveLength(34);
+    // + 1 relay control (issue #119) + 2 web client (remote-pi web, rc web) + 11 /rc commands.
+    expect(registeredCommands).toHaveLength(36);
     expect(registeredCommands).toContain("rc");
     expect(registeredCommands).toContain("rc status");
+    expect(registeredCommands).toContain("rc web");
+    expect(registeredCommands).toContain("remote-pi web");
     // without it every `/remote-pi relay …` silently reprinted the status panel.
     expect(registeredCommands).toContain("remote-pi relay");
     expect(registeredCommands).toContain("remote-pi config");
@@ -406,6 +411,15 @@ describe("extension default export", () => {
     expect(typeof rename).toBe("function");
     // Empty arg → _renameAgent no-ops (same contract as the control channel).
     await expect(rename("", makeMockCtx())).resolves.toBeUndefined();
+  });
+  test("/rc web and /remote-pi web are registered and dispatch", async () => {
+    const rcWeb = captureHandler("rc web");
+    const remotePiWeb = captureHandler("remote-pi web");
+    expect(typeof rcWeb).toBe("function");
+    expect(typeof remotePiWeb).toBe("function");
+    const ctx = makeMockCtx();
+    await expect(rcWeb("hosted", ctx)).resolves.toBeUndefined();
+    expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("https://remote-pi.jacobmoura.work/web"), "info");
   });
 });
 
@@ -1128,6 +1142,33 @@ function captureEventHarness(): {
   };
 }
 
+type MobileContent = Parameters<ExtensionAPI["sendUserMessage"]>[0];
+
+function mobileSdkHarness(host: "omp" | "upstream" = "omp") {
+  // OMP AgentSession.sendUserMessage: explicit modes queue even when idle;
+  // omitted mode starts idle or auto-steers busy. Do not model it as a no-op.
+  const sdk = {
+    busy: false,
+    started: [] as MobileContent[],
+    queued: [] as MobileContent[],
+    sendMessage: () => undefined,
+    sendUserMessage(content: MobileContent, options?: { deliverAs?: "steer" | "followUp" }) {
+      // Upstream 0.79 prompt() rejects busy sends without a streaming mode;
+      // unlike OMP, explicit modes still start a turn when idle.
+      if (host === "upstream" && sdk.busy && !options?.deliverAs) {
+        throw new Error("Agent is already processing. Specify streamingBehavior.");
+      }
+      if (sdk.busy || (host === "omp" && options?.deliverAs)) {
+        sdk.queued.push(content);
+      } else {
+        sdk.started.push(content);
+        sdk.busy = true;
+      }
+    },
+  };
+  return sdk;
+}
+
 function captureMessageRenderer(): {
   getRenderer(): (message: { details?: unknown }, options: unknown, theme: unknown) => unknown;
 } {
@@ -1391,6 +1432,168 @@ describe("multi-channel broadcast (W2D)", () => {
   // App side renders from the echo, not from local optimistic state — keeps
   // every paired device's session view bit-identical.
 
+  describe("mobile SDK delivery regression", () => {
+    test.each(["text", "image", "stale-steer", "queued"] as const)(
+      "%s starts an idle SDK turn rather than stranding it in a queue",
+      async (kind) => {
+        await _pairForTest("ownerA__1234567890");
+        const sdk = mobileSdkHarness();
+        _setPiForTest(sdk);
+        relayRef.current!.emit("message", makeInnerLine("ownerA__1234567890", {
+          type: kind === "queued" ? "queued_message_set" : "user_message",
+          id: "wake-idle",
+          text: "wake the terminal",
+          ...(kind === "stale-steer" ? { streaming_behavior: "steer" } : {}),
+          ...(kind === "image" ? { images: [{ data: "QUJD", mime: "image/png" }] } : {}),
+        }));
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        expect(sdk.started).toEqual([kind === "image" ? [
+          { type: "image", data: "QUJD", mimeType: "image/png" },
+          { type: "text", text: "wake the terminal" },
+        ] : "wake the terminal"]);
+        expect(sdk.queued).toEqual([]);
+      },
+    );
+
+    test("SDK busy state steers once even when the extension mirror is idle", async () => {
+      await _pairForTest("ownerA__1234567890");
+      const sdk = mobileSdkHarness();
+      sdk.busy = true;
+      _setPiForTest(sdk);
+      relayRef.current!.emit("message", makeInnerLine("ownerA__1234567890", {
+        type: "user_message", id: "wake-busy", text: "adjust the running turn",
+      }));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(sdk.started).toEqual([]);
+      expect(sdk.queued).toEqual(["adjust the running turn"]);
+    });
+
+    test("a rejection after acceptance never resends the mobile prompt", async () => {
+      await _pairForTest("ownerA__1234567890");
+      const accepted: MobileContent[] = [];
+      _setPiForTest({
+        sendMessage: () => undefined,
+        async sendUserMessage(content: MobileContent) {
+          accepted.push(content);
+          throw new Error("provider failed after accepting prompt");
+        },
+      });
+      const sendsBefore = relayRef.current!.send.mock.calls.length;
+      relayRef.current!.emit("message", makeInnerLine("ownerA__1234567890", {
+        type: "user_message", id: "wake-failed", text: "do not duplicate",
+      }));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(accepted).toEqual(["do not duplicate"]);
+      const sent = relayRef.current!.send.mock.calls.slice(sendsBefore)
+        .map((call) => decodeSentCt(call[0] as string).inner);
+      expect(sent).toContainEqual(expect.objectContaining({
+        type: "error", in_reply_to: "wake-failed", code: "internal_error",
+      }));
+      expect(sent.some((message) => message.type === "user_message")).toBe(false);
+    });
+
+    test("a failed queued handoff waits for an explicit mobile edit before retrying", async () => {
+      await _pairForTest("ownerA__1234567890");
+      const events = captureEventHarness();
+      const accepted: MobileContent[] = [];
+      _setPiForTest({
+        sendMessage: () => undefined,
+        async sendUserMessage(content: MobileContent) {
+          accepted.push(content);
+          if (accepted.length === 1) throw new Error("failed after acceptance");
+        },
+      });
+      relayRef.current!.emit("message", makeInnerLine("ownerA__1234567890", {
+        type: "queued_message_set", id: "queue-failed", text: "run once",
+      }));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      events.handler("agent_end")({ type: "agent_end" });
+      events.handler("turn_end")({ type: "turn_end", turnIndex: 0, timestamp: 0 });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(accepted).toEqual(["run once"]);
+      relayRef.current!.emit("message", makeInnerLine("ownerA__1234567890", {
+        type: "queued_message_set", id: "queue-failed", text: "explicit retry",
+      }));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(accepted).toEqual(["run once", "explicit retry"]);
+    });
+  });
+
+  describe("mobile live-state compatibility regression", () => {
+    afterEach(() => {
+      const onSessionStart = captureEventHandler("session_start");
+      onSessionStart({ type: "session_start" }, {});
+    });
+
+    test("old Pi busy delivery uses fresh isIdle without yielding or trusting the idle mirror", async () => {
+      const staleCtx = { ...makeMockCtx(), isIdle: () => true };
+      await _pairForTestWithCtx("ownerA__1234567890", staleCtx);
+      const sdk = mobileSdkHarness("upstream");
+      sdk.busy = true;
+      const onSessionStart = captureEventHandler("session_start");
+      onSessionStart({ type: "session_start" }, {
+        isIdle() {
+          // Any await between this authoritative read and dispatch loses
+          // the current busy state and changes this send into an idle turn.
+          queueMicrotask(() => { sdk.busy = false; });
+          return false;
+        },
+      });
+      _setPiForTest(sdk);
+      expect(_getCurrentTurnIdForTest()).toBeNull();
+      relayRef.current!.emit("message", makeInnerLine("ownerA__1234567890", {
+        type: "user_message", id: "old-pi-busy", text: "adjust the running turn",
+      }));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(sdk.started).toEqual([]);
+      expect(sdk.queued).toEqual(["adjust the running turn"]);
+    });
+
+    test.each([
+      { host: "upstream" as const, before: false, after: true },
+      { host: "omp" as const, before: true, after: false },
+    ])("$host rechecks live state after asynchronous image preparation", async ({ host, before, after }) => {
+      await _pairForTest("ownerA__1234567890");
+      const sdk = mobileSdkHarness(host);
+      sdk.busy = before;
+      const conversion = deferred<{ data: string; mimeType: string }>();
+      _convertToPngMock.mockReturnValueOnce(conversion.promise);
+      const onSessionStart = captureEventHandler("session_start");
+      onSessionStart({ type: "session_start" }, { isIdle: () => !sdk.busy });
+      _setPiForTest(sdk);
+      relayRef.current!.emit("message", makeInnerLine("ownerA__1234567890", {
+        type: "user_message", id: "state-changing-image", text: "photo",
+        images: [{ data: "QUJD", mime: "image/jpeg" }],
+      }));
+      await vi.waitFor(() => expect(_convertToPngMock).toHaveBeenCalled());
+      sdk.busy = after;
+      conversion.resolve({ data: "iVBORw0KGgo=", mimeType: "image/png" });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      const content = [
+        { type: "image", data: "QUJD", mimeType: "image/jpeg" },
+        { type: "text", text: "photo" },
+      ];
+      expect(sdk.started).toEqual(after ? [] : [content]);
+      expect(sdk.queued).toEqual(after ? [content] : []);
+    });
+
+    test("OMP idle runtime ignores a stale busy room mirror and wire steer", async () => {
+      await _pairForTest("ownerA__1234567890");
+      const sdk = mobileSdkHarness();
+      const onTurnStart = captureEventHandler("turn_start");
+      onTurnStart({ type: "turn_start", turnIndex: 0, timestamp: 0 }, {
+        isIdle: () => !sdk.busy,
+      });
+      _setPiForTest(sdk);
+      relayRef.current!.emit("message", makeInnerLine("ownerA__1234567890", {
+        type: "user_message", id: "stale-busy", text: "start now", streaming_behavior: "steer",
+      }));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(sdk.started).toEqual(["start now"]);
+      expect(sdk.queued).toEqual([]);
+    });
+  });
+
   test("user_message from A → rebroadcast reaches both A and B (with id preserved)", async () => {
     await _pairForTest("ownerA__1234567890");
     await _pairAdditionalForTest("ownerB__abcdefghij", "Android");
@@ -1483,8 +1686,8 @@ describe("multi-channel broadcast (W2D)", () => {
   test("queued_message_set while idle drains immediately as a normal user turn", async () => {
     await _pairForTest("ownerA__1234567890");
     await _pairAdditionalForTest("ownerB__abcdefghij", "Android");
-    const sendUserMessage = vi.fn();
-    _setPiForTest({ sendUserMessage, sendMessage: () => undefined });
+    const sdk = mobileSdkHarness();
+    _setPiForTest(sdk);
     const sendsBefore = relayRef.current!.send.mock.calls.length;
 
     relayRef.current!.emit("message", JSON.stringify({
@@ -1495,7 +1698,8 @@ describe("multi-channel broadcast (W2D)", () => {
     }));
     await new Promise<void>((r) => setImmediate(r));
 
-    expect(sendUserMessage).toHaveBeenCalledWith("after this", { deliverAs: "steer" });
+    expect(sdk.started).toEqual(["after this"]);
+    expect(sdk.queued).toEqual([]);
     expect(_getCurrentTurnIdForTest()).toBe("q-idle");
     const sent = relayRef.current!.send.mock.calls.slice(sendsBefore)
       .map((c) => c[0] as string).map(decodeSentCt);
@@ -1512,8 +1716,8 @@ describe("multi-channel broadcast (W2D)", () => {
   test("queued drain waits for both agent_end and turn_end regardless of ordering", async () => {
     await _pairForTest("ownerA__1234567890");
     const harness = captureEventHarness();
-    const sendUserMessage = vi.fn();
-    _setPiForTest({ sendUserMessage, sendMessage: () => undefined });
+    const sdk = mobileSdkHarness();
+    _setPiForTest(sdk);
 
     harness.handler("input")({ type: "input", text: "primary", source: "interactive" });
     harness.handler("turn_start")({ type: "turn_start", turnIndex: 0, timestamp: 0 });
@@ -1524,18 +1728,20 @@ describe("multi-channel broadcast (W2D)", () => {
       ct: Buffer.from(JSON.stringify({ type: "queued_message_set", id: "q-order-a", text: "after A" })).toString("base64"),
     }));
     await new Promise<void>((r) => setImmediate(r));
-    expect(sendUserMessage).not.toHaveBeenCalledWith("after A", undefined);
+    expect(sdk.started).toEqual([]);
+    expect(sdk.queued).toEqual([]);
 
     harness.handler("agent_end")({ type: "agent_end" });
-    expect(sendUserMessage).not.toHaveBeenCalledWith("after A", { deliverAs: "steer" });
+    expect(sdk.started).toEqual([]);
     harness.handler("turn_end")({ type: "turn_end", turnIndex: 0, timestamp: 0 });
-    expect(sendUserMessage).toHaveBeenCalledWith("after A", { deliverAs: "steer" });
+    expect(sdk.started).toEqual(["after A"]);
+    expect(sdk.queued).toEqual([]);
     const statesA = relayRef.current!.send.mock.calls.slice(sendsBeforeA)
       .map((c) => c[0] as string).map(decodeSentCt)
       .filter((d) => d.inner.type === "queued_message_state");
     expect(statesA.at(-1)?.inner.items).toEqual([]);
 
-    sendUserMessage.mockClear();
+    sdk.busy = false;
     harness.handler("input")({ type: "input", text: "primary 2", source: "interactive" });
     harness.handler("turn_start")({ type: "turn_start", turnIndex: 1, timestamp: 1 });
     await new Promise<void>((r) => setImmediate(r));
@@ -1546,9 +1752,10 @@ describe("multi-channel broadcast (W2D)", () => {
     }));
     await new Promise<void>((r) => setImmediate(r));
     harness.handler("turn_end")({ type: "turn_end", turnIndex: 1, timestamp: 1 });
-    expect(sendUserMessage).not.toHaveBeenCalledWith("after B", { deliverAs: "steer" });
+    expect(sdk.started).toEqual(["after A"]);
     harness.handler("agent_end")({ type: "agent_end" });
-    expect(sendUserMessage).toHaveBeenCalledWith("after B", { deliverAs: "steer" });
+    expect(sdk.started).toEqual(["after A", "after B"]);
+    expect(sdk.queued).toEqual([]);
     const statesB = relayRef.current!.send.mock.calls.slice(sendsBeforeB)
       .map((c) => c[0] as string).map(decodeSentCt)
       .filter((d) => d.inner.type === "queued_message_state");
@@ -1586,6 +1793,44 @@ describe("multi-channel broadcast (W2D)", () => {
       text: "after fail",
       items: [expect.objectContaining({ id: "q-fail", text: "after fail" })],
     });
+  });
+
+  test("queued drain executes via terminal input injection when terminal is available", async () => {
+    await _pairForTest("ownerA__1234567890");
+    const sessionStart = captureEventHandler("session_start");
+    let editorText = "";
+    const mockCtx = {
+      ui: {
+        notify: vi.fn(),
+        getEditorText: vi.fn(() => editorText),
+        setEditorText: vi.fn((text: string) => {
+          editorText = text;
+        }),
+      },
+    };
+    sessionStart({ type: "session_start" }, mockCtx as unknown as Parameters<typeof sessionStart>[1]);
+
+    const dataListener = vi.fn();
+    process.stdin.on("data", dataListener);
+    try {
+      const sendsBefore = relayRef.current!.send.mock.calls.length;
+      relayRef.current!.emit("message", JSON.stringify({
+        peer: "ownerA__1234567890",
+        ct: Buffer.from(JSON.stringify({
+          type: "queued_message_set", id: "q-term", text: "prompt from queue",
+        })).toString("base64"),
+      }));
+      await new Promise<void>((r) => setImmediate(r));
+
+      expect(mockCtx.ui.setEditorText).toHaveBeenCalledWith("prompt from queue");
+      expect(dataListener).toHaveBeenCalledWith("\r");
+
+      const sent = relayRef.current!.send.mock.calls.slice(sendsBefore)
+        .map((c) => c[0] as string).map(decodeSentCt);
+      expect(sent.some((d) => d.inner.type === "user_message" && d.inner.id === "q-term")).toBe(true);
+    } finally {
+      process.stdin.removeListener("data", dataListener);
+    }
   });
 
   test("plan/30: user_message with an image → save preview + send metadata-only custom message", async () => {
@@ -1942,11 +2187,8 @@ describe("multi-channel broadcast (W2D)", () => {
 
   test("plan/30: user_message without images → no `images` key on the echo (text path unchanged)", async () => {
     await _pairForTest("ownerA__1234567890");
-    const sendUserMessage = vi.fn();
-    _setPiForTest({
-      sendUserMessage,
-      sendMessage: () => undefined,
-    });
+    const sdk = mobileSdkHarness();
+    _setPiForTest(sdk);
     const sendsBefore = relayRef.current!.send.mock.calls.length;
     relayRef.current!.emit("message", JSON.stringify({
       peer: "ownerA__1234567890",
@@ -1955,7 +2197,7 @@ describe("multi-channel broadcast (W2D)", () => {
       })).toString("base64"),
     }));
     await new Promise<void>((r) => setImmediate(r));
-    expect(sendUserMessage).toHaveBeenCalledWith("hi", { deliverAs: "steer" });
+    expect(sdk.started).toEqual(["hi"]);
     const sent = relayRef.current!.send.mock.calls.slice(sendsBefore)
       .map((c) => c[0] as string).map(decodeSentCt);
     const echo = sent.find((d) => d.inner.type === "user_message");
@@ -1965,18 +2207,16 @@ describe("multi-channel broadcast (W2D)", () => {
   });
 
   test(
-    "plan/43: active steering calls sendUserMessage(deliverAs='steer')",
+    "plan/43: active steering queues once and echoes the mobile steer",
     async () => {
       await _pairForTest("ownerA__1234567890");
       const onInput = captureEventHandler("input");
       onInput({ type: "input", text: "primary", source: "interactive" });
       await new Promise<void>((r) => setImmediate(r));
 
-      const sendUserMessage = vi.fn();
-      _setPiForTest({
-        sendUserMessage,
-        sendMessage: () => undefined,
-      });
+      const sdk = mobileSdkHarness();
+      sdk.busy = true;
+      _setPiForTest(sdk);
       const sendsBefore = relayRef.current!.send.mock.calls.length;
 
       relayRef.current!.emit("message", JSON.stringify({
@@ -1990,8 +2230,8 @@ describe("multi-channel broadcast (W2D)", () => {
       }));
       await new Promise<void>((r) => setImmediate(r));
 
-      expect(sendUserMessage).toHaveBeenCalledTimes(1);
-      expect(sendUserMessage).toHaveBeenCalledWith("refine this", { deliverAs: "steer" });
+      expect(sdk.started).toEqual([]);
+      expect(sdk.queued).toEqual(["refine this"]);
       const sent = relayRef.current!.send.mock.calls.slice(sendsBefore)
         .map((c) => c[0] as string).map(decodeSentCt);
       const echo = sent.find((d) => d.inner.type === "user_message");
@@ -2129,14 +2369,11 @@ describe("multi-channel broadcast (W2D)", () => {
     expect(consumed.map((d) => (d.inner as { id: string }).id)).toEqual(["steer-1"]);
   });
 
-  test("plan/43: steering without a known turn id still reaches SDK as steer", async () => {
+  test("plan/43: steering without a known turn id starts an idle SDK and preserves correlation", async () => {
     await _pairForTest("ownerA__1234567890");
     expect(_getCurrentTurnIdForTest()).toBeNull();
-    const sendUserMessage = vi.fn();
-    _setPiForTest({
-      sendUserMessage,
-      sendMessage: () => undefined,
-    });
+    const sdk = mobileSdkHarness();
+    _setPiForTest(sdk);
     const sendsBefore = relayRef.current!.send.mock.calls.length;
 
     relayRef.current!.emit("message", JSON.stringify({
@@ -2150,8 +2387,8 @@ describe("multi-channel broadcast (W2D)", () => {
     }));
     await new Promise<void>((r) => setImmediate(r));
 
-    expect(sendUserMessage).toHaveBeenCalledTimes(1);
-    expect(sendUserMessage).toHaveBeenCalledWith("refine while stale", { deliverAs: "steer" });
+    expect(sdk.started).toEqual(["refine while stale"]);
+    expect(sdk.queued).toEqual([]);
     expect(_getCurrentTurnIdForTest()).toBe("msg-stale-steer");
     const sent = relayRef.current!.send.mock.calls.slice(sendsBefore)
       .map((c) => c[0] as string).map(decodeSentCt);
@@ -2169,11 +2406,9 @@ describe("multi-channel broadcast (W2D)", () => {
     const onTurnStart = captureEventHandler("turn_start");
     onTurnStart({ type: "turn_start", turnIndex: 0, timestamp: 0 });
     expect(_getCurrentTurnIdForTest()).toBeNull();
-    const sendUserMessage = vi.fn();
-    _setPiForTest({
-      sendUserMessage,
-      sendMessage: () => undefined,
-    });
+    const sdk = mobileSdkHarness();
+    sdk.busy = true;
+    _setPiForTest(sdk);
     const sendsBefore = relayRef.current!.send.mock.calls.length;
 
     relayRef.current!.emit("message", JSON.stringify({
@@ -2186,8 +2421,8 @@ describe("multi-channel broadcast (W2D)", () => {
     }));
     await new Promise<void>((r) => setImmediate(r));
 
-    expect(sendUserMessage).toHaveBeenCalledTimes(1);
-    expect(sendUserMessage).toHaveBeenCalledWith("late correction", { deliverAs: "steer" });
+    expect(sdk.started).toEqual([]);
+    expect(sdk.queued).toEqual(["late correction"]);
     expect(_getCurrentTurnIdForTest()).toBe("msg-busy-no-mode");
     const sent = relayRef.current!.send.mock.calls.slice(sendsBefore)
       .map((c) => c[0] as string).map(decodeSentCt);
@@ -2267,6 +2502,67 @@ describe("multi-channel broadcast (W2D)", () => {
     await new Promise<void>((r) => setImmediate(r));
 
     expect(_getCurrentTurnIdForTest()).toBe(priorTurn);
+  });
+  test("plan/62: terminal steer mid-turn broadcasts user_message with streaming_behavior: steer", async () => {
+    await _pairForTest("ownerA__1234567890");
+    const onInput = captureEventHandler("input");
+    onInput({ type: "input", text: "initial command", source: "interactive" });
+    await new Promise<void>((r) => setImmediate(r));
+    const activeTurn = _getCurrentTurnIdForTest();
+    expect(activeTurn).toMatch(/^local_/);
+
+    const sendsBefore = relayRef.current!.send.mock.calls.length;
+    onInput({ type: "input", text: "stop doing that, do this instead", source: "interactive" });
+    await new Promise<void>((r) => setImmediate(r));
+
+    expect(_getCurrentTurnIdForTest()).toBe(activeTurn);
+
+    const sent = relayRef.current!.send.mock.calls.slice(sendsBefore)
+      .map((c) => c[0] as string)
+      .map(decodeSentCt);
+    const steerMsg = sent.find((d) => d.inner.type === "user_message");
+    expect(steerMsg).toBeDefined();
+    expect(steerMsg!.inner.text).toBe("stop doing that, do this instead");
+    expect(steerMsg!.inner.streaming_behavior).toBe("steer");
+    expect(steerMsg!.inner.id).toMatch(/^local_/);
+
+    const onTurnEnd = captureEventHandler("turn_end");
+    onTurnEnd({ type: "turn_end", turnIndex: 0 });
+  });
+
+  test("plan/62: phone steer delivers single steer to sendUserMessage without duplicate sendMessage", async () => {
+    await _pairForTest("ownerA__1234567890");
+    const onInput = captureEventHandler("input");
+    onInput({ type: "input", text: "primary", source: "interactive" });
+    await new Promise<void>((r) => setImmediate(r));
+
+    const sendUserMessageMock = vi.fn();
+    const sendMessageMock = vi.fn();
+    _setPiForTest({
+      sendUserMessage: sendUserMessageMock,
+      sendMessage: sendMessageMock,
+    });
+
+    relayRef.current!.emit("message", JSON.stringify({
+      peer: "ownerA__1234567890",
+      ct: Buffer.from(JSON.stringify({
+        type: "user_message",
+        id: "msg-phone-steer",
+        text: "steer from phone now",
+        streaming_behavior: "steer",
+      })).toString("base64"),
+    }));
+    await new Promise<void>((r) => setImmediate(r));
+
+    // Must deliver exactly one steer to sendUserMessage, and NEVER call sendMessage
+    // (which would enqueue a duplicate steer into the agent loop while streaming)
+    expect(sendUserMessageMock).toHaveBeenCalledTimes(1);
+    expect(sendUserMessageMock).toHaveBeenCalledWith("steer from phone now", undefined);
+    expect(sendMessageMock).not.toHaveBeenCalled();
+
+    _setPiForTest(null);
+    const onTurnEnd = captureEventHandler("turn_end");
+    onTurnEnd({ type: "turn_end", turnIndex: 0 });
   });
 
   test("plan/32: session_compact → broadcasts compaction, working=false, buffers a marker", async () => {
@@ -5963,6 +6259,36 @@ describe("model meta", () => {
     expect(updates[0]!.meta?.model).toBe("gpt-4o");
     expect(updates[0]!.room_id).toMatch(/^[A-Za-z0-9_-]{12}$/);
   });
+  test("poll detects model change and publishes room_meta_update while idle", async () => {
+    captureHandler("remote-pi");
+    let currentModel = { id: "gemini-3.8-flash", name: "Gemini 3.8 Flash" };
+    const ctx = {
+      ui: { notify: vi.fn() },
+      cwd: "/tmp/remote-pi-model-poll",
+      abort: vi.fn(),
+      model: currentModel,
+      models: {
+        current: () => currentModel,
+      },
+    } as unknown as ReturnType<typeof makeMockCtx>;
+    await _connectForTest(ctx);
+
+    const onSessionStart = captureEventHandler("session_start");
+    onSessionStart({ type: "session_start" }, ctx);
+
+    // User switches model while idle
+    currentModel = { id: "gpt-5.6-sol", name: "GPT-5.6 Sol" };
+
+    const sendsBefore = relayRef.current!.sendControl.mock.calls.length;
+    _pollModelAndThinkingChangesForTest();
+
+    const updates = relayRef.current!.sendControl.mock.calls.slice(sendsBefore)
+      .map((c) => c[0] as { type: string; room_id?: string; meta?: { model?: string } })
+      .filter((f) => f.type === "room_meta_update");
+    expect(updates).toHaveLength(1);
+    expect(updates[0]!.meta?.model).toBe("GPT-5.6 Sol");
+  });
+
 
   test("plan/32: pi.on('turn_start') publishes working=true via room_meta_update", async () => {
     captureHandler("remote-pi");
@@ -6217,5 +6543,200 @@ describe("markdown image resolution and extraction", () => {
     const events = _mapAgentMessagesToEvents(msgs);
     expect(events).toHaveLength(3);
     expect((events[2] as { text: string }).text).toContain("![image](data:image/jpeg;base64,QUJD)");
+  });
+});
+
+describe("terminal slash command execution from mobile", () => {
+  test("returns false for non-slash messages", () => {
+    expect(_tryExecuteTerminalSlashCommand("hello world")).toBe(false);
+    expect(_tryExecuteTerminalSlashCommand("   ")).toBe(false);
+  });
+
+  test("executes slash command via UI editor and stdinEnter", () => {
+    const sessionStart = captureEventHandler("session_start");
+    let editorText = "";
+    const mockCtx = {
+      ui: {
+        notify: vi.fn(),
+        getEditorText: vi.fn(() => editorText),
+        setEditorText: vi.fn((text: string) => {
+          editorText = text;
+        }),
+      },
+    };
+    sessionStart({ type: "session_start" }, mockCtx as unknown as Parameters<typeof sessionStart>[1]);
+
+    const dataListener = vi.fn();
+    process.stdin.on("data", dataListener);
+    try {
+      const executed = _tryExecuteTerminalSlashCommand("/goal resume");
+      expect(executed).toBe(true);
+      expect(mockCtx.ui.setEditorText).toHaveBeenCalledWith("/goal resume");
+      expect(dataListener).toHaveBeenCalledWith("\r");
+    } finally {
+      process.stdin.removeListener("data", dataListener);
+    }
+  });
+
+  test("preserves and restores existing editor draft", async () => {
+    const sessionStart = captureEventHandler("session_start");
+    let editorText = "unfinished prompt draft";
+    const setEditorText = vi.fn((text: string) => {
+      editorText = text;
+    });
+    const mockCtx = {
+      ui: {
+        notify: vi.fn(),
+        getEditorText: vi.fn(() => editorText),
+        setEditorText,
+      },
+    };
+    sessionStart({ type: "session_start" }, mockCtx as unknown as Parameters<typeof sessionStart>[1]);
+
+    const dataListener = vi.fn();
+    process.stdin.on("data", dataListener);
+    try {
+      const executed = _tryExecuteTerminalSlashCommand("/goal pause");
+      expect(executed).toBe(true);
+      expect(setEditorText).toHaveBeenCalledWith("/goal pause");
+
+      // After the restore timeout, original draft is restored
+      await vi.waitFor(() => {
+        expect(setEditorText).toHaveBeenCalledWith("unfinished prompt draft");
+      });
+    } finally {
+      process.stdin.removeListener("data", dataListener);
+    }
+  });
+
+  test("routeClientMessage routes /goal to terminal slash command and echoes to mobile", async () => {
+    const sessionStart = captureEventHandler("session_start");
+    let editorText = "";
+    const mockCtx = {
+      ui: {
+        notify: vi.fn(),
+        getEditorText: vi.fn(() => editorText),
+        setEditorText: vi.fn((text: string) => {
+          editorText = text;
+        }),
+      },
+    };
+    sessionStart({ type: "session_start" }, mockCtx as unknown as Parameters<typeof sessionStart>[1]);
+
+    const dataListener = vi.fn();
+    process.stdin.on("data", dataListener);
+    try {
+      const mockSender = { send: vi.fn() };
+      _routeClientMessageFrom(
+        mockSender as unknown as Parameters<typeof _routeClientMessageFrom>[0],
+        {
+          type: "user_message",
+          id: "msg-goal-123",
+          text: "/goal resume",
+        },
+        mockCtx as unknown as Parameters<typeof _routeClientMessageFrom>[2],
+      );
+
+      expect(mockCtx.ui.setEditorText).toHaveBeenCalledWith("/goal resume");
+      expect(dataListener).toHaveBeenCalledWith("\r");
+    } finally {
+      process.stdin.removeListener("data", dataListener);
+    }
+  });
+
+  test("routeClientMessage routes normal user message to terminal input and echoes to mobile", async () => {
+    const sessionStart = captureEventHandler("session_start");
+    let editorText = "";
+    const mockCtx = {
+      ui: {
+        notify: vi.fn(),
+        getEditorText: vi.fn(() => editorText),
+        setEditorText: vi.fn((text: string) => {
+          editorText = text;
+        }),
+      },
+    };
+    sessionStart({ type: "session_start" }, mockCtx as unknown as Parameters<typeof sessionStart>[1]);
+
+    const dataListener = vi.fn();
+    process.stdin.on("data", dataListener);
+    try {
+      const mockSender = { send: vi.fn() };
+      _routeClientMessageFrom(
+        mockSender as unknown as Parameters<typeof _routeClientMessageFrom>[0],
+        {
+          type: "user_message",
+          id: "msg-normal-123",
+          text: "was it trigger the actual goal in terminal?",
+        },
+        mockCtx as unknown as Parameters<typeof _routeClientMessageFrom>[2],
+      );
+
+      expect(mockCtx.ui.setEditorText).toHaveBeenCalledWith("was it trigger the actual goal in terminal?");
+      expect(dataListener).toHaveBeenCalledWith("\r");
+    } finally {
+      process.stdin.removeListener("data", dataListener);
+    }
+  });
+
+  test("terminal slash command injection sets _terminalInjectionInFlight and suppresses pi.on input broadcast", async () => {
+    await _pairForTest("ownerA__1234567890");
+    const sessionStart = captureEventHandler("session_start");
+    let editorText = "";
+    const mockCtx = {
+      ui: {
+        notify: vi.fn(),
+        getEditorText: vi.fn(() => editorText),
+        setEditorText: vi.fn((text: string) => {
+          editorText = text;
+        }),
+      },
+    };
+    sessionStart({ type: "session_start" }, mockCtx as unknown as Parameters<typeof sessionStart>[1]);
+
+    const onInput = captureEventHandler("input");
+    const sendsBefore = relayRef.current!.send.mock.calls.length;
+    _tryExecuteTerminalSlashCommand("/goal resume");
+
+    // Simulate terminal input event triggered by the simulated Enter
+    onInput({ type: "input", text: "/goal resume", source: "interactive" });
+
+    // Should NOT broadcast a second user_message to peers
+    const sendsAfter = relayRef.current!.send.mock.calls.length;
+    expect(sendsAfter).toBe(sendsBefore);
+  });
+
+  test("_tryExecuteTerminalInput returns false for empty text or when no UI/terminal is available", () => {
+    expect(_tryExecuteTerminalInput("")).toBe(false);
+    expect(_tryExecuteTerminalInput("   \n\t  ")).toBe(false);
+    const sessionStart = captureEventHandler("session_start");
+    sessionStart({ type: "session_start" }, { ui: {} } as unknown as Parameters<typeof sessionStart>[1]);
+    expect(_tryExecuteTerminalInput("some prompt")).toBe(false);
+  });
+
+  test("routeClientMessage falls back to _wakeAgent when no terminal UI is available", async () => {
+    const sessionStart = captureEventHandler("session_start");
+    sessionStart({ type: "session_start" }, { ui: {} } as unknown as Parameters<typeof sessionStart>[1]);
+
+    const mockSender = { send: vi.fn() };
+    const sendUserMessage = vi.fn().mockResolvedValue(undefined);
+    _setPiForTest({
+      sendUserMessage,
+      sendMessage: () => undefined,
+    });
+
+    _routeClientMessageFrom(
+      mockSender as unknown as Parameters<typeof _routeClientMessageFrom>[0],
+      {
+        type: "user_message",
+        id: "msg-fallback-123",
+        text: "hello headless agent",
+      },
+      {} as unknown as Parameters<typeof _routeClientMessageFrom>[2],
+    );
+
+    await vi.waitFor(() => {
+      expect(sendUserMessage).toHaveBeenCalledWith("hello headless agent", undefined);
+    });
   });
 });

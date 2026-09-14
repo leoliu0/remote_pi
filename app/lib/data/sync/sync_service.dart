@@ -79,6 +79,10 @@ class SyncService extends Service {
   bool _working = false;
   bool _sawRemoteWorking = false;
   bool _turnEnded = false;
+  // Live reply identity is captured before any asynchronous box write. Keep
+  // it through idle: agent_message can follow agent_done's working-off timer.
+  String? _assistantReplyTo;
+  String? _lastFinalizedSegmentId;
   int _finalizedSegmentsCount = 0;
   Timer? _workingOffDebounce;
   final Set<String> _openToolIds = {};
@@ -173,6 +177,9 @@ class SyncService extends Service {
     _workingReplyTo = null;
     _sawRemoteWorking = false;
     _openToolIds.clear();
+    _turnEnded = false;
+    _assistantReplyTo = null;
+    _lastFinalizedSegmentId = null;
     _finalizedSegmentsCount = 0;
     _workingOffDebounce?.cancel();
     _setQueuedMessages(const []);
@@ -404,6 +411,9 @@ class SyncService extends Service {
     // Session wiped → any optimistic sends/streaming/working state are moot.
     _cancelAllSendTimers();
     _discardStreamingState();
+    _assistantReplyTo = null;
+    _lastFinalizedSegmentId = null;
+    _finalizedSegmentsCount = 0;
     _setQueuedMessages(const []);
     _setWorking(false);
     await _enqueue(() async {
@@ -472,6 +482,7 @@ class SyncService extends Service {
     }
     switch (msg) {
       case AgentChunk(:final inReplyTo, :final delta):
+        _trackAssistantTurn(inReplyTo);
         _workingOffDebounce?.cancel();
         _chunkBuffer.write(delta);
         _chunkReplyTo = inReplyTo;
@@ -479,6 +490,7 @@ class SyncService extends Service {
         _flushTimer = Timer(const Duration(milliseconds: 16), _flushChunks);
         _setWorking(true, replyTo: inReplyTo);
       case AgentDone(:final inReplyTo):
+        _trackAssistantTurn(inReplyTo);
         // Finalize whatever text accumulated since the last tool boundary.
         final text = _finalizeSegment();
         _clearSteeringLabel(inReplyTo);
@@ -487,6 +499,10 @@ class SyncService extends Service {
           _scheduleWorkingOff(preview: text.isEmpty ? null : text);
         }
       case AgentMessage(:final inReplyTo, :final text):
+        _trackAssistantTurn(inReplyTo);
+        // Also drain buffered chunks when the complete message arrives without
+        // agent_done. Its upsert is queued after the segment write below.
+        _finalizeSegment();
         // Live finalize writes individual `agent_<uuid>` rows per segment.
         // If multiple text segments were already finalized during this turn
         // (e.g. before and after tool calls), AgentMessage carries the full
@@ -495,7 +511,10 @@ class SyncService extends Service {
         if (_finalizedSegmentsCount > 1) {
           break;
         }
-        final targetId = _latestAssistantId() ?? inReplyTo;
+        final targetId = _lastFinalizedSegmentId ??= 'agent_${uuid7()}';
+        _finalizedSegmentsCount = 1;
+        // Both writes use the same synchronously captured ID; _enqueue makes
+        // the authoritative update observe the preceding segment insertion.
         // ignore: discarded_futures
         _upsert(
           MsgRole.assistant,
@@ -894,19 +913,6 @@ class SyncService extends Service {
 
   String _key(MsgRole role, String id) => '${role.name}:$id';
 
-  String? _latestAssistantId() {
-    final prefix = '${MsgRole.assistant.name}:';
-    String? id;
-    var best = -1;
-    for (final e in _idToSeq.entries) {
-      if (!e.key.startsWith(prefix)) continue;
-      if (e.value >= best) {
-        best = e.value;
-        id = e.key.substring(prefix.length);
-      }
-    }
-    return id;
-  }
 
   Future<void> _loadIndex() {
     final epk = _activeEpk;
@@ -1102,7 +1108,6 @@ class SyncService extends Service {
     } else {
       _workingReplyTo = null;
       _sawRemoteWorking = false;
-      _finalizedSegmentsCount = 0;
     }
     _working = on;
     if (!_workingController.isClosed) _workingController.add(on);
@@ -1152,6 +1157,17 @@ class SyncService extends Service {
   // Streaming (in-memory only)
   // ---------------------------------------------------------------------------
 
+  void _trackAssistantTurn(String inReplyTo) {
+    if (_assistantReplyTo == inReplyTo) return;
+    // A new reply must not inherit either buffered text or the segment count
+    // of a prior turn, even when no idle transition occurred between them.
+    _finalizeSegment();
+    _assistantReplyTo = inReplyTo;
+    _lastFinalizedSegmentId = null;
+    _finalizedSegmentsCount = 0;
+    _turnEnded = false;
+  }
+
   void _flushChunks() {
     if (_chunkBuffer.isEmpty) return;
     final delta = _chunkBuffer.toString();
@@ -1186,6 +1202,7 @@ class SyncService extends Service {
     if (text.isNotEmpty) {
       _finalizedSegmentsCount++;
       final id = 'agent_${uuid7()}';
+      _lastFinalizedSegmentId = id;
       // ignore: discarded_futures
       _upsert(
         MsgRole.assistant,

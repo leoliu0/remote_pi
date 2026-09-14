@@ -54,6 +54,21 @@ export interface SdkModelLike {
 const ALL_THINKING_LEVELS: ThinkingLevel[] = [
   "auto", "off", "minimal", "low", "medium", "high", "xhigh", "max",
 ];
+export const PROVIDER_ALIASES: Record<string, string[]> = {
+  openai: ["openai-codex", "openai"],
+  "openai-codex": ["openai", "openai-codex"],
+  google: ["google-antigravity", "gemini", "google"],
+  "google-antigravity": ["google", "gemini", "google-antigravity"],
+  gemini: ["google-antigravity", "google", "gemini"],
+  anthropic: ["anthropic-oauth", "anthropic"],
+  "anthropic-oauth": ["anthropic", "anthropic-oauth"],
+  xai: ["xai-oauth", "xai"],
+  "xai-oauth": ["xai", "xai-oauth"],
+  kimi: ["kimi-coding", "kimi-code", "moonshotai", "kimi"],
+  "kimi-coding": ["kimi-code", "moonshotai", "kimi", "kimi-coding"],
+  "kimi-code": ["kimi-coding", "moonshotai", "kimi", "kimi-code"],
+};
+
 
 /** Levels a model supports, matching Pi-AI's getSupportedThinkingLevels:
  *  - non-reasoning models only support ["off"]
@@ -426,36 +441,83 @@ export async function handleModelSet(
     const liveReg = ctx?.modelRegistry ?? reg;
     liveReg.refresh();
     const anyReg = liveReg as any;
-    let model: SdkModelLike | undefined;
-    try {
-      model = liveReg.find(msg.provider, msg.model_id);
-    } catch {}
-    if (!model && typeof anyReg.getAll === "function") {
+
+    const candidates: SdkModelLike[] = [];
+    const addCandidate = (m: SdkModelLike | undefined | null) => {
+      if (!m) return;
+      if (!candidates.some((c) => c.provider.toLowerCase() === m.provider.toLowerCase() && c.id.toLowerCase() === m.id.toLowerCase())) {
+        candidates.push(m);
+      }
+    };
+
+    const targetProvider = msg.provider.toLowerCase();
+    const targetModelId = msg.model_id.toLowerCase();
+    const aliases = PROVIDER_ALIASES[targetProvider] ?? [targetProvider];
+
+    // 1. Available (authenticated) models matching model_id first
+    if (typeof anyReg.getAvailable === "function") {
       try {
-        const all: SdkModelLike[] = anyReg.getAll();
-        model = all.find(
-          (m: SdkModelLike) =>
-            (m.provider.toLowerCase() === msg.provider.toLowerCase() ||
-              (msg.provider === "google" && m.provider === "gemini") ||
-              (msg.provider === "gemini" && m.provider === "google")) &&
-            (m.id.toLowerCase() === msg.model_id.toLowerCase() ||
-              m.id.toLowerCase().includes(msg.model_id.toLowerCase()) ||
-              msg.model_id.toLowerCase().includes(m.id.toLowerCase()))
-        );
+        const available: SdkModelLike[] = anyReg.getAvailable();
+        for (const m of available) {
+          if (aliases.includes(m.provider.toLowerCase()) && m.id.toLowerCase() === targetModelId) {
+            addCandidate(m);
+          }
+        }
+        for (const m of available) {
+          if (m.id.toLowerCase() === targetModelId) {
+            addCandidate(m);
+          }
+        }
       } catch {}
     }
-    if (!model && process.env["VITEST"] !== "true") {
+
+    // 2. Direct registry find
+    try {
+      addCandidate(liveReg.find(msg.provider, msg.model_id));
+    } catch {}
+
+    // 3. Provider alias finds
+    for (const alias of aliases) {
+      try {
+        addCandidate(liveReg.find(alias, msg.model_id));
+      } catch {}
+    }
+
+    // 4. Registry getAll search
+    if (typeof anyReg.getAll === "function") {
+      try {
+        const all: SdkModelLike[] = anyReg.getAll();
+        for (const m of all) {
+          const providerMatches =
+            m.provider.toLowerCase() === targetProvider ||
+            aliases.includes(m.provider.toLowerCase()) ||
+            (targetProvider === "google" && m.provider === "gemini") ||
+            (targetProvider === "gemini" && m.provider === "google");
+          const idMatches =
+            m.id.toLowerCase() === targetModelId ||
+            m.id.toLowerCase().includes(targetModelId) ||
+            targetModelId.includes(m.id.toLowerCase());
+          if (providerMatches && idMatches) {
+            addCandidate(m);
+          }
+        }
+      } catch {}
+    }
+
+    // 5. Fallback from omp models
+    if (process.env["VITEST"] !== "true") {
       const ompModels = _loadOmpModels();
       const match = ompModels.find(
         (m) =>
-          (m.provider.toLowerCase() === msg.provider.toLowerCase() ||
-            m.provider.toLowerCase().replace(/-/g, "") === msg.provider.toLowerCase().replace(/-/g, "")) &&
-          (m.id.toLowerCase() === msg.model_id.toLowerCase() ||
-            m.name.toLowerCase() === msg.model_id.toLowerCase() ||
-            m.id.toLowerCase().includes(msg.model_id.toLowerCase()))
+          (m.provider.toLowerCase() === targetProvider ||
+            aliases.includes(m.provider.toLowerCase()) ||
+            m.provider.toLowerCase().replace(/-/g, "") === targetProvider.replace(/-/g, "")) &&
+          (m.id.toLowerCase() === targetModelId ||
+            m.name.toLowerCase() === targetModelId ||
+            m.id.toLowerCase().includes(targetModelId)),
       );
       if (match) {
-        model = {
+        addCandidate({
           id: match.id,
           name: match.name || match.id,
           provider: match.provider,
@@ -468,19 +530,34 @@ export async function handleModelSet(
           input: (match as any).input || ["text", "image"],
           contextWindow: match.context_window || 200000,
           maxTokens: (match as any).max_tokens || 8192,
-        } as SdkModelLike;
+        } as SdkModelLike);
       }
     }
-    if (!model) {
+
+    if (candidates.length === 0) {
       throw new Error(`model "${msg.provider}/${msg.model_id}" not in registry`);
     }
-    let success = false;
-    try {
-      success = await pi.setModel(model);
-    } catch (err: any) {
-      throw new Error(`Failed to set model: ${err?.message || String(err)}`);
+
+    let selectedModel: SdkModelLike | undefined;
+    let lastError: Error | undefined;
+
+    for (const candidate of candidates) {
+      try {
+        const success = await pi.setModel(candidate);
+        if (success) {
+          selectedModel = candidate;
+          break;
+        }
+      } catch (err: any) {
+        lastError = err instanceof Error ? err : new Error(String(err));
+      }
     }
-    if (!success) throw new Error("no auth configured for this model");
+
+    if (!selectedModel) {
+      if (lastError) throw lastError;
+      throw new Error("no auth configured for this model");
+    }
+    const model = selectedModel;
     const friendlyName = model.name ?? model.id;
     try {
       onPersist?.(model.provider, model.id);
@@ -516,11 +593,11 @@ export function handleListModels(
     if (process.env["VITEST"] !== "true") {
       const ompModels = _loadOmpModels();
       if (ompModels.length > 0) {
-        const known = new Set(models.map((m) => `${m.provider}:${m.id}`));
+        const knownIds = new Set(models.map((m) => m.id.toLowerCase()));
         for (const om of ompModels) {
-          if (!known.has(`${om.provider}:${om.id}`)) {
+          if (!knownIds.has(om.id.toLowerCase())) {
             models.push(om);
-            known.add(`${om.provider}:${om.id}`);
+            knownIds.add(om.id.toLowerCase());
           }
         }
       }

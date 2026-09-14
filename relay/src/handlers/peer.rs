@@ -242,18 +242,19 @@ async fn handle_peer(socket: WebSocket, peer_addr: SocketAddr, state: AppState) 
                                     rooms.unsubscribe(&peer_id, peers).await;
                                 }
                                 "rooms_check" => {
-                                    for target_peer in &peers {
-                                        let active_rooms = registry.rooms_of(target_peer);
+                                    let target_peers: Vec<(String, Vec<crate::RoomMeta>)> = if peers.is_empty() {
+                                        registry.all_rooms().into_iter().collect()
+                                    } else {
+                                        peers.iter().map(|p| (p.clone(), registry.rooms_of(p))).collect()
+                                    };
+                                    for (target_peer, active_rooms) in target_peers {
                                         let resp = serde_json::json!({
                                             "type": "rooms",
                                             "peer": target_peer,
                                             "rooms": active_rooms,
                                         })
                                         .to_string();
-                                        // Dedup per (conn, target_peer):
-                                        // first reply always sent; subsequent
-                                        // identical snapshots dropped.
-                                        if last_rooms_resp.get(target_peer) == Some(&resp) {
+                                        if last_rooms_resp.get(&target_peer) == Some(&resp) {
                                             metrics.inc_rooms_suppressed(1);
                                             continue;
                                         }

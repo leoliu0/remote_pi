@@ -118,7 +118,8 @@ import { join, dirname, resolve, extname, isAbsolute, basename } from "node:path
 import { fileURLToPath } from "node:url";
 import { chmodSync, mkdtempSync, mkdirSync, copyFileSync, existsSync, unlinkSync, readFileSync, writeFileSync, realpathSync, readdirSync, statSync } from "node:fs";
 import { createInterface } from "node:readline";
-import { spawnSync } from "node:child_process";
+import { createConnection } from "node:net";
+import { spawn, spawnSync } from "node:child_process";
 import { hostname, tmpdir, homedir } from "node:os";
 import {
   kDefaultRelayUrl,
@@ -182,6 +183,7 @@ let _peerShort = "";  // shortid of the most recently attached peer (UX hint onl
 const REMOTE_PI_RECEIVED_IMAGE_TYPE = "remote-pi:received-image";
 const RECEIVED_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
 
+
 type ReceivedImageDetails = {
   messageId: string;
   index: number;
@@ -199,6 +201,12 @@ const IMAGE_CACHE_PREFIX = "pi-app-";
 type ReceivedImagePreviewDelivery = "immediate" | "defer";
 let _imageCacheDir: string | undefined;
 const _pendingReceivedImagePreviews: ReceivedImageDetails[] = [];
+let _terminalInjectionInFlight = false;
+
+export function _isTerminalInjectionInFlightForTest(): boolean {
+  return _terminalInjectionInFlight;
+}
+
 
 function _isBase64Char(code: number): boolean {
   return (code >= 48 && code <= 57) // 0-9
@@ -324,6 +332,59 @@ function _setCurrentModel(name: string): void {
     _relay.sendControl({ type: "room_meta_update", room_id: _myRoomId, meta: { model: name } });
   }
 }
+let _modelPollTimer: NodeJS.Timeout | null = null;
+
+function _syncModelFromLiveCtx(): void {
+  try {
+    const ctx = _liveCtx() as {
+      models?: { current?: () => { name?: string; id?: string } | undefined };
+      getModel?: () => { name?: string; id?: string } | undefined;
+      model?: { name?: string; id?: string };
+    } | null;
+    const m = ctx?.models?.current?.() ?? ctx?.getModel?.() ?? ctx?.model;
+    const name = m?.name ?? m?.id;
+    if (name && name !== _currentModel) {
+      _setCurrentModel(name);
+    }
+  } catch {}
+}
+
+function _pollModelAndThinkingChanges(): void {
+  if (!_relay || !_myRoomId || _state !== "started") return;
+  _syncModelFromLiveCtx();
+  try {
+    const currentThinking = _pi?.getThinkingLevel?.();
+    if (currentThinking && currentThinking !== _currentThinking && !_autoSelected) {
+      _currentThinking = currentThinking;
+      if (_myRoomMeta) _myRoomMeta = { ..._myRoomMeta, thinking: currentThinking };
+      _relay.sendControl({
+        type: "room_meta_update",
+        room_id: _myRoomId,
+        meta: { thinking: currentThinking },
+      });
+    }
+  } catch {}
+}
+
+function _startModelPollTimer(): void {
+  if (_modelPollTimer) return;
+  _modelPollTimer = setInterval(() => {
+    _pollModelAndThinkingChanges();
+  }, 1000);
+  _modelPollTimer.unref?.();
+}
+
+function _stopModelPollTimer(): void {
+  if (_modelPollTimer) {
+    clearInterval(_modelPollTimer);
+    _modelPollTimer = null;
+  }
+}
+
+export function _pollModelAndThinkingChangesForTest(): void {
+  _pollModelAndThinkingChanges();
+}
+
 
 
 /**
@@ -661,7 +722,8 @@ function _isPureDataContextMessage(message: unknown): boolean {
 function _filterInternalMessagesFromContext<T>(messages: T[] | undefined): T[] {
   return Array.isArray(messages)
     ? messages.filter((message) =>
-        !_isReceivedImageContextMessage(message) && !_isPureDataContextMessage(message))
+        !_isReceivedImageContextMessage(message)
+        && !_isPureDataContextMessage(message))
     : [];
 }
 
@@ -720,7 +782,6 @@ async function _deliverImageUserMessage(
   const wake = await _wakeAgent(
     _contentFromUserMessage(msg),
     `app user_message id=${msg.id} (+${msg.images?.length ?? 0} image)`,
-    "steer",
   );
   if (!wake.ok) {
     if (seededTurnId) _currentTurnId = previousTurnId;
@@ -784,6 +845,8 @@ function _ctxUi(preferred?: { ui?: unknown } | null): {
   setStatus?: (k: string, v: string | undefined) => void;
   setTitle?: (t: string) => void;
   notify?: (message: string, level?: string) => void;
+  setEditorText?: (text: string) => void;
+  getEditorText?: () => string;
 } | null {
   const target = _liveCtx(preferred);
   if (!target) return null;
@@ -792,6 +855,8 @@ function _ctxUi(preferred?: { ui?: unknown } | null): {
       setStatus?: (k: string, v: string | undefined) => void;
       setTitle?: (t: string) => void;
       notify?: (message: string, level?: string) => void;
+      setEditorText?: (text: string) => void;
+      getEditorText?: () => string;
     } | null | undefined) ?? null;
   } catch {
     // Stale after newSession/fork/switchSession/reload — caller no-ops.
@@ -869,6 +934,9 @@ let _lastConsumedSteerText: string | null = null;
 
 type AndroidQueuedItem = QueuedMessageItem & { editable: true };
 let _queuedItems: AndroidQueuedItem[] = [];
+// Keep rejected items editable, but never auto-resend a possibly accepted
+// prompt. An explicit mobile upsert replaces the object and permits retry.
+const _failedQueuedItems = new WeakSet<AndroidQueuedItem>();
 
 /**
  * Scans known agent session directories (~/.omp, ~/.pi, ~/.claude) for the most
@@ -1267,17 +1335,27 @@ function _broadcastConsumedSteerForUserContent(content: unknown): void {
 
 async function _maybeDrainQueuedItem(): Promise<void> {
   if (_isBusyForQueueDrain()) return;
-  const item = _queuedItems.shift();
-  if (!item) return;
+  const item = _queuedItems[0];
+  if (!item || _failedQueuedItems.has(item)) return;
+  _queuedItems.shift();
   _broadcastQueuedState();
 
   const previousTurnId = _currentTurnId;
   _currentTurnId = item.id;
   const msg: ClientUserMessage = { type: "user_message", id: item.id, text: item.text };
-  const wake = await _wakeAgent(item.text, `queued app user_message id=${item.id}`, "steer");
+  const trimmedText = typeof item.text === "string" ? item.text.trim() : "";
+  if (trimmedText && _tryExecuteTerminalInput(trimmedText)) {
+    if (trimmedText.startsWith("/")) {
+      _safeNotify(`[remote-pi] Terminal command: "${trimmedText}"`, "info");
+    }
+    _echoUserMessage(msg, false);
+    return;
+  }
+  const wake = await _wakeAgent(item.text, `queued app user_message id=${item.id}`);
   if (!wake.ok) {
     _currentTurnId = previousTurnId;
-    _queuedItems = [item, ..._queuedItems];
+    _failedQueuedItems.add(item);
+    _queuedItems = [..._queuedItems, item];
     _broadcastQueuedState();
     _broadcastToActive({
       type: "error",
@@ -1423,6 +1501,22 @@ function _persistModelDefault(provider: string, modelId: string): void {
       obj["defaultModel"] = modelId;
       mkdirSync(dirname(path), { recursive: true });
       writeFileSync(path, JSON.stringify(obj, null, 2));
+    } catch {}
+  }
+  const ompConfigPaths = [
+    join(process.cwd(), ".omp", "config.yml"),
+    join(homedir(), ".omp", "agent", "config.yml"),
+  ];
+  for (const p of ompConfigPaths) {
+    try {
+      if (existsSync(p)) {
+        let content = readFileSync(p, "utf8");
+        const pattern = /(default:\s*)([^\s\n]+)/;
+        if (pattern.test(content)) {
+          content = content.replace(pattern, `$1${provider}/${modelId}`);
+          writeFileSync(p, content);
+        }
+      }
     } catch {}
   }
 }
@@ -1803,6 +1897,7 @@ function _goIdle(byeReason?: import("./protocol/types.js").ByeReason): void {
   _stopAutoListener?.();
   _stopAutoListener = null;
 
+  _stopModelPollTimer();
   if (_queuedItems.length > 0) _resetQueuedItems({ broadcast: true });
 
   // Tear down every per-owner channel and clear the map.
@@ -1964,6 +2059,7 @@ async function _attemptReconnect(
 
   _relay = relay;
   _reconnectAttempt = 0;
+  _startModelPollTimer();
 
   relay.on("close", () => _onRelayClose(relay));
   _stopAutoListener = _installAutoListener(relay);
@@ -2533,9 +2629,20 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
       _publishLoopStatus(next);
     }
     if (!_anyPeerActive()) return;
-    if (event.source === "extension") return;
-    // Don't re-broadcast terminal input if it matches the current in-flight turn from user_message
-    if (_currentTurnId !== null) return;
+    if (event.source === "extension" || _terminalInjectionInFlight) return;
+    if (_currentTurnId !== null) {
+      // Terminal or RPC steer entered while a turn is already active.
+      // Broadcast to connected owners as a steering message so phones display
+      // the steer bubble immediately without overwriting the active turn ID.
+      const steerId = `local_${randomUUID()}`;
+      _broadcastToActive({
+        type: "user_message",
+        id: steerId,
+        text: event.text,
+        streaming_behavior: "steer",
+      });
+      return undefined;
+    }
     const turnId = `local_${randomUUID()}`;
     _currentTurnId = turnId;
     _broadcastToActive({ type: "user_input", id: turnId, text: event.text });
@@ -2847,14 +2954,8 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
       _hydrateMessageBufferFromSession((ctx as { sessionManager?: unknown }).sessionManager);
     }
     // Model hydration: grab the active model on each turn and fan it out
-    try {
-      const m = (ctx as Partial<ExtensionContext> & { getModel?: () => { name?: string; id?: string } | undefined }).getModel?.()
-        ?? (ctx as Partial<ExtensionContext> & { model?: { name?: string; id?: string } }).model;
-      const name = m?.name ?? m?.id;
-      if (name && name !== _currentModel) {
-        _setCurrentModel(name);
-      }
-    } catch { /* defensive — never block a turn on a model lookup */ }
+    // (cached even while the relay is down, so the next hello carries it).
+    _syncModelFromLiveCtx();
     // Plan/32 Part B: publish working=true as room_meta (raw, no debounce —
     // the debounce lives in the app). Same shape as the model/thinking updates.
     if (_myRoomMeta) _myRoomMeta = { ..._myRoomMeta, working: true };
@@ -2866,6 +2967,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     _turnActive = false;
     _scheduleWorkingMetaOff(_agentActive ? 150 : 0);
     _maybeFinalizeTurn();
+    _pollModelAndThinkingChanges();
   });
   // compaction proceeds.
   pi.on("session_before_compact", (event) => {
@@ -2903,6 +3005,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   pi.on("session_start", (_event, ctx) => {
     if (_isSubagentSession(ctx)) return;
     _lastEventCtx = ctx;
+    _pollModelAndThinkingChanges();
     if (ctx && (ctx as { sessionManager?: unknown }).sessionManager) {
       _hydrateMessageBufferFromSession((ctx as { sessionManager?: unknown }).sessionManager);
     }
@@ -3075,6 +3178,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
         "daemon send", "daemon status",
         "cron", "cron add", "cron list", "cron remove", "cron enable", "cron disable", "cron run", "cron log",
         "install", "uninstall",  // service install (plan/26 W3)
+        "web", "web start", "web hosted", "web local",
       ]
         .filter((o) => o.startsWith(prefix))
         .map((o) => ({ value: o, label: o }));
@@ -3105,6 +3209,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
       else if (sub === "cron" || sub.startsWith("cron ")) { await _cmdCron(sub.slice("cron".length).trim(), ctx); }
       else if (sub === "install")                { _cmdInstall(ctx, { linkCli: true }); }
       else if (sub === "uninstall")              { _cmdUninstall(ctx, { linkCli: true }); }
+      else if (sub === "web" || sub.startsWith("web ") || sub.startsWith("web")) { await _cmdWeb(sub.slice("web".length).trim(), ctx); }
       else                                       { await _cmdRoot(ctx); }
     },
   });
@@ -3129,6 +3234,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
         "daemon send", "daemon status",
         "cron",
         "install", "uninstall",
+        "web", "web start", "web hosted", "web local",
       ]
         .filter((o) => o.startsWith(prefix))
         .map((o) => ({ value: o, label: o }));
@@ -3159,6 +3265,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
       else if (sub === "cron" || sub.startsWith("cron ")) { await _cmdCron(sub.slice("cron".length).trim(), ctx); }
       else if (sub === "install")                { _cmdInstall(ctx, { linkCli: true }); }
       else if (sub === "uninstall")              { _cmdUninstall(ctx, { linkCli: true }); }
+      else if (sub === "web" || sub.startsWith("web ") || sub.startsWith("web")) { await _cmdWeb(sub.slice("web".length).trim(), ctx); }
       else                                       { await _cmdRoot(ctx); }
     },
   });
@@ -3199,6 +3306,15 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     description: "List local + cross-PC mesh peers, grouped by PC label",
     handler: async (_, ctx) => { _lastCtx = ctx; await _cmdPeers(ctx); },
   });
+  pi.registerCommand("remote-pi web", {
+    description: "Open the web client in browser (starts local if available, or hosted)",
+    handler: async (args, ctx) => { _lastCtx = ctx; await _cmdWeb(args.trim(), ctx); },
+  });
+  pi.registerCommand("rc web", {
+    description: "Open the web client in browser (starts local if available, or hosted)",
+    handler: async (args, ctx) => { _lastCtx = ctx; await _cmdWeb(args.trim(), ctx); },
+  });
+
 
   // Daemon registry (plan/26 Wave 1) — create + remove. start/stop/send/
   // status/install/uninstall come in later waves with the supervisor.
@@ -3271,6 +3387,7 @@ function _cmdStatus(ctx: Pick<ExtensionContext, "ui">): void {
       : `🟡 Relay: on, waiting for first pairing (${relayUrl})`;
   }
 
+  _pollModelAndThinkingChanges();
   ctx.ui.notify(`[remote-pi]\n  ${meshLine}\n  ${relayLine}`, "info");
 }
 
@@ -3659,6 +3776,7 @@ async function _cmdStart(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<voi
   _peerShort = myShort;
   _myRoomId = roomId;
   _state = "started";
+  _startModelPollTimer();
   // Set _sessionStartedAt ONLY on first /remote-pi start since process boot.
   // Subsequent start cycles (after stop) preserve the original epoch so the
   // app keeps treating it as the same session (and merges new events from
@@ -4107,6 +4225,103 @@ async function _cmdRelay(arg: string, ctx: ExtensionContext): Promise<void> {
         "warning",
       );
       return;
+  }
+}
+
+/**
+ * Cross-platform URL opener. Spawns standard OS browser launcher detached.
+ */
+function _openInBrowser(url: string): void {
+  const cmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? "cmd" : "xdg-open";
+  const args = process.platform === "win32" ? ["/c", "start", '""', url] : [url];
+  try {
+    const child = spawn(cmd, args, { detached: true, stdio: "ignore" });
+    child.unref();
+  } catch {}
+}
+
+function _resolveSiteDir(): string | null {
+  const candidates = [
+    join(process.cwd(), "site"),
+    join(process.cwd(), "..", "site"),
+    join(dirname(fileURLToPath(import.meta.url)), "..", "site"),
+    join(dirname(fileURLToPath(import.meta.url)), "..", "..", "site"),
+    join(homedir(), "dd", "remote-pi", "site"),
+  ];
+  for (const dir of candidates) {
+    try {
+      const pkgPath = join(dir, "package.json");
+      if (existsSync(pkgPath)) {
+        const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
+        if (pkg.name === "site") return dir;
+      }
+    } catch {}
+  }
+  return null;
+}
+
+async function _isLocalWebUp(timeoutMs = 600): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    const sock = createConnection({ host: "127.0.0.1", port: 3000 });
+    let settled = false;
+    const finish = (val: boolean) => {
+      if (settled) return;
+      settled = true;
+      sock.destroy();
+      resolve(val);
+    };
+    sock.setTimeout(timeoutMs);
+    sock.once("connect", () => finish(true));
+    sock.once("timeout", () => finish(false));
+    sock.once("error", () => finish(false));
+  });
+}
+
+async function _cmdWeb(arg: string, ctx: Pick<ExtensionContext, "ui">): Promise<void> {
+  const sub = arg.trim().toLowerCase();
+  const localUrl = "http://localhost:3000/web";
+  const hostedUrl = "https://remote-pi.jacobmoura.work/web";
+
+  if (sub === "hosted" || sub === "remote") {
+    ctx.ui.notify(`[remote-pi] Opening hosted web client: ${hostedUrl}`, "info");
+    _openInBrowser(hostedUrl);
+    return;
+  }
+
+  let isUp = await _isLocalWebUp();
+
+  if (sub === "start" || (!isUp && sub !== "local")) {
+    const siteDir = _resolveSiteDir();
+    if (siteDir && !isUp) {
+      ctx.ui.notify(`[remote-pi] Starting local web server in ${siteDir}...`, "info");
+      try {
+        const child = spawn("pnpm", ["exec", "next", "dev", "--webpack"], {
+          cwd: siteDir,
+          detached: true,
+          stdio: "ignore",
+        });
+        child.unref();
+
+        for (let i = 0; i < 6; i++) {
+          await new Promise((r) => setTimeout(r, 500));
+          if (await _isLocalWebUp(400)) {
+            isUp = true;
+            break;
+          }
+        }
+      } catch {}
+    }
+  }
+
+  if (isUp || (await _isLocalWebUp(400))) {
+    ctx.ui.notify(`[remote-pi] Opening local web client: ${localUrl}`, "info");
+    _openInBrowser(localUrl);
+  } else {
+    ctx.ui.notify(
+      `[remote-pi] Local server offline. Opening hosted web client:\n${hostedUrl}\n(To run locally: cd site && pnpm exec next dev --webpack)`,
+      "info",
+    );
+    _openInBrowser(hostedUrl);
   }
 }
 
@@ -4689,31 +4904,90 @@ function _deployAgentNetworkSkill(): void {
     }
   } catch { /* best-effort */ }
 }
+/**
+ * Attempt to execute a message directly via the terminal's interactive
+ * input pipeline (TUI). When an interactive terminal is active, incoming
+ * messages from mobile are executed as if typed directly into the terminal
+ * by the user on the PC, rather than being forwarded via low-level SDK
+ * calls which can inadvertently steer background subagents or bypass the
+ * interactive command dispatcher.
+ */
+export function _tryExecuteTerminalInput(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed) return false;
+
+  const ui = _ctxUi();
+  const hasTerminalListener = Boolean(
+    typeof process !== "undefined" &&
+      process.stdin &&
+      process.stdin.listenerCount("data") > 0,
+  );
+
+  const hasUiMethods = Boolean(
+    ui &&
+      typeof ui.setEditorText === "function" &&
+      typeof ui.getEditorText === "function",
+  );
+
+  if (!hasTerminalListener || !hasUiMethods) {
+    return false;
+  }
+
+  try {
+    _terminalInjectionInFlight = true;
+    let savedDraft = "";
+    if (hasUiMethods) {
+      try {
+        savedDraft = ui!.getEditorText!();
+      } catch {}
+      ui!.setEditorText!(trimmed);
+      if (hasTerminalListener) {
+        process.stdin.emit("data", "\r");
+      }
+    } else if (hasTerminalListener) {
+      process.stdin.emit("data", trimmed);
+      setTimeout(() => {
+        try {
+          process.stdin.emit("data", "\r");
+        } catch {}
+      }, 20);
+    }
+
+    setTimeout(() => {
+      _terminalInjectionInFlight = false;
+      if (savedDraft && savedDraft !== trimmed && hasUiMethods) {
+        try {
+          ui!.setEditorText!(savedDraft);
+        } catch {}
+      }
+    }, 100);
+    return true;
+  } catch (err) {
+    _terminalInjectionInFlight = false;
+    console.error(`[remote-pi] failed executing terminal input "${trimmed}":`, err);
+    return false;
+  }
+}
 
 /**
- * Inject text into the agent as a user message, waking a turn. The Pi SDK's
- * `ExtensionAPI.sendUserMessage` is fire-and-forget (returns `void`) and
- * "always triggers a turn" — the SDK runtime owns any *async* turn failure
- * (no model/API key, expired auth, provider error), which surfaces in the
- * agent's own output, not back to us. Two gaps this helper closes, both of
- * which previously failed silently:
- *
- *   1. `_pi` not bound yet (activation race / mesh joined before the session
- *      attached): the old code did `if (!_pi) return`, dropping the message
- *      with no trace. We log it (the daemon forwards child stderr to its log
- *      with a cwd prefix, so it's visible in `journalctl`).
- *   2. A *synchronous* throw from `sendUserMessage` (e.g. malformed content):
- *      the old fire-and-forget call let it propagate out of the `onMessage`
- *      callback, which could wedge the read loop and blackout every later
- *      message. We catch + surface it instead.
- *
- * NOTE: this does NOT make a wake that fails *inside* the SDK observable —
- * that requires a fix in the Pi runtime (no extension-level error event
- * exists for it). See `.orchestration/results/mesh-liveness-stale-peer.md`.
+ * Backward-compatibility alias for tests and external callers.
  */
-type SendUserMessageOptions =
-  NonNullable<Parameters<ExtensionAPI["sendUserMessage"]>[1]>;
+export function _tryExecuteTerminalSlashCommand(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed.startsWith("/")) return false;
+  return _tryExecuteTerminalInput(text);
+}
 
+
+/**
+ * Hand a mobile prompt to the SDK once. Idle sends omit the delivery mode so
+ * OMP starts a turn; confirmed busy sends use steer for upstream Pi compatibility.
+ * Read the live SDK state after image preparation, never the room/turn mirror.
+ *
+ * Catch synchronous throws and promises returned by compatible hosts. Hosts
+ * exposing the void ExtensionAPI own asynchronous errors; those are not an
+ * acknowledgement we can observe. Never retry: rejection can follow acceptance.
+ */
 type WakeAgentResult =
   | { ok: true }
   | { ok: false; detail: string };
@@ -4721,7 +4995,6 @@ type WakeAgentResult =
 async function _wakeAgent(
   content: Parameters<ExtensionAPI["sendUserMessage"]>[0],
   label: string,
-  steeringBehavior?: SendUserMessageOptions["deliverAs"],
 ): Promise<WakeAgentResult> {
   if (!_pi) {
     const detail = "agent session not bound yet";
@@ -4729,28 +5002,13 @@ async function _wakeAgent(
     return { ok: false, detail };
   }
   try {
-    const options = steeringBehavior
-      ? ({ deliverAs: steeringBehavior })
-      : undefined;
+    const ctx = _liveCtx() as Partial<Pick<ExtensionContext, "isIdle">> | null;
+    // Keep this authoritative read and the synchronous SDK handoff together:
+    // an await here could turn a busy steer into a stranded idle OMP queue.
+    const options = ctx?.isIdle?.() === false ? { deliverAs: "steer" as const } : undefined;
     await _pi.sendUserMessage(content, options);
     return { ok: true };
   } catch (err) {
-    if (steeringBehavior) {
-      try {
-        await _pi.sendUserMessage(content, { deliverAs: "followUp" });
-        return { ok: true };
-      } catch {
-        try {
-          await _pi.sendUserMessage(content);
-          return { ok: true };
-        } catch (retryErr) {
-          const detail = retryErr instanceof Error ? retryErr.message : String(retryErr);
-          console.error(`[remote-pi] ${label}: agent rejected incoming message retry: ${detail}`);
-          _safeNotify(`[remote-pi] failed to process incoming message: ${detail}`, "error");
-          return { ok: false, detail };
-        }
-      }
-    }
     const detail = err instanceof Error ? err.message : String(err);
     console.error(`[remote-pi] ${label}: agent rejected incoming message: ${detail}`);
     _safeNotify(`[remote-pi] failed to process incoming message: ${detail}`, "error");
@@ -5058,6 +5316,7 @@ export function _routeClientMessageFrom(
   // session_sync has its own internal guards — handle before the strict
   // pi-binding guard so a missing _pi doesn't drop the reply.
   if (msg.type === "session_sync") {
+  _pollModelAndThinkingChanges();
     _handleSessionSync(sender, msg);
     return;
   }
@@ -5123,12 +5382,9 @@ export function _routeClientMessageFrom(
       const requestedSteer = msg.streaming_behavior === "steer";
       const inferredBusySteer = !requestedSteer && _myRoomMeta?.working === true;
       const shouldSteer = requestedSteer || inferredBusySteer;
-      // A reconnecting app can correctly send `steer` while our mirror has no
-      // turn id (for example, the turn started while no owner was attached).
-      // Also be defensive for clients that send a plain user_message while the
-      // room is already working. Tell the SDK this is steering; otherwise it
-      // rejects the message as a normal busy prompt. Seed a fallback id so
-      // later chunks/done have a target instead of being dropped.
+      // Wire behavior and room state drive the mobile echo/turn correlation,
+      // not SDK delivery mode: _wakeAgent reads the live SDK state at handoff.
+      // Seed a fallback id when a reconnecting app has no mirrored turn.
       if (msg.images && msg.images.length > 0) {
         void _deliverImageUserMessage(sender, msg, shouldSteer).catch((error) => {
           const detail = error instanceof Error ? error.message : String(error);
@@ -5142,14 +5398,18 @@ export function _routeClientMessageFrom(
       if (seededTurnId) {
         _currentTurnId = msg.id;
       }
-      // Always include a streaming delivery mode for app-originated messages.
-      // The SDK ignores `deliverAs` when idle, but requires it when a turn is
-      // already running. This avoids a race where Remote Pi's mirror has not
+      const trimmedText = typeof msg.text === "string" ? msg.text.trim() : "";
+      if (trimmedText && _tryExecuteTerminalInput(trimmedText)) {
+        if (trimmedText.startsWith("/")) {
+          _safeNotify(`[remote-pi] Terminal command: "${trimmedText}"`, "info");
+        }
+        _echoUserMessage(msg, shouldSteer);
+        break;
+      }
       void (async () => {
         const wake = await _wakeAgent(
           msg.text,
           `app user_message id=${msg.id}`,
-          "steer",
         );
         if (!wake.ok) {
           if (seededTurnId) _currentTurnId = previousTurnId;
@@ -5161,7 +5421,11 @@ export function _routeClientMessageFrom(
           });
           return;
         }
-        if (shouldSteer) _trackPendingSteer(msg.id, msg.text);
+        if (shouldSteer) {
+          _trackPendingSteer(msg.id, msg.text);
+          const preview = msg.text.length > 40 ? msg.text.slice(0, 40) + "…" : msg.text;
+          _safeNotify(`[remote-pi] Phone steer queued: "${preview}"`, "info");
+        }
         _echoUserMessage(msg, shouldSteer);
       })();
       break;
@@ -6216,6 +6480,9 @@ if (_isDirectRun()) {
     } else {
       console.log(`[remote-pi] peers:\n${formatPeerInventory(peers)}`);
     }
+  } else if (subcmd === "web") {
+    const stubCtx = { ui: { notify: (msg: string) => console.log(msg) } as unknown as ExtensionContext["ui"] };
+    await _cmdWeb(cliArgs.join(" "), stubCtx);
   } else if (subcmd === "claude") {
     await _cmdClaudeCli(cliArgs);
   } else if (subcmd === "install") {

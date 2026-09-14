@@ -10,7 +10,7 @@
  * possible).
  */
 
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import {
   handleSessionCompact,
   handleSessionNew,
@@ -284,6 +284,55 @@ describe("handleModelSet", () => {
       () => { persistCalls += 1; },
     );
     expect(persistCalls).toBe(0);
+  });
+
+  test("falls back to authenticated provider alias (e.g. openai -> openai-codex)", async () => {
+    const codexModel: SdkModelLike = {
+      id: "gpt-5.6-sol",
+      name: "GPT-5.6 Sol",
+      provider: "openai-codex",
+      reasoning: true,
+      contextWindow: 128000,
+    };
+    const unauthModel: SdkModelLike = {
+      id: "gpt-5.6-sol",
+      name: "GPT-5.6 Sol",
+      provider: "openai",
+      reasoning: true,
+      contextWindow: 128000,
+    };
+    const reg = {
+      refresh: vi.fn(),
+      find: vi.fn((provider: string, id: string) => {
+        if (provider === "openai" && id === "gpt-5.6-sol") return unauthModel;
+        if (provider === "openai-codex" && id === "gpt-5.6-sol") return codexModel;
+        return undefined;
+      }),
+      getAll: () => [unauthModel, codexModel],
+      getAvailable: () => [codexModel],
+    } as unknown as ActionModelRegistry;
+
+    const setModelCalls: SdkModelLike[] = [];
+    const pi = fakePi({
+      setModel: async (m) => {
+        setModelCalls.push(m);
+        return m.provider === "openai-codex";
+      },
+    });
+
+    const sender = makeSender();
+    const persisted: Array<{ provider: string; modelId: string }> = [];
+    await handleModelSet(
+      pi,
+      null,
+      reg,
+      sender,
+      { type: "model_set", id: "r_alias", provider: "openai", model_id: "gpt-5.6-sol" },
+      (p, m) => persisted.push({ provider: p, modelId: m }),
+    );
+
+    expect(sender.sent[0]).toMatchObject({ type: "action_ok", action: "model_set" });
+    expect(persisted).toEqual([{ provider: "openai-codex", modelId: "gpt-5.6-sol" }]);
   });
 });
 
