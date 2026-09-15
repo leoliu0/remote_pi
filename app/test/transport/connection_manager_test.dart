@@ -1044,6 +1044,7 @@ class _ControllableChannel implements IChannel, IControlLink {
   final _controlCtrl = StreamController<ControlInbound>.broadcast();
   final List<Map<String, dynamic>> sentControl = [];
   String? activeRoom;
+  final List<ClientMessage> sent = [];
 
   void setActiveRoom(String roomId) {
     activeRoom = roomId;
@@ -1052,8 +1053,7 @@ class _ControllableChannel implements IChannel, IControlLink {
   @override
   Stream<ServerMessage> get serverMessages => _ctrl.stream;
 
-  @override
-  Future<void> send(ClientMessage msg) async {}
+  Future<void> send(ClientMessage msg) async => sent.add(msg);
 
   @override
   Future<void> close() async {
@@ -1172,6 +1172,52 @@ void _registerRoomsTests() {
         expect(cm.isRoomLive('epkA', 'rB'), isTrue);
 
         await sub.cancel();
+        cm.dispose();
+      },
+    );
+
+    test(
+      'quitRoom sends /exit to the target room and restores the active room '
+      '(plan 59 bin icon)',
+      () async {
+        final ch = _ControllableChannel();
+        final cm = ConnectionManager(
+          factory: (_, _) async => ch,
+          storage: _FakeStorage([]),
+          emitDebounce: Duration.zero,
+        );
+        await cm.connectTo(_fakePeer());
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+
+        ch.pushControl(const RoomAnnounced(
+          peer: 'epkA',
+          roomId: 'r1',
+          name: 'one',
+          cwd: '/a',
+          startedAt: 1000,
+        ));
+        ch.pushControl(const RoomAnnounced(
+          peer: 'epkA',
+          roomId: 'r2',
+          name: 'two',
+          cwd: '/b',
+          startedAt: 2000,
+        ));
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+        cm.switchRoom('r1');
+
+        final sent = cm.quitRoom('epkA', 'r2');
+        expect(sent, isTrue);
+        expect(ch.sent, hasLength(1));
+        final msg = ch.sent.single as UserMessage;
+        expect(msg.text, '/exit');
+        // Envelope targeting restored — the user's open chat is unaffected.
+        expect(ch.activeRoom, 'r1');
+
+        // Not-live room: nothing sent, caller falls back to local delete.
+        expect(cm.quitRoom('epkA', 'rX'), isFalse);
+        expect(ch.sent, hasLength(1));
+
         cm.dispose();
       },
     );

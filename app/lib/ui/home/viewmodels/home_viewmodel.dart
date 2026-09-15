@@ -234,6 +234,15 @@ class HomeViewModel extends ViewModel<HomeState> {
   Future<void> deleteRoom(String epk, String roomId) =>
       _conn.deleteCachedRoom(epk, roomId);
 
+  /// Plan/59 — bin icon on a LIVE tile: quit the Pi-side session for real
+  /// (`/exit` reaches that room's agent via [ConnectionManager.quitRoom])
+  /// and drop the local cached tile. Offline tiles keep the old
+  /// local-only [deleteRoom] behaviour (nothing to quit).
+  Future<void> quitSession(String epk, String roomId) async {
+    _conn.quitRoom(epk, roomId);
+    await _conn.deleteCachedRoom(epk, roomId);
+  }
+
   @override
   void dispose() {
     _disposed = true;

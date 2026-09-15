@@ -991,6 +991,35 @@ class ConnectionManager extends Service {
     return live != null && live.contains(roomId);
   }
 
+  /// Plan/59 — actually QUIT a Pi-side session from a Home tile.
+  ///
+  /// Sends `/exit` as a user_message to the target room: the extension's
+  /// terminal-input interceptor executes slash commands in the TUI, and
+  /// omp's `/exit` ends that agent process cleanly (room goes away on the
+  /// relay, so every device drops the tile). The transport's outer-envelope
+  /// room is targeted and restored WITHOUT touching `_activeRoomId` /
+  /// `_activePeer` / the writer binding — no UI churn, no session switch.
+  /// The `/exit` echo is then dropped by the inbound room-mismatch guard
+  /// unless the user is quitting the room they currently have open.
+  ///
+  /// Returns `false` (send skipped, caller may still delete the local tile)
+  /// when the relay link is down or the room is not in the live set.
+  bool quitRoom(String epk, String roomId) {
+    final cur = _status;
+    if (cur is! StatusOnline) return false;
+    if (!isRoomInLiveSet(epk, roomId)) return false;
+    final prev = _activeRoomId;
+    _propagateActiveRoom(roomId, cur.channel);
+    try {
+      cur.channel.send(UserMessage(id: _newId(), text: '/exit'));
+    } catch (_) {
+      _propagateActiveRoom(prev, cur.channel);
+      return false;
+    }
+    _propagateActiveRoom(prev, cur.channel);
+    return true;
+  }
+
 
   /// Plan/32 — `true` when the relay's last room-meta broadcast for
   /// `(epk, roomId)` carried `working: true` (an in-flight agent turn).

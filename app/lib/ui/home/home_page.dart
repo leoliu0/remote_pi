@@ -499,16 +499,27 @@ class HomePage extends StatelessWidget {
     HomeViewModel vm,
     HomeItem it,
   ) async {
+    final live =
+        vm.isRoomLive(it.peer.remoteEpk, it.room.roomId) ||
+        vm.isRoomWorking(it.peer.remoteEpk, it.room.roomId);
+    final working = vm.isRoomWorking(it.peer.remoteEpk, it.room.roomId);
     final ok = await showDialog<bool>(
       context: context,
       builder: (dCtx) {
         final colors = dCtx.colors;
         return AlertDialog(
           backgroundColor: colors.bg,
-          title: Text('Delete session?', style: TextStyle(color: colors.text)),
+          title: Text(
+            live ? 'Quit session?' : 'Delete session?',
+            style: TextStyle(color: colors.text),
+          ),
           content: Text(
-            'Removes the session from this list only. If it is still '
-            'running on the Pi, it reappears.',
+            live
+                ? 'Sends /exit to this agent on your Mac — the session '
+                      'process ends and disappears from this list.'
+                      '${working ? ' A turn is running and will be interrupted.' : ''}'
+                : 'Removes the session from this list only. If it is still '
+                      'running on the Pi, it reappears.',
             style: TextStyle(color: colors.muted, fontSize: 12),
           ),
           actions: [
@@ -518,14 +529,21 @@ class HomePage extends StatelessWidget {
             ),
             TextButton(
               onPressed: () => Navigator.of(dCtx).pop(true),
-              child: Text('Delete', style: TextStyle(color: colors.error)),
+              child: Text(
+                live ? 'Quit' : 'Delete',
+                style: TextStyle(color: colors.error),
+              ),
             ),
           ],
         );
       },
     );
     if (ok != true) return;
-    await vm.deleteRoom(it.peer.remoteEpk, it.room.roomId);
+    if (live) {
+      await vm.quitSession(it.peer.remoteEpk, it.room.roomId);
+    } else {
+      await vm.deleteRoom(it.peer.remoteEpk, it.room.roomId);
+    }
   }
 
   static Future<void> _open(
