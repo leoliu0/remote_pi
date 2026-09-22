@@ -243,6 +243,12 @@ class HomeViewModel extends ViewModel<HomeState> {
     await _conn.deleteCachedRoom(epk, roomId);
   }
 
+  /// Restart a Pi-side session from a Home tile: sends `/restart` to that
+  /// room's agent via [ConnectionManager.restartRoom].
+  Future<bool> restartSession(String epk, String roomId) async {
+    return _conn.restartRoom(epk, roomId);
+  }
+
   @override
   void dispose() {
     _disposed = true;

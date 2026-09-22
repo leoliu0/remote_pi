@@ -53,6 +53,7 @@ export interface RpcChildExitEvent {
 }
 
 export const EXIT_DAEMON_FRESH_SESSION = 42;
+export const EXIT_DAEMON_RESTART = 43;
 
 /** Windows extensions `spawn` (without `shell`) can actually launch, in
  *  preference order: native `.exe` first, then the `.cmd`/`.bat` shims (run via

@@ -37,7 +37,9 @@ class SessionTile extends StatelessWidget {
   /// callers) nothing is rendered. Tap target sits before the dot so
   /// the presence indicator stays the trailing edge.
   final VoidCallback? onDelete;
-
+  /// Visible restart affordance on the row, rendered next to the bin icon.
+  /// Optional; when null nothing is rendered.
+  final VoidCallback? onRestart;
   const SessionTile({
     super.key,
     required this.peer,
@@ -50,6 +52,7 @@ class SessionTile extends StatelessWidget {
     this.isSelected = false,
     this.onLongPress,
     this.onDelete,
+    this.onRestart,
   });
 
   @override
@@ -82,6 +85,13 @@ class SessionTile extends StatelessWidget {
                 Expanded(
                   child: _TitleBlock(peer: peer, room: room),
                 ),
+                if (onRestart != null)
+                  IconButton(
+                    tooltip: 'Restart session',
+                    visualDensity: VisualDensity.compact,
+                    icon: Icon(LucideIcons.rotateCw, size: 16, color: colors.muted2),
+                    onPressed: onRestart,
+                  ),
                 if (onDelete != null)
                   IconButton(
                     tooltip: 'Delete session',

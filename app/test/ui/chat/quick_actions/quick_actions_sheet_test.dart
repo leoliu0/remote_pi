@@ -90,6 +90,7 @@ Future<({_FakeRepo repo, List<int> resetCalls})> _openSheet(
   bool failCompact = false,
   bool failNewSession = false,
   WireModel? currentModel,
+  Future<void> Function(String text)? onSendPrompt,
 }) async {
   final repo = _FakeRepo()
     ..failCompact = failCompact
@@ -115,6 +116,7 @@ Future<({_FakeRepo repo, List<int> resetCalls})> _openSheet(
                 child: QuickActionsSheetBody(
                   messenger: messenger,
                   onSessionReset: () async => resetCalls.add(1),
+                  onSendPrompt: onSendPrompt,
                 ),
               ),
             );
@@ -172,6 +174,20 @@ void main() {
     // Sheet dismissed; no success toast (removed — the cleared chat is enough).
     expect(find.byKey(const Key('qa-new-session')), findsNothing);
     expect(find.text('New session started'), findsNothing);
+  });
+
+  testWidgets('Restart session: tap sends /restart and closes sheet',
+      (tester) async {
+    String? promptSent;
+    await _openSheet(
+      tester,
+      onSendPrompt: (t) async => promptSent = t,
+    );
+    await tester.tap(find.byKey(const Key('qa-restart-session')));
+    await tester.pumpAndSettle();
+
+    expect(promptSent, '/restart');
+    expect(find.byKey(const Key('qa-restart-session')), findsNothing);
   });
 
   testWidgets(

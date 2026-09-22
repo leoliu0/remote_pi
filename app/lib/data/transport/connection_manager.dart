@@ -1020,6 +1020,30 @@ class ConnectionManager extends Service {
     return true;
   }
 
+  /// Restart a Pi-side session from a Home tile or Quick Actions.
+  ///
+  /// Sends `/restart` as a user_message to the target room: the extension's
+  /// terminal-input interceptor executes slash commands in the TUI, and
+  /// omp's `/restart` restarts with the same launch flags, resuming the session.
+  ///
+  /// Returns `false` (send skipped) when the relay link is down or the room
+  /// is not in the live set.
+  bool restartRoom(String epk, String roomId) {
+    final cur = _status;
+    if (cur is! StatusOnline) return false;
+    if (!isRoomInLiveSet(epk, roomId)) return false;
+    final prev = _activeRoomId;
+    _propagateActiveRoom(roomId, cur.channel);
+    try {
+      cur.channel.send(UserMessage(id: _newId(), text: '/restart'));
+    } catch (_) {
+      _propagateActiveRoom(prev, cur.channel);
+      return false;
+    }
+    _propagateActiveRoom(prev, cur.channel);
+    return true;
+  }
+
 
   /// Plan/32 — `true` when the relay's last room-meta broadcast for
   /// `(epk, roomId)` carried `working: true` (an in-flight agent turn).

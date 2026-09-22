@@ -357,6 +357,11 @@ class ChatViewModel extends ViewModel<ChatState> {
     await _sync.clearActiveSession();
   }
 
+  /// Restart the active session by sending `/restart` to the Pi.
+  Future<void> restartSession() async {
+    await sendMessage('/restart');
+  }
+
   Future<void> reconnect() async {
     final peer = _activePeer;
     if (peer == null) return;

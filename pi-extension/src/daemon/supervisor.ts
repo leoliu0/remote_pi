@@ -6,7 +6,7 @@ import { addDaemon, listDaemons, migrateRegistryNames, removeDaemon } from "./re
 import { daemonIdForCwd } from "./id.js";
 import { defaultAgentName, type LocalConfig } from "../session/local_config.js";
 import { ipcAddress, usesNamedPipe } from "../session/ipc.js";
-import { EXIT_DAEMON_FRESH_SESSION, RpcChild, type RpcChildExitEvent, type RpcChildOptions } from "./rpc_child.js";
+import { EXIT_DAEMON_FRESH_SESSION, EXIT_DAEMON_RESTART, RpcChild, type RpcChildExitEvent, type RpcChildOptions } from "./rpc_child.js";
 import {
   type ControlReply,
   type ControlRequest,
@@ -599,8 +599,8 @@ export class Supervisor {
       return;
     }
 
-    if (evt.code === EXIT_DAEMON_FRESH_SESSION) {
-      // App-triggered daemon `/new`: this is an intentional recycle, not a
+    if (evt.code === EXIT_DAEMON_FRESH_SESSION || evt.code === EXIT_DAEMON_RESTART) {
+      // App-triggered daemon `/new` or `/restart`: intentional recycle, not a
       // crash. Restart immediately and don't burn the crash backoff budget.
       slot.restartAttempt = 0;
       slot.child.noteRestart();

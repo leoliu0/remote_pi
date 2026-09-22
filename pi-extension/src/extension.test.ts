@@ -13,6 +13,7 @@ import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getCapabilities, setCapabilities } from "@earendil-works/pi-tui";
 import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-agent";
+import { EXIT_DAEMON_RESTART } from "./daemon/rpc_child.js";
 
 const _convertToPngMock = vi.hoisted(() => vi.fn(async () => null));
 
@@ -238,6 +239,7 @@ const {
   _resetAutoInitedForTest,
   _setAutoInitedForTest,
   _hasMeshNodeForTest,
+  _hasPendingRootRetryForTest,
   _getLockedNameForTest,
   _resetCwdLockForTest,
   _handleControl,
@@ -248,6 +250,7 @@ const {
   _getDisposedForTest,
   _tryExecuteTerminalSlashCommand,
   _tryExecuteTerminalInput,
+  restartSession,
 } = indexModule;
 const { acquireCwdLock } = await import("./session/cwd_lock.js");
 
@@ -384,8 +387,11 @@ describe("extension default export", () => {
     (extension as ExtensionFactory)(pi);
     // 8 plan-25 + 2 daemon registry (W1) + 6 fleet ops (W2) + 2 install (W3)
     // + 1 cross-PC inventory (plan-25 W D) + 1 cron (plan-39) + 1 rename (plan/41)
-    // + 1 relay control (issue #119) + 2 web client (remote-pi web, rc web) + 11 /rc commands.
-    expect(registeredCommands).toHaveLength(36);
+    // + 1 relay control (issue #119) + 2 web client (remote-pi web, rc web) + 11 /rc commands
+    // + 2 restart (remote-pi restart, rc restart).
+    expect(registeredCommands).toHaveLength(38);
+    expect(registeredCommands).toContain("remote-pi restart");
+    expect(registeredCommands).toContain("rc restart");
     expect(registeredCommands).toContain("rc");
     expect(registeredCommands).toContain("rc status");
     expect(registeredCommands).toContain("rc web");
@@ -4463,6 +4469,108 @@ describe("session_shutdown teardown", () => {
     }
   });
 
+  // ── Silent relay loss after session_shutdown (live incident 2026-09-21) ─────
+  // A 4-day session lost its relay WS and never reconnected: zero attempts.
+  // Two holes in the rearm chain: (1) the replacement session_start can carry
+  // a subagent-looking ctx (hasUI:false custom hosts, session-file parent dirs
+  // that merely contain "_"), and the rearm sat AFTER that early-return; (2)
+  // `void _cmdRoot(...)` died as an unhandled rejection on transient failures
+  // (e.g. a Dropbox-synced cwd read erroring mid-sync) with no retry.
+  describe("post-shutdown rearm self-heals the relay", () => {
+    beforeEach(async () => {
+      vi.clearAllMocks();
+      _knownPeers.length = 0;
+      relayRef.current = null;
+      relayInstances.length = 0;
+      _defaultConnectImpl = async () => undefined;
+      _setDisposedForTest(false);
+      _resetAutoInitedForTest();
+      _resetCwdLockForTest();
+      const stop = captureHandler("remote-pi stop");
+      await stop("", makeMockCtx());
+      _resetAutoInitedForTest();
+      _resetCwdLockForTest();
+    });
+    afterEach(() => {
+      delete process.env["REMOTE_PI_DIRECT_CONFIG"];
+      _resetCwdLockForTest();
+    });
+
+    // A module-reuse host's replacement MAIN session can look like a subagent
+    // (hasUI:false, underscore-bearing session-file dir). The rearm must still
+    // run — by SDK semantics a session_start following _disposed IS the
+    // replacement main session — instead of leaving the relay off forever.
+    test("replacement session_start with subagent-shaped ctx still re-arms the relay", async () => {
+      const cwd = `/tmp/remote-pi-rearm-subagent-${process.pid}-${Date.now()}`;
+      process.env["REMOTE_PI_DIRECT_CONFIG"] = JSON.stringify({
+        agent_name: "rearm-subagent",
+        auto_start_relay: true,
+      });
+      const ctx = makeMockCtx(cwd);
+      await _connectForTest(ctx);
+      expect(_getState()).toBe("started");
+
+      const shutdown = captureEventHandler("session_shutdown");
+      await shutdown({ type: "session_shutdown", reason: "resume" });
+      expect(_getState()).toBe("idle");
+      expect(_getDisposedForTest()).toBe(true);
+
+      const subagentCtx = {
+        hasUI: false,
+        sessionManager: {
+          getSessionFile: () =>
+            "/home/user/.omp/agent/sessions/parent-dir_12345/subagent-1.jsonl",
+          getEntries: () => [{ type: "session_init", task: "do work" }],
+        },
+        ui: { notify: vi.fn() },
+        cwd,
+      };
+      const sessionStart = captureEventHandler("session_start");
+      sessionStart({ type: "session_start" }, subagentCtx);
+      // The rearm is fire-and-forget async; poll for its outcome, no fixed sleep.
+      await vi.waitFor(() => expect(_getState()).toBe("started"));
+
+      // FAILS pre-fix: the subagent early-return skips the rearm entirely and
+      // the relay stays idle with zero reconnect attempts.
+      expect(_getState()).toBe("started");
+    });
+
+    // `void _cmdRoot(...)` rejections were unhandled: one transient failure
+    // (config read on a syncing Dropbox cwd, keyring hiccup, …) silently
+    // killed the relay for the rest of the process lifetime.
+    test("transient rearm failure retries with backoff instead of dying silently", async () => {
+      const cwd = `/tmp/remote-pi-rearm-retry-${process.pid}-${Date.now()}`;
+      process.env["REMOTE_PI_DIRECT_CONFIG"] = JSON.stringify({
+        agent_name: "rearm-retry",
+        auto_start_relay: true,
+      });
+      const ctx = makeMockCtx(cwd);
+      await _connectForTest(ctx);
+      expect(_getState()).toBe("started");
+
+      const shutdown = captureEventHandler("session_shutdown");
+      await shutdown({ type: "session_shutdown", reason: "resume" });
+      expect(_getState()).toBe("idle");
+      // Dynamic import: must resolve AFTER the vi.mock("./config.js") hoisting
+      // so the once-throw lands on the mocked instance the extension uses.
+      const configModule = await import("./config.js");
+      const resolveRelayUrl = vi.mocked(configModule.resolveRelayUrl);
+      resolveRelayUrl.mockImplementationOnce(() => {
+        throw new Error("EIO: transient read on a syncing cwd");
+      });
+      const sessionStart = captureEventHandler("session_start");
+      sessionStart({ type: "session_start" }, ctx);
+
+      // FAILS pre-fix: the rejection is unhandled and no retry is scheduled.
+      await vi.waitFor(() => expect(_hasPendingRootRetryForTest()).toBe(true));
+      expect(_getState()).toBe("idle");
+
+      // First backoff step is 1s; waitFor polls past the timer instead of
+      // sleeping a guessed duration.
+      await vi.waitFor(() => expect(_getState()).toBe("started"), { timeout: 5_000 });
+    });
+  });
+
   test("same-module session replacement silences a pending initial Relay rejection and starts fresh", async () => {
     const firstConnect = deferred<void>();
     let firstSettled = false;
@@ -6738,5 +6846,88 @@ describe("terminal slash command execution from mobile", () => {
     await vi.waitFor(() => {
       expect(sendUserMessage).toHaveBeenCalledWith("hello headless agent", undefined);
     });
+  });
+
+  test("restartSession executes /restart via terminal input when UI available", () => {
+    const sessionStart = captureEventHandler("session_start");
+    let editorText = "";
+    const mockCtx = {
+      ui: {
+        notify: vi.fn(),
+        getEditorText: vi.fn(() => editorText),
+        setEditorText: vi.fn((text: string) => {
+          editorText = text;
+        }),
+      },
+    };
+    sessionStart({ type: "session_start" }, mockCtx as unknown as Parameters<typeof sessionStart>[1]);
+
+    const dataListener = vi.fn();
+    process.stdin.on("data", dataListener);
+    try {
+      const restarted = restartSession();
+      expect(restarted).toBe(true);
+      expect(mockCtx.ui.setEditorText).toHaveBeenCalledWith("/restart");
+      expect(dataListener).toHaveBeenCalledWith("\r");
+    } finally {
+      process.stdin.removeListener("data", dataListener);
+    }
+  });
+
+  test("restartSession in daemon mode triggers process exit with EXIT_DAEMON_RESTART", () => {
+    const sessionStart = captureEventHandler("session_start");
+    // Headless ctx (no UI methods)
+    sessionStart({ type: "session_start" }, { ui: {} } as unknown as Parameters<typeof sessionStart>[1]);
+
+    const prevDaemon = process.env["REMOTE_PI_DAEMON"];
+    process.env["REMOTE_PI_DAEMON"] = "1";
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation((() => undefined) as unknown as (code?: string | number | null | undefined) => never);
+    vi.useFakeTimers();
+    try {
+      const restarted = restartSession();
+      expect(restarted).toBe(true);
+      vi.advanceTimersByTime(150);
+      expect(exitSpy).toHaveBeenCalledWith(EXIT_DAEMON_RESTART);
+    } finally {
+      vi.useRealTimers();
+      exitSpy.mockRestore();
+      if (prevDaemon !== undefined) {
+        process.env["REMOTE_PI_DAEMON"] = prevDaemon;
+      } else {
+        delete process.env["REMOTE_PI_DAEMON"];
+      }
+    }
+  });
+
+  test("routeClientMessage routes /restart in daemon mode to EXIT_DAEMON_RESTART", () => {
+    const sessionStart = captureEventHandler("session_start");
+    sessionStart({ type: "session_start" }, { ui: {} } as unknown as Parameters<typeof sessionStart>[1]);
+
+    const prevDaemon = process.env["REMOTE_PI_DAEMON"];
+    process.env["REMOTE_PI_DAEMON"] = "1";
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation((() => undefined) as unknown as (code?: string | number | null | undefined) => never);
+    vi.useFakeTimers();
+    try {
+      const mockSender = { send: vi.fn() };
+      _routeClientMessageFrom(
+        mockSender as unknown as Parameters<typeof _routeClientMessageFrom>[0],
+        {
+          type: "user_message",
+          id: "msg-restart-123",
+          text: "/restart",
+        },
+        {} as unknown as Parameters<typeof _routeClientMessageFrom>[2],
+      );
+      vi.advanceTimersByTime(150);
+      expect(exitSpy).toHaveBeenCalledWith(EXIT_DAEMON_RESTART);
+    } finally {
+      vi.useRealTimers();
+      exitSpy.mockRestore();
+      if (prevDaemon !== undefined) {
+        process.env["REMOTE_PI_DAEMON"] = prevDaemon;
+      } else {
+        delete process.env["REMOTE_PI_DAEMON"];
+      }
+    }
   });
 });

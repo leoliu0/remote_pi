@@ -79,6 +79,23 @@ backgrounded reconnect, online-when-working, tile delete button).
 running relay + paired Pi); covered by `connection_manager_test` fake-channel
 tests instead.
 
+### 2026-09-23 — Session restart affordance: emulator e2e verification
+
+**Device:** RemotePi_Pixel emulator (Android API 34, x86_64, SwiftShader), debug APK built via `scripts/docker-build-apk.sh`.
+**Setup:** Live relay at `http://178.157.59.181`, paired with `test-pi` session via paste-code flow.
+
+| # | Step | Result |
+|---|------|--------|
+| 1 | Launch app on emulator & pair with relay | Paired; session list renders live sessions with new restart button next to bin — [session-list](screens/2026-09-23-session-list-restart-btn.png) |
+| 2 | Tap restart icon (`[↻]`) on active session | Confirmation dialog appears: "Restart session? Sends /restart to this agent on your Mac" — [dialog](screens/2026-09-23-restart-dialog.png) |
+| 3 | Tap "Restart" | `/restart` command dispatched; session dot transitions to `working` state as agent handles restart — [confirmed](screens/2026-09-23-restart-confirmed.png) |
+| 4 | Long press on live session row | Context bottom sheet shows "Restart session", "Rename session", "Delete session" — [menu](screens/2026-09-23-longpress-menu.png) |
+| 5 | Open session chat → Quick Actions sheet | "Restart session" tile rendered under Quick Actions without layout overflow — [quick-actions](screens/2026-09-23-quick-actions.png) |
+
+**Unit tests:**
+- `app`: 63/63 tests passed (incl. `restartRoom` envelope targeting and restore, `SessionTile.onRestart` affordance, `QuickActionsSheet` restart action).
+- `pi-extension`: 859/859 vitest passed, `tsc` builds clean (incl. `restartSession()`, `EXIT_DAEMON_RESTART`, and supervisor handling).
+
 ### 2026-09-14 — math-render freeze fix: emulator e2e (pair → chat → live agent turn)
 
 **Device:** RemotePi_Pixel emulator (Android API 36, x86_64), APK `deb737a0` (`f1d2b012`).

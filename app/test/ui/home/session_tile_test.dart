@@ -60,6 +60,45 @@ void main() {
     expect(find.byTooltip('Delete session'), findsNothing);
   });
 
+  testWidgets('renders a restart button that fires onRestart, not onOpen',
+      (tester) async {
+    var opened = 0;
+    var restarted = 0;
+    await tester.pumpWidget(
+      _wrap(
+        SessionTile(
+          peer: _peer(),
+          isLive: true,
+          room: const RoomInfo(roomId: 'r1', startedAt: 1, cwd: '/x'),
+          onOpen: () => opened++,
+          onRestart: () => restarted++,
+        ),
+      ),
+    );
+
+    final btn = find.byTooltip('Restart session');
+    expect(btn, findsOneWidget);
+
+    await tester.tap(btn);
+    await tester.pump();
+    expect(restarted, 1);
+    expect(opened, 0);
+  });
+
+  testWidgets('no restart button when onRestart is null', (tester) async {
+    await tester.pumpWidget(
+      _wrap(
+        SessionTile(
+          peer: _peer(),
+          isLive: true,
+          room: const RoomInfo(roomId: 'r1', startedAt: 1, cwd: '/x'),
+          onOpen: () {},
+        ),
+      ),
+    );
+    expect(find.byTooltip('Restart session'), findsNothing);
+  });
+
   testWidgets('subtitle shows model · thinking when both are known',
       (tester) async {
     await tester.pumpWidget(

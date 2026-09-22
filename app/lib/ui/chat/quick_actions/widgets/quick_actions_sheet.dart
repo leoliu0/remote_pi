@@ -130,9 +130,10 @@ class _QuickActionsSheetBodyState extends State<QuickActionsSheetBody> {
         padding: EdgeInsets.only(
           bottom: MediaQuery.of(context).viewInsets.bottom,
         ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
             const SizedBox(height: 10),
             _DragHandle(),
             const SizedBox(height: 6),
@@ -169,6 +170,18 @@ class _QuickActionsSheetBodyState extends State<QuickActionsSheetBody> {
             ),
             const _Divider(),
             _ActionTile(
+              key: const Key('qa-restart-session'),
+              icon: LucideIcons.rotateCw,
+              label: 'Restart session',
+              subtitle: 'Restart omp with the same launch flags (/restart).',
+              busy: false,
+              onTap: () async {
+                Navigator.of(context).pop();
+                await widget.onSendPrompt?.call('/restart');
+              },
+            ),
+            const _Divider(),
+            _ActionTile(
               key: const Key('qa-reload-plugins'),
               icon: LucideIcons.plug2,
               label: 'Reload plugins',
@@ -191,7 +204,8 @@ class _QuickActionsSheetBodyState extends State<QuickActionsSheetBody> {
               onPick: (level) => _onThinking(vm, level),
             ),
             const SizedBox(height: 18),
-          ],
+            ],
+          ),
         ),
       ),
     );
