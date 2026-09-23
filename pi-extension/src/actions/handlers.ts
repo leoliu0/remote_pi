@@ -55,9 +55,9 @@ const ALL_THINKING_LEVELS: ThinkingLevel[] = [
   "auto", "off", "minimal", "low", "medium", "high", "xhigh", "max",
 ];
 export const PROVIDER_ALIASES: Record<string, string[]> = {
-  openai: ["openai-codex", "openai"],
-  "openai-codex": ["openai", "openai-codex"],
-  google: ["google-antigravity", "gemini", "google"],
+  openai: ["openai", "openai-codex"],
+  "openai-codex": ["openai-codex", "openai"],
+  google: ["google-antigravity", "google", "gemini"],
   "google-antigravity": ["google", "gemini", "google-antigravity"],
   gemini: ["google-antigravity", "google", "gemini"],
   anthropic: ["anthropic-oauth", "anthropic"],
@@ -454,42 +454,45 @@ export async function handleModelSet(
     const targetModelId = msg.model_id.toLowerCase();
     const aliases = PROVIDER_ALIASES[targetProvider] ?? [targetProvider];
 
-    // 1. Available (authenticated) models matching model_id first
+    // 1. Available (authenticated) models matching exact targetProvider first
     if (typeof anyReg.getAvailable === "function") {
       try {
         const available: SdkModelLike[] = anyReg.getAvailable();
+        for (const m of available) {
+          if (m.provider.toLowerCase() === targetProvider && m.id.toLowerCase() === targetModelId) {
+            addCandidate(m);
+          }
+        }
         for (const m of available) {
           if (aliases.includes(m.provider.toLowerCase()) && m.id.toLowerCase() === targetModelId) {
             addCandidate(m);
           }
         }
-        for (const m of available) {
-          if (m.id.toLowerCase() === targetModelId) {
-            addCandidate(m);
-          }
-        }
       } catch {}
     }
-
     // 2. Direct registry find
     try {
       addCandidate(liveReg.find(msg.provider, msg.model_id));
     } catch {}
 
-    // 3. Provider alias finds
+    // 3. Provider alias finds (skip targetProvider since step 2 already did it)
     for (const alias of aliases) {
+      if (alias.toLowerCase() === targetProvider) continue;
       try {
         addCandidate(liveReg.find(alias, msg.model_id));
       } catch {}
     }
-
-    // 4. Registry getAll search
+    // 4. Registry getAll search: exact provider first, then aliases
     if (typeof anyReg.getAll === "function") {
       try {
         const all: SdkModelLike[] = anyReg.getAll();
         for (const m of all) {
+          if (m.provider.toLowerCase() === targetProvider && m.id.toLowerCase() === targetModelId) {
+            addCandidate(m);
+          }
+        }
+        for (const m of all) {
           const providerMatches =
-            m.provider.toLowerCase() === targetProvider ||
             aliases.includes(m.provider.toLowerCase()) ||
             (targetProvider === "google" && m.provider === "gemini") ||
             (targetProvider === "gemini" && m.provider === "google");
@@ -507,15 +510,22 @@ export async function handleModelSet(
     // 5. Fallback from omp models
     if (process.env["VITEST"] !== "true") {
       const ompModels = _loadOmpModels();
-      const match = ompModels.find(
-        (m) =>
-          (m.provider.toLowerCase() === targetProvider ||
-            aliases.includes(m.provider.toLowerCase()) ||
-            m.provider.toLowerCase().replace(/-/g, "") === targetProvider.replace(/-/g, "")) &&
-          (m.id.toLowerCase() === targetModelId ||
-            m.name.toLowerCase() === targetModelId ||
-            m.id.toLowerCase().includes(targetModelId)),
-      );
+      const match =
+        ompModels.find(
+          (m) =>
+            m.provider.toLowerCase() === targetProvider &&
+            (m.id.toLowerCase() === targetModelId ||
+              m.name.toLowerCase() === targetModelId ||
+              m.id.toLowerCase().includes(targetModelId)),
+        ) ??
+        ompModels.find(
+          (m) =>
+            (aliases.includes(m.provider.toLowerCase()) ||
+              m.provider.toLowerCase().replace(/-/g, "") === targetProvider.replace(/-/g, "")) &&
+            (m.id.toLowerCase() === targetModelId ||
+              m.name.toLowerCase() === targetModelId ||
+              m.id.toLowerCase().includes(targetModelId)),
+        );
       if (match) {
         addCandidate({
           id: match.id,
@@ -525,7 +535,9 @@ export async function handleModelSet(
             ? "anthropic-messages"
             : match.provider.includes("google")
               ? "google-generative-ai"
-              : "openai-completions",
+              : match.provider.includes("codex")
+                ? "openai-codex-responses"
+                : "openai-completions",
           reasoning: !!match.reasoning,
           input: (match as any).input || ["text", "image"],
           contextWindow: match.context_window || 200000,
