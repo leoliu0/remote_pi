@@ -4,6 +4,7 @@ import 'package:app/data/preferences/preferences.dart';
 import 'package:app/data/transport/connection_manager.dart';
 import 'package:app/data/transport/relay_config.dart';
 import 'package:app/pairing/storage.dart';
+import 'package:app/pairing/owner_identity_bridge.dart';
 import 'package:app/ui/core/viewmodel/viewmodel.dart';
 import 'package:app/ui/settings/states/settings_state.dart';
 
@@ -16,16 +17,17 @@ class SettingsViewModel extends ViewModel<SettingsState> {
   final Preferences _prefs;
   final ConnectionManager _conn;
 
-  /// Optional in tests; required in production. The revoke flow drives
-  /// it explicitly with `allowEmpty:true` so a revoke of the last
-  /// remaining peer still propagates to the relay — without it, the
-  /// safety net in [MeshSyncService] refuses to publish members=[] and
-  /// the next `pullOnDemand` resurrects the peer from the stale blob.
   final MeshSyncService? _meshSync;
+  final OwnerIdentityBridge? _ownerBridge;
   bool _disposed = false;
 
-  SettingsViewModel(this._storage, this._prefs, this._conn, [this._meshSync])
-    : super(const SettingsLoading()) {
+  SettingsViewModel(
+    this._storage,
+    this._prefs,
+    this._conn, [
+    this._meshSync,
+    this._ownerBridge,
+  ]) : super(const SettingsLoading()) {
     _load();
   }
 
@@ -54,7 +56,7 @@ class SettingsViewModel extends ViewModel<SettingsState> {
     final trimmed = nickname?.trim();
     final normalized = (trimmed == null || trimmed.isEmpty) ? null : trimmed;
     final updated = target.copyWith(nickname: normalized);
-    await _storage.savePeer(updated);
+    await _storage.savePeer(updated, intent: PeerSaveIntent.nickname);
     await _load();
   }
 
@@ -69,22 +71,23 @@ class SettingsViewModel extends ViewModel<SettingsState> {
     String? value, {
     bool alwaysReconnect = false,
   }) async {
+    var changed = false;
     if (value == null || value.trim().isEmpty) {
-      final changed = _prefs.relayUrl != null;
+      changed = _prefs.relayUrl != null;
       await resetRelayUrl();
-      if (alwaysReconnect || changed) unawaited(_reconnectToRelay());
-      return null;
+    } else {
+      final normalized = normalizeRelayUrl(value);
+      final reason = relayUrlValidationMessage(normalized);
+      if (reason != null) return reason;
+      changed = _prefs.relayUrl != normalized;
+      await _prefs.setRelayUrl(normalized);
     }
-    final normalized = normalizeRelayUrl(value);
-    final reason = relayUrlValidationMessage(normalized);
-    if (reason != null) return reason;
-    final changed = _prefs.relayUrl != normalized;
-    await _prefs.setRelayUrl(normalized);
-    // Reconnect in the background: the WS dial can take up to 10s when the
-    // new relay is unreachable, and Save must not look dead while that
-    // runs — the snackbar and "Current:" update as soon as the URL is
-    // persisted.
-    if (alwaysReconnect || changed) unawaited(_reconnectToRelay());
+
+    if (alwaysReconnect || changed) {
+      final scopeError = await _activateRelayScope();
+      if (scopeError != null) return scopeError;
+      unawaited(_resumeRelay());
+    }
     return null;
   }
 
@@ -92,46 +95,57 @@ class SettingsViewModel extends ViewModel<SettingsState> {
     await _prefs.setRelayUrl(null);
   }
 
-  Future<void> _reconnectToRelay() async {
-    await _conn.reconnect(preferredEpk: _prefs.selectedPeerEpk);
-    await _meshSync?.pullOnDemand();
+  Future<String?> _activateRelayScope() async {
+    final bridge = _ownerBridge;
+    if (bridge == null) return null;
+    final ownerPk = bridge.currentOwnerPk;
+    if (ownerPk == null) {
+      return 'Owner identity is unavailable. Retry after reopening the app.';
+    }
+    await _conn.disconnect();
+    try {
+      await _storage.initialize(
+        ownerPk: ownerPk,
+        relayUrl: resolveRelayUrl(_prefs),
+      );
+      return null;
+    } catch (_) {
+      return 'Could not open saved data for this relay. Retry to reconnect.';
+    }
   }
 
-  /// Revoke pairing locally. Drops the peer from the relay's presence
-  /// subscription too so we stop receiving updates about a peer that no
-  /// longer exists on this device. Clears the selected pointer when it
-  /// matches. If this was the LAST peer, also resets
-  /// `onboardingCompleted=false` so the next boot lands on /onboarding
-  /// (matches user expectation of "revoke = start fresh").
+  Future<void> _resumeRelay() async {
+    await _conn.reconnect(preferredEpk: _prefs.selectedPeerEpk);
+    final meshSync = _meshSync;
+    if (meshSync == null || !await meshSync.synchronize()) return;
+
+    final peers = await _storage.listPeers();
+    var selected = _prefs.selectedPeerEpk;
+    if (selected == null ||
+        !peers.any((peer) => peer.remoteEpk == selected)) {
+      selected = peers.isEmpty ? null : peers.first.remoteEpk;
+      await _prefs.setSelectedPeerEpk(selected);
+    }
+    await _conn.reconnect(preferredEpk: selected);
+  }
+
+  /// Revoke pairing intentionally. The peer mutation and durable revoke
+  /// operation commit together; synchronization can retry after process death.
   Future<void> revoke(String epk) async {
     final wasActive = _conn.activePeer?.remoteEpk == epk;
     if (_prefs.selectedPeerEpk == epk) {
       await _prefs.setSelectedPeerEpk(null);
     }
-    // Use the SILENT delete so the storage mutation hook does not
-    // auto-publish a members=[] blob through the safety-net guard
-    // (which would refuse it for the last-peer case and leave the
-    // relay holding stale state). We publish ourselves below with
-    // `allowEmpty:true` — the only place in the app that opts out of
-    // the empty-on-existing safety net.
-    await _storage.deletePeerSilent(epk);
+    await _storage.deletePeer(epk);
     final remaining = await _storage.listPeers();
-    if (_meshSync != null) {
-      // ignore: unawaited_futures
-      _meshSync.publish(allowEmpty: remaining.isEmpty);
-    }
+    await _meshSync?.drainPending();
     _conn.subscribeToPeers(remaining.map((p) => p.remoteEpk).toList());
-    // If the revoked peer was the one currently driving the connection,
-    // tear it down so we don't keep talking to a peer the user just
-    // removed. If others remain, fall back to one of them; otherwise
-    // disconnect cleanly.
     if (wasActive) {
       await _conn.disconnect();
       if (remaining.isNotEmpty) {
         final fallback = remaining.first;
         await _prefs.setSelectedPeerEpk(fallback.remoteEpk);
-        // ignore: unawaited_futures
-        _conn.boot(preferredEpk: fallback.remoteEpk);
+        unawaited(_conn.boot(preferredEpk: fallback.remoteEpk));
       }
     }
     if (remaining.isEmpty) {

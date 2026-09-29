@@ -5,7 +5,8 @@ import 'package:app/config/utils/injector.dart';
 import 'package:app/data/actions/actions_repository.dart';
 import 'package:app/data/mesh/mesh_client.dart';
 import 'package:app/data/mesh/mesh_sync_service.dart';
-import 'package:app/data/local/boxes.dart';
+import 'package:app/data/local/app_database.dart';
+import 'package:app/data/local/session_store.dart';
 import 'package:app/data/preferences/preferences.dart';
 import 'package:app/data/repositories/home_read_repository.dart';
 import 'package:app/data/repositories/session_read_repository.dart';
@@ -43,181 +44,171 @@ import 'package:package_info_plus/package_info_plus.dart';
 import 'package:provider/provider.dart';
 import 'package:remote_pi_identity/remote_pi_identity.dart';
 
-final _injector = CustomInjector();
+CustomInjector _injector = CustomInjector();
 
 /// Direct injector access — only for bootstrap, tests, and deep-link handlers.
 CustomInjector get injector => _injector;
 
 Future<void> setupDependencies() async {
-  // Infrastructure singletons
-  _injector.addInstance<PairingStorage>(PairingStorage());
-
-  final prefs = Preferences();
+  final next = CustomInjector();
   try {
-    await prefs.load();
-  } catch (_) {}
-  _injector.addInstance<Preferences>(prefs);
-
-  // Plan 31 — local SSOT box facade (boxes already opened + runtime wiped in
-  // bootstrap before this runs).
-  _injector.addInstance<LocalBoxes>(LocalBoxes());
-
-  // Plan 23 — Owner-key sync. The store talks to the native plugin
-  // (iCloud Keychain on iOS, Block Store on Android); the bridge sits
-  // between it and the rest of the app, owning boot + watch-for-reset.
-  final OwnerIdentityStore ownerStore = MethodChannelOwnerIdentityStore();
-  _injector.addInstance<OwnerIdentityStore>(ownerStore);
-  final ownerBridge = OwnerIdentityBridge(
-    ownerStore,
-    _injector.get<PairingStorage>(),
-  );
-  _injector.addInstance<OwnerIdentityBridge>(ownerBridge);
-
-  // Plan 24 — mesh_versions HTTP client + sync service. Base URL is
-  // the user-configured relay verbatim (always http(s):// per the
-  // post-Wave-2 URL scheme decision — see plan/24-fix-app-url-scheme).
-  // No translation needed: the relay's `/mesh` endpoint shares host +
-  // port with the WebSocket.
-  final meshClient = MeshClient(baseUrlProvider: () => resolveRelayUrl(prefs));
-  _injector.addInstance<MeshClient>(meshClient);
-  final meshSync = MeshSyncService(
-    meshClient,
-    ownerBridge,
-    _injector.get<PairingStorage>(),
-  );
-  _injector.addInstance<MeshSyncService>(meshSync);
-  _injector.get<PairingStorage>().attachPeerMutationHook(() {
-    // ignore: unawaited_futures
-    meshSync.publish();
-  });
-
-  // ConnectionManager — factory function injected manually (function typedefs
-  // cannot be resolved by auto_injector via Type.new).
-  _injector.addService<ConnectionManager>(
-    () {
-      return ConnectionManager(
-        factory: _productionConnectionFactory,
-        storage: _injector.get<PairingStorage>(),
-      );
-    },
-  );
-
-  // Plan 29 — on-device speech-to-text. Singleton: it owns a broadcast
-  // sound-level stream that must survive across chat navigations; the
-  // injector disposes it at app teardown. VoiceInputViewModel never
-  // disposes it (it only stops/cancels sessions).
-  _injector.addService<SpeechService>(() => SpeechToTextService());
-
-  // Plan 30 — image picker + on-device JPEG compression. Stateless, no
-  // dispose hook needed.
-  _injector.addOther<IImagePickerService>(() => ImagePickerService());
-
-  // Plan 31 — SSOT writer + read-only repos. SyncService is the SINGLE
-  // mutator of the message/index/runtime boxes; the read repos only watch.
-  _injector.addService<SyncService>(
-    () => SyncService(
-      _injector.get<ConnectionManager>(),
-      _injector.get<LocalBoxes>(),
-    ),
-  );
-  _injector.addRepository<SessionReadRepository>(
-    () => SessionReadRepository(_injector.get<LocalBoxes>()),
-  );
-  _injector.addRepository<HomeReadRepository>(
-    () => HomeReadRepository(_injector.get<LocalBoxes>()),
-  );
-
-  // Repositories
-  _injector.addRepository<IActionsRepository>(
-    () => ActionsRepository(_injector.get<ConnectionManager>()),
-  );
-
-  // ViewModels
-  _injector.addViewModel<ChatViewModel>(
-    () => ChatViewModel(
-      _injector.get<SessionReadRepository>(),
-      _injector.get<SyncService>(),
-      _injector.get<ConnectionManager>(),
-      _injector.get<Preferences>(),
-      _injector.get<PairingStorage>(),
-    ),
-  );
-  _injector.addViewModel<HomeViewModel>(
-    () => HomeViewModel(
-      _injector.get<PairingStorage>(),
-      _injector.get<Preferences>(),
-      _injector.get<ConnectionManager>(),
-    ),
-  );
-  _injector.addViewModel<SettingsViewModel>(
-    () => SettingsViewModel(
-      _injector.get<PairingStorage>(),
-      _injector.get<Preferences>(),
-      _injector.get<ConnectionManager>(),
-      _injector.get<MeshSyncService>(),
-    ),
-  );
-  _injector.addViewModel<PairingViewModel>(
-    () => PairingViewModel(
-      _injector.get<PairingStorage>(),
-      _productionPairingTransportFactory,
-      _injector.get<ConnectionManager>(),
-      _injector.get<Preferences>(),
-      _injector.get<OwnerIdentityBridge>(),
-    ),
-  );
-  _injector.addViewModel<OnboardingViewModel>(OnboardingViewModel.new);
-  _injector.addViewModel<QuickActionsViewModel>(
-    () => QuickActionsViewModel(_injector.get<IActionsRepository>()),
-  );
-  // Plan 29 — voice input. New instance per chat mount; reuses the shared
-  // SpeechService singleton (which it stops/cancels but never disposes).
-  _injector.addViewModel<VoiceInputViewModel>(
-    () => VoiceInputViewModel(_injector.get<SpeechService>()),
-  );
-  // Plan 30 — image attachment. New instance per chat mount; resolves model
-  // vision via the shared ActionsRepository catalogue cache.
-  _injector.addViewModel<AttachmentViewModel>(
-    () => AttachmentViewModel(
-      _injector.get<IImagePickerService>(),
-      _injector.get<IActionsRepository>(),
-    ),
-  );
-
-  // Plan/tablet — app-global UI selection (which session the tablet's
-  // detail pane shows + which list tile is highlighted). Starts null so
-  // the app opens with no chat pre-selected.
-  _injector.addInstance<SessionSelection>(SessionSelection());
-
-  // Plan/tablet — shell layout state (zero-state collapse). Set by Home so
-  // the adaptive shell drops the split when there's nothing to list.
-  _injector.addInstance<ShellLayout>(ShellLayout());
-
-  // Plan 44 — Android-only in-app update notice. The running version comes
-  // from package_info; the manifest fetch + gating live in the ViewModel
-  // (silent on iOS via `enabled` and on any fetch failure). Stateless
-  // collaborators → addOther (lazy singleton, no dispose hook).
-  var appVersion = '1.2.2';
-  try {
-    final packageInfo = await PackageInfo.fromPlatform().timeout(
-      const Duration(milliseconds: 500),
+    final database = AppDatabase.instance;
+    next.addInstance<AppDatabase>(
+      database,
+      onDispose: (value) => value.dispose(),
     );
-    appVersion = packageInfo.version;
-  } catch (_) {}
-  _injector.addOther<UpdateChecker>(() => UpdateCheckerImpl());
-  _injector.addOther<DismissedUpdateStore>(() => SecureDismissedUpdateStore());
-  _injector.addOther<UrlOpener>(() => const UrlLauncherOpener());
-  _injector.addViewModel<UpdateBannerViewModel>(
-    () => UpdateBannerViewModel(
-      _injector.get<UpdateChecker>(),
-      _injector.get<DismissedUpdateStore>(),
-      _injector.get<UrlOpener>(),
-      currentVersion: appVersion,
-      enabled: Platform.isAndroid,
-    ),
-  );
 
-  _injector.commit();
+    final prefs = Preferences(database);
+    await prefs.load();
+    next.addInstance<Preferences>(
+      prefs,
+      onDispose: (value) => value.dispose(),
+    );
+
+    final pairingStorage = PairingStorage(database);
+    next.addInstance<PairingStorage>(
+      pairingStorage,
+      onDispose: (value) => value.dispose(),
+    );
+
+    final sessionStore = SessionStore(database);
+    next.addInstance<SessionStore>(
+      sessionStore,
+      onDispose: (value) => value.dispose(),
+    );
+
+    // The native identity store and key format remain unchanged. Pairing
+    // metadata is initialized later, once router boot has the owner key.
+    final OwnerIdentityStore ownerStore = MethodChannelOwnerIdentityStore();
+    next.addInstance<OwnerIdentityStore>(ownerStore);
+    final ownerBridge = OwnerIdentityBridge(ownerStore, pairingStorage);
+    next.addInstance<OwnerIdentityBridge>(
+      ownerBridge,
+      onDispose: (value) => value.dispose(),
+    );
+
+    final meshClient = MeshClient(baseUrlProvider: () => resolveRelayUrl(prefs));
+    next.addInstance<MeshClient>(meshClient);
+    final meshSync = MeshSyncService(meshClient, ownerBridge, pairingStorage);
+    next.addInstance<MeshSyncService>(
+      meshSync,
+      onDispose: (value) => value.dispose(),
+    );
+    pairingStorage.attachPeerMutationHook(() {
+      unawaited(meshSync.drainPending());
+    });
+
+    next.addService<ConnectionManager>(
+      () => ConnectionManager(
+        factory: _productionConnectionFactory,
+        storage: pairingStorage,
+      ),
+    );
+
+    next.addService<SpeechService>(() => SpeechToTextService());
+    next.addOther<IImagePickerService>(() => ImagePickerService());
+
+    next.addService<SyncService>(
+      () => SyncService(next.get<ConnectionManager>(), sessionStore),
+    );
+    next.addRepository<SessionReadRepository>(
+      () => SessionReadRepository(sessionStore),
+    );
+    next.addRepository<HomeReadRepository>(
+      () => HomeReadRepository(sessionStore),
+    );
+    next.addRepository<IActionsRepository>(
+      () => ActionsRepository(next.get<ConnectionManager>()),
+    );
+
+    next.addViewModel<ChatViewModel>(
+      () => ChatViewModel(
+        next.get<SessionReadRepository>(),
+        next.get<SyncService>(),
+        next.get<ConnectionManager>(),
+        prefs,
+        pairingStorage,
+      ),
+    );
+    next.addViewModel<HomeViewModel>(
+      () => HomeViewModel(
+        pairingStorage,
+        prefs,
+        next.get<ConnectionManager>(),
+      ),
+    );
+    next.addViewModel<SettingsViewModel>(
+      () => SettingsViewModel(
+        pairingStorage,
+        prefs,
+        next.get<ConnectionManager>(),
+        meshSync,
+        ownerBridge,
+      ),
+    );
+    next.addViewModel<PairingViewModel>(
+      () => PairingViewModel(
+        pairingStorage,
+        _productionPairingTransportFactory,
+        next.get<ConnectionManager>(),
+        prefs,
+        ownerBridge,
+      ),
+    );
+    next.addViewModel<OnboardingViewModel>(OnboardingViewModel.new);
+    next.addViewModel<QuickActionsViewModel>(
+      () => QuickActionsViewModel(next.get<IActionsRepository>()),
+    );
+    next.addViewModel<VoiceInputViewModel>(
+      () => VoiceInputViewModel(next.get<SpeechService>()),
+    );
+    next.addViewModel<AttachmentViewModel>(
+      () => AttachmentViewModel(
+        next.get<IImagePickerService>(),
+        next.get<IActionsRepository>(),
+      ),
+    );
+
+    next.addInstance<SessionSelection>(
+      SessionSelection(),
+      onDispose: (value) => value.dispose(),
+    );
+    next.addInstance<ShellLayout>(
+      ShellLayout(),
+      onDispose: (value) => value.dispose(),
+    );
+
+    var appVersion = '1.2.41';
+    try {
+      final packageInfo = await PackageInfo.fromPlatform().timeout(
+        const Duration(milliseconds: 500),
+      );
+      appVersion = packageInfo.version;
+    } catch (_) {}
+    next.addOther<UpdateChecker>(() => UpdateCheckerImpl());
+    next.addOther<DismissedUpdateStore>(
+      () => SecureDismissedUpdateStore(),
+    );
+    next.addOther<UrlOpener>(() => const UrlLauncherOpener());
+    next.addViewModel<UpdateBannerViewModel>(
+      () => UpdateBannerViewModel(
+        next.get<UpdateChecker>(),
+        next.get<DismissedUpdateStore>(),
+        next.get<UrlOpener>(),
+        currentVersion: appVersion,
+        enabled: Platform.isAndroid,
+      ),
+    );
+
+    next.commit();
+  } catch (_) {
+    next.dispose();
+    rethrow;
+  }
+
+  final previous = _injector;
+  _injector = next;
+  previous.dispose();
 }
 
 // ---------------------------------------------------------------------------
@@ -296,7 +287,11 @@ class _CancelledError implements Exception {
   const _CancelledError();
 }
 
-void disposeDependencies() => _injector.dispose();
+void disposeDependencies() {
+  final current = _injector;
+  _injector = CustomInjector();
+  current.dispose();
+}
 
 /// Bridges auto_injector and provider: creates a `ChangeNotifierProvider` that
 /// asks the injector for a fresh `ViewModel<T>` instance on each route mount.

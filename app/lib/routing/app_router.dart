@@ -3,6 +3,7 @@ import 'package:app/config/dependencies.dart';
 import 'package:app/data/mesh/mesh_sync_service.dart';
 import 'package:app/data/preferences/preferences.dart';
 import 'package:app/data/transport/connection_manager.dart';
+import 'package:app/data/transport/relay_config.dart';
 import 'package:app/pairing/owner_identity_bridge.dart';
 import 'package:app/pairing/storage.dart';
 import 'package:app/routing/adaptive.dart';
@@ -29,38 +30,27 @@ import 'package:provider/provider.dart';
 
 // Boot decision is async — _BootState is a ChangeNotifier used as
 // refreshListenable so the router redirects once the storage check finishes.
+const _corruptMembershipError = 'corrupt-membership-snapshot';
 class _BootState extends ChangeNotifier {
   bool _ready = false;
   bool _hasPeer = false;
   bool _onboarded = false;
   bool _syncAvailable = true;
   bool _identityWasGenerated = false;
+  String? _storageError;
   String _phase = 'starting';
+  int _loadGeneration = 0;
   final int startedAtMs = DateTime.now().millisecondsSinceEpoch;
 
-  /// Diagnostic: which boot step we are currently awaiting. Rendered by
-  /// the splash watchdog so an intermittent hang on a real device tells
-  /// us exactly which step never completed (and whether Dart timers are
-  /// still firing at all — the elapsed counter freezing means the
-  /// platform main thread is blocked, not a Dart await).
   String get phase => _phase;
-
   bool get ready => _ready;
   bool get hasPeer => _hasPeer;
   bool get onboarded => _onboarded;
   bool get syncAvailable => _syncAvailable;
-
-  /// True when this run is the very first time the Owner key materialised
-  /// on this account (the bridge just generated it). Restored identities
-  /// — anything coming back from iCloud Keychain / Block Store, including
-  /// the "reinstalled the app on the same device" case where the platform
-  /// re-hands the previous key — set this to false.
-  ///
-  /// Drives the redirect: only fresh identities **and** an empty peer
-  /// list get sent to the onboarding stepper; everything else lands on
-  /// /home (which itself shows a friendly "pair your first Pi" state
-  /// when peers is empty).
   bool get identityWasGenerated => _identityWasGenerated;
+  String? get storageError => _storageError;
+  bool get corruptMembershipSnapshot =>
+      _storageError == _corruptMembershipError;
 
   Future<void> load(
     PairingStorage storage,
@@ -70,85 +60,179 @@ class _BootState extends ChangeNotifier {
     MeshSyncService meshSync, {
     void Function()? installWatcherAfterBoot,
   }) async {
+    final generation = ++_loadGeneration;
+    _ready = false;
+    _storageError = null;
+    _phase = 'identity';
+    notifyListeners();
+
+    final OwnerIdentityBootResult ownerResult;
     try {
-      _phase = 'prefs';
-      // Boot must be fully bounded: a hung platform read here would leave
-      // the router on /boot forever ("stuck on splash"). Every await below
-      // carries its own timeout; this one covers prefs.load() as a whole.
-      try {
-        await prefs.load().timeout(
-          const Duration(seconds: 8),
-          onTimeout: () {},
-        );
-      } catch (_) {}
+      ownerResult = await ownerBridge.boot().timeout(
+        const Duration(seconds: 4),
+        onTimeout: () => const SyncUnavailableResult(),
+      );
+    } catch (_) {
+      if (generation != _loadGeneration) return;
+      _syncAvailable = false;
+      _ready = true;
+      _phase = 'identity-unavailable';
+      notifyListeners();
+      return;
+    }
+    if (generation != _loadGeneration) return;
+    if (ownerResult is! IdentityReady) {
+      _syncAvailable = false;
+      _ready = true;
+      _phase = 'identity-unavailable';
+      notifyListeners();
+      return;
+    }
 
-      _phase = 'identity';
-      OwnerIdentityBootResult? ownerResult;
-      try {
-        ownerResult = await ownerBridge.boot().timeout(
-          const Duration(seconds: 4),
-          onTimeout: () => const SyncUnavailableResult(),
-        );
-      } catch (_) {}
+    _syncAvailable = true;
+    _identityWasGenerated = ownerResult.generated;
+    _phase = 'local-storage';
+    try {
+      await storage.initialize(
+        ownerPk: ownerResult.identity.ownerPk,
+        relayUrl: resolveRelayUrl(prefs),
+      );
+      if (generation != _loadGeneration) return;
+      installWatcherAfterBoot?.call();
 
-      if (ownerResult is SyncUnavailableResult) {
-        _syncAvailable = true;
-        _ready = true;
-        notifyListeners();
-        return;
-      }
-      _syncAvailable = true;
-      _identityWasGenerated =
-          ownerResult is IdentityReady && ownerResult.generated;
-
-      try {
-        installWatcherAfterBoot?.call();
-      } catch (_) {}
-
-      _phase = 'mesh-sync';
-      try {
-        await meshSync.pullOnDemand().timeout(
-          const Duration(seconds: 3),
-          onTimeout: () => false,
-        );
-      } catch (_) {}
-
-      _phase = 'peers';
       final peers = await storage.listPeers();
+      if (generation != _loadGeneration) return;
       _hasPeer = peers.isNotEmpty;
       if (_hasPeer && !prefs.onboardingCompleted) {
         await prefs.setOnboardingCompleted(true);
       }
+      if (generation != _loadGeneration) return;
       _onboarded = prefs.onboardingCompleted;
-    } catch (_) {
-      // Never block the app boot on unexpected initialization errors
-    } finally {
-      _ready = true;
-      _phase = 'done';
-      notifyListeners();
-    }
 
-    try {
-      final peers = await storage.listPeers();
+      String? selected;
       if (peers.isNotEmpty) {
-        var selected = prefs.selectedPeerEpk;
-        if (selected == null || !peers.any((p) => p.remoteEpk == selected)) {
+        selected = prefs.selectedPeerEpk;
+        if (selected == null ||
+            !peers.any((peer) => peer.remoteEpk == selected)) {
           selected = peers.first.remoteEpk;
           await prefs.setSelectedPeerEpk(selected);
         }
+      }
+      if (generation != _loadGeneration) return;
+
+      // Hydrate the durable room index before routing to Home. This is local
+      // SQLite work only: cached sessions remain available even when the
+      // relay is unreachable, and a corrupt cache read reaches the retry UI.
+      _phase = 'cached-sessions';
+      await conn.ensureCachedRoomsRestored();
+      if (generation != _loadGeneration) return;
+
+      _ready = true;
+      _phase = 'done';
+      notifyListeners();
+
+      // Network work starts only after durable state is visible. Failure is a
+      // disconnected status, never an empty peer inventory.
+      meshSync.startPolling();
+      if (selected != null) {
         unawaited(conn.boot(preferredEpk: selected));
       }
-    } catch (_) {}
+      unawaited(
+        _synchronizeAndReconcile(
+          generation: generation,
+          storage: storage,
+          connection: conn,
+          preferences: prefs,
+          meshSync: meshSync,
+          selectedBeforeSync: selected,
+        ),
+      );
+    } catch (error) {
+      if (generation != _loadGeneration) return;
+      _hasPeer = false;
+      _onboarded = false;
+      _storageError = error.toString();
+      _ready = true;
+      _phase = 'storage-error';
+      notifyListeners();
+    }
   }
 
-  /// Plan 23 — invoked by the OwnerIdentityBridge watch listener when
-  /// platform sync delivers a different Owner-pk. We reset to the
-  /// "no-state" view; the next `load()` call (triggered when the user
-  /// returns to /boot) will repopulate from the freshly-wiped storage.
+  Future<void> _synchronizeAndReconcile({
+    required int generation,
+    required PairingStorage storage,
+    required ConnectionManager connection,
+    required Preferences preferences,
+    required MeshSyncService meshSync,
+    required String? selectedBeforeSync,
+  }) async {
+    bool synchronized;
+    try {
+      synchronized = await meshSync.synchronize();
+    } catch (_) {
+      return;
+    }
+    if (generation != _loadGeneration) return;
+    if (meshSync.lastProblem == MeshSyncProblem.corruptStoredSnapshot) {
+      onMeshProblem(meshSync.lastProblem);
+      return;
+    }
+    if (!synchronized) return;
+
+    final peers = await storage.listPeers();
+    if (generation != _loadGeneration) return;
+    final hadPeer = _hasPeer;
+    _hasPeer = peers.isNotEmpty;
+
+    String? selected;
+    if (peers.isNotEmpty) {
+      selected = preferences.selectedPeerEpk;
+      if (selected == null ||
+          !peers.any((peer) => peer.remoteEpk == selected)) {
+        selected = peers.first.remoteEpk;
+        await preferences.setSelectedPeerEpk(selected);
+      }
+      if (!preferences.onboardingCompleted) {
+        await preferences.setOnboardingCompleted(true);
+      }
+    } else {
+      await preferences.setSelectedPeerEpk(null);
+    }
+    if (generation != _loadGeneration) return;
+    _onboarded = preferences.onboardingCompleted;
+    notifyListeners();
+
+    if (selected == null) {
+      if (hadPeer) {
+        await connection.reconnect();
+      }
+      return;
+    }
+    if (selectedBeforeSync == null) {
+      await connection.boot(preferredEpk: selected);
+    } else if (selected != selectedBeforeSync) {
+      await connection.reconnect(preferredEpk: selected);
+    } else {
+      connection.subscribeToPeers(peers.map((peer) => peer.remoteEpk).toList());
+    }
+  }
+
+  void onMeshProblem(MeshSyncProblem? problem) {
+    if (problem != MeshSyncProblem.corruptStoredSnapshot ||
+        _storageError == _corruptMembershipError) {
+      return;
+    }
+    _storageError = _corruptMembershipError;
+    _ready = true;
+    _phase = 'membership-sync-error';
+    notifyListeners();
+  }
+
   void onOwnerKeyReplaced() {
     _ready = false;
     _hasPeer = false;
     _onboarded = false;
+    _storageError = null;
     notifyListeners();
   }
 }
@@ -161,60 +245,54 @@ GoRouter buildRouter(
   MeshSyncService meshSync,
 ) {
   final boot = _BootState();
+  void onMeshChanged() => boot.onMeshProblem(meshSync.lastProblem);
 
-  // Plan 23 — watch for Owner-key drift on the sync surface. When the
-  // platform delivers a different keypair (restored on a new device,
-  // user wiped and re-installed elsewhere), the bridge wipes peers/rooms
-  // and we reset the boot state so the router redirects through /boot.
-  // Plan 24 — reset the mesh version watermark too, otherwise the
-  // first fetch against the new Owner-pk would use a stale `since`.
-  //
-  // Hook is captured here but only installed AFTER boot() succeeds —
-  // see _BootState.load's `installWatcherAfterBoot` parameter. That
-  // ordering matters: the platform plugin emits an initial blob the
-  // moment we subscribe; we must have `_current` populated by boot()
-  // first, otherwise the bridge would see "different owner_pk" (vs
-  // null) and wipe the freshly-loaded peer set.
+  meshSync.addListener(onMeshChanged);
+  onMeshChanged();
+
   var watcherInstalled = false;
+  late final Future<void> Function() loadBoot;
+
   void installWatcher() {
     if (watcherInstalled) return;
     watcherInstalled = true;
     ownerBridge.startWatching(
+      onBeforeReset: conn.disconnect,
       onReset: () async {
-        await conn.disconnect();
-        meshSync.resetVersionWatermark();
         boot.onOwnerKeyReplaced();
-        await boot.load(storage, conn, prefs, ownerBridge, meshSync);
+        await loadBoot();
       },
     );
   }
 
-  boot.load(
-    storage,
-    conn,
-    prefs,
-    ownerBridge,
-    meshSync,
-    installWatcherAfterBoot: installWatcher,
-  );
+  loadBoot = () => boot.load(
+        storage,
+        conn,
+        prefs,
+        ownerBridge,
+        meshSync,
+        installWatcherAfterBoot: installWatcher,
+      );
 
-  // Plan 24 — start foreground polling. The router doesn't have
-  // direct access to AppLifecycleState; main.dart wires
-  // [MeshSyncService.startPolling/stopPolling] to the lifecycle so
-  // this initial start covers the "app launched in foreground" case.
-  meshSync.startPolling();
+  unawaited(loadBoot());
 
   return GoRouter(
     initialLocation: '/boot',
     refreshListenable: boot,
     redirect: (context, state) {
       if (!boot.ready) return '/boot';
+      if (boot.storageError != null) {
+        return state.uri.path == '/storage-error' ? null : '/storage-error';
+      }
       if (!boot.syncAvailable) {
         return state.uri.path == '/sync-required' ? null : '/sync-required';
       }
-      final shouldOnboard = boot.identityWasGenerated && !boot.hasPeer;
+      final shouldOnboard =
+          !boot.hasPeer && (boot.identityWasGenerated || !boot.onboarded);
       final target = shouldOnboard ? '/onboarding' : '/home';
-      if (state.uri.path == '/sync-required' || state.uri.path == '/boot') {
+      if (state.uri.path == '/sync-required' ||
+          state.uri.path == '/storage-error' ||
+          state.uri.path == '/boot') {
         return target;
       }
       return null;
@@ -223,12 +301,20 @@ GoRouter buildRouter(
       // Splash while boot.load() is in flight
       GoRoute(path: '/boot', builder: (ctx, st) => _BootSplash(boot: boot)),
 
+      GoRoute(
+        path: '/storage-error',
+        builder: (ctx, st) => _StorageFailurePage(
+          onRetry: loadBoot,
+          membershipSyncCorrupt: boot.corruptMembershipSnapshot,
+        ),
+      ),
+
       // Plan 23 — first-launch gate when iCloud Keychain / Google
       // Backup is off. Sticky route: redirect keeps the user here
       // until the bridge reports sync available.
       GoRoute(
         path: '/sync-required',
-        builder: (ctx, st) => const SyncRequiredPage(),
+        builder: (ctx, st) => SyncRequiredPage(onCheck: loadBoot),
       ),
 
       // Plan/tablet — adaptive master-detail shell.
@@ -482,6 +568,70 @@ class _BootSplashState extends State<_BootSplash> {
               ),
             ],
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _StorageFailurePage extends StatelessWidget {
+  const _StorageFailurePage({
+    required this.onRetry,
+    required this.membershipSyncCorrupt,
+  });
+
+  final Future<void> Function() onRetry;
+  final bool membershipSyncCorrupt;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    return Scaffold(
+      body: SafeArea(
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 420),
+            child: Padding(
+              padding: const EdgeInsets.all(32),
+              child: Column(
+                key: const Key('storage-boot-error'),
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(LucideIcons.database, size: 40, color: colors.warning),
+                  const SizedBox(height: 16),
+                  Text(
+                    membershipSyncCorrupt
+                        ? "Pairing sync data couldn't be verified"
+                        : "Couldn't open saved data",
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontFamily: kMonoFamily,
+                      fontSize: 18,
+                      fontWeight: FontWeight.w600,
+                      color: colors.text,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    membershipSyncCorrupt
+                        ? 'Connect to your relay and retry. Your cached '
+                            'pairings and history were left unchanged.'
+                        : 'Your existing pairings and history were left '
+                            'unchanged.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: colors.muted),
+                  ),
+                  const SizedBox(height: 20),
+                  FilledButton.icon(
+                    key: const Key('storage-boot-retry'),
+                    onPressed: () => unawaited(onRetry()),
+                    icon: const Icon(LucideIcons.refreshCw),
+                    label: const Text('Retry'),
+                  ),
+                ],
+              ),
+            ),
+          ),
         ),
       ),
     );

@@ -1,3 +1,4 @@
+import 'package:app/data/local/app_database.dart';
 import 'package:app/data/preferences/preferences.dart';
 import 'package:app/data/voice/speech_service.dart';
 import 'package:app/data/images/image_picker_service.dart';
@@ -14,7 +15,6 @@ import 'package:app/ui/chat/states/chat_state.dart';
 import 'package:app/ui/chat/viewmodels/chat_viewmodel.dart';
 import 'package:app/ui/chat/voice/viewmodels/voice_input_viewmodel.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 
@@ -81,57 +81,7 @@ class _FakeChatViewModel extends ChangeNotifier implements ChatViewModel {
   dynamic noSuchMethod(Invocation i) => super.noSuchMethod(i);
 }
 
-class _FakeSecureStorage implements FlutterSecureStorage {
-  final Map<String, String> _store = {};
-  @override
-  Future<String?> read({
-    required String key,
-    IOSOptions? iOptions,
-    AndroidOptions? aOptions,
-    LinuxOptions? lOptions,
-    WebOptions? webOptions,
-    MacOsOptions? mOptions,
-    WindowsOptions? wOptions,
-  }) async => _store[key];
-  @override
-  Future<Map<String, String>> readAll({
-    IOSOptions? iOptions,
-    AndroidOptions? aOptions,
-    LinuxOptions? lOptions,
-    WebOptions? webOptions,
-    MacOsOptions? mOptions,
-    WindowsOptions? wOptions,
-  }) async => Map.from(_store);
-  @override
-  Future<void> write({
-    required String key,
-    required String? value,
-    IOSOptions? iOptions,
-    AndroidOptions? aOptions,
-    LinuxOptions? lOptions,
-    WebOptions? webOptions,
-    MacOsOptions? mOptions,
-    WindowsOptions? wOptions,
-  }) async {
-    if (value == null) {
-      _store.remove(key);
-    } else {
-      _store[key] = value;
-    }
-  }
-  @override
-  Future<void> delete({
-    required String key,
-    IOSOptions? iOptions,
-    AndroidOptions? aOptions,
-    LinuxOptions? lOptions,
-    WebOptions? webOptions,
-    MacOsOptions? mOptions,
-    WindowsOptions? wOptions,
-  }) async => _store.remove(key);
-  @override
-  dynamic noSuchMethod(Invocation i) => super.noSuchMethod(i);
-}
+
 
 class _FakeSpeech implements SpeechService {
   @override
@@ -149,6 +99,7 @@ class _FakeChannel implements IChannel {
 }
 
 class _FakeStorage extends PairingStorage {
+  _FakeStorage() : super(AppDatabase.memory());
   @override
   dynamic noSuchMethod(Invocation i) => super.noSuchMethod(i);
 }
@@ -195,7 +146,7 @@ void main() {
     final conn = ConnectionManager(factory: (_, _) async => _FakeChannel(), storage: _FakeStorage());
     final actions = ActionsRepository(conn);
     final attach = AttachmentViewModel(_FakePicker(), actions);
-    final prefs = Preferences(_FakeSecureStorage());
+    final prefs = Preferences(AppDatabase.memory());
     final sel = SessionSelection();
 
     await tester.pumpWidget(
@@ -253,7 +204,7 @@ void main() {
     final conn = ConnectionManager(factory: (_, _) async => _FakeChannel(), storage: _FakeStorage());
     final actions = ActionsRepository(conn);
     final attach = AttachmentViewModel(_FakePicker(), actions);
-    final prefs = Preferences(_FakeSecureStorage());
+    final prefs = Preferences(AppDatabase.memory());
     final sel = SessionSelection();
 
     await tester.pumpWidget(
@@ -310,7 +261,7 @@ void main() {
     final conn = ConnectionManager(factory: (_, _) async => _FakeChannel(), storage: _FakeStorage());
     final actions = ActionsRepository(conn);
     final attach = AttachmentViewModel(_FakePicker(), actions);
-    final prefs = Preferences(_FakeSecureStorage());
+    final prefs = Preferences(AppDatabase.memory());
     final sel = SessionSelection();
 
     await tester.pumpWidget(

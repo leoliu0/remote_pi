@@ -48,9 +48,8 @@ class HomeViewModel extends ViewModel<HomeState> {
   }
 
   /// `true` when the app's WS to the relay is alive (StatusOnline).
-  /// When `false`, every room dot should render in the "reconnecting"
-  /// colour (amber) regardless of `isRoomLive`, because the app has
-  /// no fresh signal on any room.
+  /// A disconnect invalidates ConnectionManager's live-room set, so cached
+  /// sessions remain visible in All/Offline instead of looking freshly online.
   bool get isRelayConnected => _relayConnected;
 
   /// `true` when `(epk, roomId)`'s agent is currently mid-turn. Drives
@@ -140,11 +139,9 @@ class HomeViewModel extends ViewModel<HomeState> {
     emit(s.copyWith(filter: filter));
   }
 
-  /// `true` if `(epk, roomId)` is in the relay's live set OR the agent
-  /// is mid-turn there. A working agent keeps its session in the Online
-  /// tab even when the live set lags behind (relay snapshot miss), so
-  /// "agent is working" always reads as online. Deliberately not gated
-  /// on WS status: dropping the socket must not empty the Online tab.
+  /// `true` if `(epk, roomId)` is in the relay's live set OR the agent has a
+  /// current in-memory working signal. ConnectionManager clears relay
+  /// liveness on disconnect and never restores it from durable cache.
   bool _online(HomeItem it) =>
       _conn.isRoomInLiveSet(it.peer.remoteEpk, it.room.roomId) ||
       _conn.isRoomWorking(it.peer.remoteEpk, it.room.roomId);
@@ -206,8 +203,12 @@ class HomeViewModel extends ViewModel<HomeState> {
     final effectiveRoom = (roomId == null || roomId.isEmpty) ? 'main' : roomId;
     await _prefs.setSelectedRoom(epk: epk, roomId: effectiveRoom);
     if (peer.roomId != effectiveRoom) {
-      // ignore: unawaited_futures
-      _storage.savePeer(peer.copyWith(roomId: effectiveRoom));
+      unawaited(
+        _storage.savePeer(
+          peer.copyWith(roomId: effectiveRoom),
+          intent: PeerSaveIntent.localMetadata,
+        ),
+      );
     }
     // Tell the manager which Pi-side room to address. Safe to call
     // even if the manager is mid-connect (room is applied on the next

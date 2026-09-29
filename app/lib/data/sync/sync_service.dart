@@ -1,18 +1,11 @@
-// Plan/31 — SyncService: the SINGLE writer of the local SSOT.
+// SyncService is the single writer of the local session store.
 //
-// Consumes the channel (ConnectionManager status + PeerChannel
-// serverMessages) and writes row-granular records to Hive (v2 boxes). The UI
-// never touches this stream — it reads the DB via the read repositories.
-//
-// Streaming is the ONE exception to SSOT (#7): AgentChunk deltas are coalesced
-// into an in-memory Stream<StreamingMessage?> and NEVER written to the DB; only
-// the finalized message lands in the box on `agent_done`.
-
+// Streaming remains in memory: AgentChunk deltas are coalesced into
+// [StreamingMessage], and only finalized assistant segments are committed.
 import 'dart:async';
-import 'dart:convert';
 import 'dart:math' as math;
 
-import 'package:app/data/local/boxes.dart';
+import 'package:app/data/local/session_store.dart';
 import 'package:app/data/local/records/message_record.dart';
 import 'package:app/data/local/records/runtime_record.dart';
 import 'package:app/data/local/records/session_index_record.dart';
@@ -26,7 +19,7 @@ import 'package:flutter/foundation.dart';
 
 class SyncService extends Service {
   final ConnectionManager _conn;
-  final LocalBoxes _boxes;
+  final SessionStore _store;
 
   StreamSubscription<ConnectionStatus>? _connSub;
   StreamSubscription<ServerMessage>? _msgSub;
@@ -37,14 +30,14 @@ class SyncService extends Service {
   String? _activeEpk;
   String _activeRoomId = 'main';
 
-  // In-memory dedupe + ordering for the active session's msgs box. Rebuilt on
-  // [activate]. Key = `<role>:<id>` so a user msg and the assistant reply that
-  // shares its id don't collide.
+  // In-memory dedupe + ordering for the active session. Rebuilt on [activate].
+  // Key = `<role>:<id>` so a user row and assistant reply sharing a protocol
+  // ID remain distinct.
   final Map<String, int> _idToSeq = {};
   int _nextSeq = 0;
   bool _indexLoaded = false;
 
-  // Serialise box mutations so concurrent async writes stay ordered.
+  // Serialize mutations so concurrent channel events remain ordered.
   Future<void> _writeChain = Future<void>.value();
 
   // Streaming — in-memory only (#7).
@@ -74,12 +67,11 @@ class SyncService extends Service {
   // Whether the active session's agent is currently producing a reply. Spans
   // the WHOLE turn (send/echo → agent_done), not just the token-streaming
   // window — restoring the old broad "working" signal. Mirrored into the
-  // session index (durable, for Home) and exposed in-memory (for the chat
-  // pill, no box-key matching needed).
+  // session index (durable, for Home) and exposed in-memory for the chat pill.
   bool _working = false;
   bool _sawRemoteWorking = false;
   bool _turnEnded = false;
-  // Live reply identity is captured before any asynchronous box write. Keep
+  // Live reply identity is captured before any asynchronous store write. Keep
   // it through idle: agent_message can follow agent_done's working-off timer.
   String? _assistantReplyTo;
   String? _lastFinalizedSegmentId;
@@ -102,7 +94,7 @@ class SyncService extends Service {
 
   SyncService(
     this._conn,
-    this._boxes, {
+    this._store, {
     this.pendingSendTimeout = const Duration(seconds: 20),
   }) {
     _connSub = _conn.statusStream.listen(_onStatus);
@@ -146,9 +138,8 @@ class SyncService extends Service {
   String? get activeEpk => _activeEpk;
   String get activeRoomId => _activeRoomId;
 
-  /// Bind the writer to a (peer, room). Opens the box and rebuilds the
-  /// dedupe/seq index from it. Called by the chat when it mounts / switches
-  /// rooms; also adopted automatically on the first StatusOnline.
+  /// Bind the writer to a (peer, room) and rebuild the in-memory dedupe/order
+  /// index. Called by chat mount/switch and the first online status.
   Future<void> activate(String epk, String roomId) async {
     final room = roomId.isEmpty ? 'main' : roomId;
     if (_activeEpk == epk && _activeRoomId == room && _indexLoaded) return;
@@ -160,6 +151,7 @@ class SyncService extends Service {
     // the Pi, and Home keeps showing it via the relay's per-room
     // `meta.working` broadcast.
     _resetTurnState();
+    _indexLoaded = false;
     _activeEpk = epk;
     _activeRoomId = room;
     await _loadIndex();
@@ -183,7 +175,8 @@ class SyncService extends Service {
     _finalizedSegmentsCount = 0;
     _workingOffDebounce?.cancel();
     _setQueuedMessages(const []);
-    // to confirm — drop their backstops so a stale timer can't fire later.
+    // This session's optimistic sends will no longer receive a matching echo
+    // to confirm, so drop their backstops before stale timers can fire.
     _cancelAllSendTimers();
     if (_streaming != null) _emitStreaming(null);
     if (_working) {
@@ -418,13 +411,10 @@ class SyncService extends Service {
     _setWorking(false);
     await _enqueue(() async {
       if (_activeEpk != epk || _activeRoomId != room) return;
-      final box = await _boxes.msgsBox(epk, room);
-      await box.clear();
+      _store.clearSession(epk, room);
       _idToSeq.clear();
       _nextSeq = 0;
       _indexLoaded = true;
-      final idx = _boxes.sessionsIndexBox();
-      await idx.delete(LocalBoxes.sessionKey(epk, room));
     });
   }
 
@@ -438,11 +428,10 @@ class SyncService extends Service {
     if (s is StatusOnline) {
       // Plan/32f — bind this stream's writes to the PEER that owns the
       // channel RIGHT NOW. After a `switchTo`, a late frame from the OLD
-      // peer's channel must not land in the NEW session's box: `_activeEpk`
-      // has already moved (the chat calls `activate()` before `switchTo`), so
-      // a straggler chat-1 frame would otherwise be written to chat-2's box
-      // and bleed across until chat-2's history re-applied. We capture the
-      // origin epk here and drop frames whose origin is no longer active.
+      // peer's session rows: `_activeEpk` has already moved (chat calls
+      // `activate()` before `switchTo`), so a straggler chat-1 frame would
+      // otherwise be written to chat 2 until its history is reapplied.
+      // Capture the origin epk here and drop frames no longer active.
       //
       // We gate on epk only — NOT room: rooms of the same peer share one
       // channel and `_onStatus` doesn't re-fire on a same-peer room switch
@@ -473,7 +462,7 @@ class SyncService extends Service {
     // Plan/32f — drop frames from a peer whose channel is no longer the active
     // session (a stale connection still draining after `switchTo`). Without
     // this, a straggler write targets `_activeEpk` — which already points at
-    // the NEW chat — and bleeds the old session's messages into the new box.
+    // the NEW chat — and bleeds the old session's messages into its rows.
     // Only gate when BOTH origin and active are set and differ: pre-bind
     // (`_activeEpk == null`, cold boot before `activate`) must still flow, and
     // direct test calls without an origin aren't gated.
@@ -747,61 +736,41 @@ class SyncService extends Service {
     final rows = _convertHistory(h.events);
     final historyIds = {for (final r in rows) _key(r.role, r.id)};
     await _enqueue(() async {
-      final box = await _boxes.msgsBox(epk, room);
-      if (rows.isEmpty && box.isNotEmpty) {
-        // Server returned 0 events (e.g. Pi session buffer not yet ready).
-        // Do not wipe the user's existing local chat history.
+      final existingRows = _store.messages(epk, room);
+      if (rows.isEmpty && existingRows.isNotEmpty) {
+        // An empty remote response can mean the Pi buffer is not ready. It is
+        // never evidence that durable local history should be erased.
         return;
       }
-      // Preserve local pending user rows and steering rows the Pi hasn't unified in history yet.
+      // Preserve pending/steering user rows that the Pi has not unified into
+      // authoritative history yet.
       final preserved = <MessageRecord>[];
-      for (final v in box.values) {
-        final r = MessageRecord.fromJson(_coerce(v));
-        if (r.role == MsgRole.user &&
-            (r.pending || r.steering) &&
-            !historyIds.contains(_key(r.role, r.id)) &&
-            !rows.any((h) => h.role == MsgRole.user && h.text == r.text)) {
-          preserved.add(r);
+      for (final record in existingRows) {
+        if (record.role == MsgRole.user &&
+            (record.pending || record.steering) &&
+            !historyIds.contains(_key(record.role, record.id)) &&
+            !rows.any(
+              (history) =>
+                  history.role == MsgRole.user &&
+                  history.text == record.text,
+            )) {
+          preserved.add(record);
         }
       }
       final desired = <MessageRecord>[
         for (var i = 0; i < rows.length; i++) rows[i].copyWith(seq: i),
-        for (var j = 0; j < preserved.length; j++)
-          preserved[j].copyWith(seq: rows.length + j),
+        for (var i = 0; i < preserved.length; i++)
+          preserved[i].copyWith(seq: rows.length + i),
       ];
-      // Reconcile the box to `desired` with the MINIMUM number of writes.
-      //
-      // The old path did `box.clear()` + re-put every row. Hive emits a watch
-      // event per deleted AND per put key, so the read repo re-emitted ~2N
-      // times — tearing the whole list down to EMPTY and rebuilding it — on
-      // EVERY SessionHistory the relay re-delivered (which it does on every
-      // reconnect). That was the flicker/"embaralha e some". Diffing instead
-      // means a re-sent identical history produces ZERO box writes → ZERO
-      // emits → no rebuild; a changed history only rewrites the rows that
-      // actually differ.
-      for (final k in box.keys.toList()) {
-        if ((k as num).toInt() >= desired.length) {
-          await box.delete(k);
-        }
-      }
-      for (var i = 0; i < desired.length; i++) {
-        final newJson = desired[i].toJson();
-        final curRaw = box.get(i);
-        // Normalise the stored value through fromJson→toJson so the compare is
-        // independent of however Hive ordered the persisted map.
-        final curNorm = curRaw == null
-            ? null
-            : jsonEncode(MessageRecord.fromJson(_coerce(curRaw)).toJson());
-        if (curNorm != jsonEncode(newJson)) {
-          await box.put(i, newJson);
-        }
-      }
+      // SQLite reconciliation is atomic and emits once after commit. An
+      // identical replay performs no writes and therefore no UI rebuild.
+      _store.replaceMessages(epk, room, desired);
       if (_activeEpk == epk && _activeRoomId == room) {
         _idToSeq
           ..clear()
           ..addEntries([
-            for (var i = 0; i < desired.length; i++)
-              MapEntry(_key(desired[i].role, desired[i].id), i),
+            for (final record in desired)
+              MapEntry(_key(record.role, record.id), record.seq),
           ]);
         _nextSeq = desired.length;
         _indexLoaded = true;
@@ -835,7 +804,7 @@ class SyncService extends Service {
               ts: DateTime.fromMillisecondsSinceEpoch(e.ts),
             ),
           );
-        case AgentMessageEvt(:final inReplyTo, :final text):
+        case AgentMessageEvt(:final text):
           out.add(
             MessageRecord(
               id: 'agent_${e.ts}_$seq',
@@ -908,7 +877,7 @@ class SyncService extends Service {
   }
 
   // ---------------------------------------------------------------------------
-  // Box write helpers (all serialised through _enqueue)
+  // Store write helpers (all serialized through _enqueue)
   // ---------------------------------------------------------------------------
 
   String _key(MsgRole role, String id) => '${role.name}:$id';
@@ -920,24 +889,24 @@ class SyncService extends Service {
     final room = _activeRoomId;
     return _enqueue(() async {
       if (_activeEpk != epk || _activeRoomId != room) return;
-      final box = await _boxes.msgsBox(epk, room);
+      final rows = _store.messages(epk, room);
       _idToSeq.clear();
       _nextSeq = 0;
-      for (final k in box.keys) {
-        final seq = (k as num).toInt();
-        final r = MessageRecord.fromJson(_coerce(box.get(k)));
-        _idToSeq[_key(r.role, r.id)] = seq;
-        _nextSeq = math.max(_nextSeq, seq + 1);
-        // Re-arm the no-echo backstop for any pending row this session owns, so
-        // a bubble persisted across an app restart / quick session-switch is
-        // reaped by its `ts` instead of spinning forever (already-stale → fires
-        // immediately). Timers were cleared by _resetTurnState before this load.
-        if (r.role == MsgRole.user && r.pending) {
-          _armSendTimeout(r.id, r.ts);
-        } else if (r.role == MsgRole.user && r.steering) {
-          await box.put(seq, r.copyWith(steering: false).toJson());
+      var hadSteering = false;
+      for (final record in rows) {
+        _idToSeq[_key(record.role, record.id)] = record.seq;
+        _nextSeq = math.max(_nextSeq, record.seq + 1);
+        // Re-arm the no-echo backstop for pending rows after a restart/session
+        // switch. A stale timestamp fires immediately.
+        if (record.role == MsgRole.user && record.pending) {
+          _armSendTimeout(record.id, record.ts);
         }
+        hadSteering =
+            hadSteering ||
+            (record.role == MsgRole.user && record.steering);
       }
+      _indexLoaded = true;
+      if (hadSteering) _store.clearSteeringLabels(epk, room);
     });
   }
 
@@ -950,17 +919,19 @@ class SyncService extends Service {
     if (epk == null) return Future<void>.value();
     final room = _activeRoomId;
     return _enqueue(() async {
-      final active = _activeEpk == epk && _activeRoomId == room;
-      if (!active) return;
-      final box = await _boxes.msgsBox(epk, room);
+      if (_activeEpk != epk || _activeRoomId != room) return;
       final mapKey = _key(role, id);
       final existingSeq = _idToSeq[mapKey];
       if (existingSeq != null) {
-        final existing = MessageRecord.fromJson(_coerce(box.get(existingSeq)));
-        await box.put(existingSeq, build(existingSeq, existing).toJson());
+        final existing = _store.messageAt(epk, room, existingSeq);
+        if (existing == null) {
+          _idToSeq.remove(mapKey);
+          return;
+        }
+        _store.upsertMessage(epk, room, build(existingSeq, existing));
       } else {
         final seq = _nextSeq++;
-        await box.put(seq, build(seq, null).toJson());
+        _store.upsertMessage(epk, room, build(seq, null));
         _idToSeq[mapKey] = seq;
       }
     });
@@ -972,10 +943,9 @@ class SyncService extends Service {
     final room = _activeRoomId;
     return _enqueue(() async {
       if (_activeEpk != epk || _activeRoomId != room) return;
-      final box = await _boxes.msgsBox(epk, room);
       for (final role in MsgRole.values) {
         final seq = _idToSeq.remove(_key(role, id));
-        if (seq != null) await box.delete(seq);
+        if (seq != null) _store.deleteMessage(epk, room, seq);
       }
     });
   }
@@ -987,14 +957,7 @@ class SyncService extends Service {
     // ignore: discarded_futures
     _enqueue(() async {
       if (_activeEpk != epk || _activeRoomId != room) return;
-      final box = await _boxes.msgsBox(epk, room);
-      final seq = _idToSeq[_key(MsgRole.user, id)];
-      if (seq == null) return;
-      final raw = box.get(seq);
-      if (raw == null) return;
-      final existing = MessageRecord.fromJson(_coerce(raw));
-      if (existing.role != MsgRole.user || !existing.steering) return;
-      await box.put(seq, existing.copyWith(steering: false).toJson());
+      _store.clearSteeringLabels(epk, room, id: id);
     });
   }
 
@@ -1005,17 +968,7 @@ class SyncService extends Service {
     // ignore: discarded_futures
     _enqueue(() async {
       if (_activeEpk != epk || _activeRoomId != room) return;
-      final box = await _boxes.msgsBox(epk, room);
-      for (final key in box.keys.toList()) {
-        final raw = box.get(key);
-        if (raw == null) continue;
-        final existing = MessageRecord.fromJson(_coerce(raw));
-        if (existing.role != MsgRole.user || !existing.steering) continue;
-        await box.put(
-          (key as num).toInt(),
-          existing.copyWith(steering: false).toJson(),
-        );
-      }
+      _store.clearSteeringLabels(epk, room);
     });
   }
 
@@ -1025,20 +978,18 @@ class SyncService extends Service {
     final room = _activeRoomId;
     return _enqueue(() async {
       if (_activeEpk != epk || _activeRoomId != room) return;
-      final box = await _boxes.msgsBox(epk, room);
       for (final role in MsgRole.values) {
         final key = _key(role, id);
         final seq = _idToSeq[key];
         if (seq == null) continue;
-        final raw = box.get(seq);
-        if (raw == null) {
+        final existing = _store.messageAt(epk, room, seq);
+        if (existing == null) {
           _idToSeq.remove(key);
           continue;
         }
-        final existing = MessageRecord.fromJson(_coerce(raw));
         if (!existing.pending) continue;
         _idToSeq.remove(key);
-        await box.delete(seq);
+        _store.deleteMessage(epk, room, seq);
       }
     });
   }
@@ -1119,13 +1070,10 @@ class SyncService extends Service {
     final room = _activeRoomId;
     // ignore: discarded_futures
     _enqueue(() async {
-      final idx = _boxes.sessionsIndexBox();
-      final key = LocalBoxes.sessionKey(epk, room);
-      final raw = idx.get(key);
-      final cur = raw is Map
-          ? SessionIndexRecord.fromJson(raw.cast<String, dynamic>())
-          : SessionIndexRecord(epk: epk, roomId: room);
-      await idx.put(key, build(cur).toJson());
+      final current =
+          _store.session(epk, room) ??
+          SessionIndexRecord(epk: epk, roomId: room);
+      _store.upsertSession(build(current));
     });
   }
 
@@ -1133,22 +1081,26 @@ class SyncService extends Service {
     final epk = _activeEpk;
     if (epk == null) return;
     final room = _activeRoomId;
-    final s = _conn.status;
-    final conn = switch (s) {
+    final status = _conn.status;
+    final connection = switch (status) {
       StatusOnline() => RuntimeConnection.online,
       StatusConnecting() => RuntimeConnection.connecting,
       StatusRetrying() => RuntimeConnection.retrying,
       StatusOffline() => RuntimeConnection.offline,
       StatusNoPeer() => RuntimeConnection.connecting,
     };
-    final presence = (s is StatusOnline && _conn.isRoomLive(epk, room))
+    final presence =
+        (status is StatusOnline && _conn.isRoomLive(epk, room))
         ? RuntimePresence.alive
-        : (s is StatusOnline ? RuntimePresence.stale : RuntimePresence.unknown);
+        : (status is StatusOnline
+              ? RuntimePresence.stale
+              : RuntimePresence.unknown);
     // ignore: discarded_futures
     _enqueue(() async {
-      _boxes.runtimeBox().put(
-        LocalBoxes.sessionKey(epk, room),
-        RuntimeRecord(connection: conn, presence: presence).toJson(),
+      _store.putRuntime(
+        epk,
+        room,
+        RuntimeRecord(connection: connection, presence: presence),
       );
     });
   }
@@ -1239,38 +1191,44 @@ class SyncService extends Service {
     if (epk == null) return Future<void>.value();
     final room = _activeRoomId;
     return _enqueue(() async {
-      final active = _activeEpk == epk && _activeRoomId == room;
-      if (!active) return;
-      final box = await _boxes.msgsBox(epk, room);
+      if (_activeEpk != epk || _activeRoomId != room) return;
       final mapKey = _key(MsgRole.user, id);
       var existingSeq = _idToSeq[mapKey];
 
-      // Search for an existing user message with identical text to dedupe
-      // (e.g. optimistic pending message or sync_ message).
+      // Search for an optimistic/sync user row with identical text.
       if (existingSeq == null) {
         for (final entry in _idToSeq.entries) {
           if (!entry.key.startsWith('${MsgRole.user.name}:')) continue;
-          final raw = box.get(entry.value);
-          if (raw == null) continue;
-          final rec = MessageRecord.fromJson(_coerce(raw));
-          if (rec.role == MsgRole.user && rec.text == text) {
-            // Deduplicate if it's pending OR if it's the latest user message
-            if (rec.pending || entry.key.startsWith('${MsgRole.user.name}:sync_') || entry.value == _nextSeq - 1) {
-              existingSeq = entry.value;
-              _idToSeq[mapKey] = existingSeq;
-              break;
-            }
+          final record = _store.messageAt(epk, room, entry.value);
+          if (record == null ||
+              record.role != MsgRole.user ||
+              record.text != text) {
+            continue;
+          }
+          if (record.pending ||
+              entry.key.startsWith('${MsgRole.user.name}:sync_') ||
+              entry.value == _nextSeq - 1) {
+            existingSeq = entry.value;
+            _idToSeq[mapKey] = existingSeq;
+            break;
           }
         }
       }
 
       if (existingSeq != null) {
-        final existing = MessageRecord.fromJson(_coerce(box.get(existingSeq)));
-        await box.put(existingSeq, existing.copyWith(pending: false).toJson());
+        final existing = _store.messageAt(epk, room, existingSeq);
+        if (existing != null) {
+          _store.upsertMessage(
+            epk,
+            room,
+            existing.copyWith(pending: false),
+          );
+        }
       } else {
         final seq = _nextSeq++;
-        await box.put(
-          seq,
+        _store.upsertMessage(
+          epk,
+          room,
           MessageRecord(
             id: id,
             seq: seq,
@@ -1278,7 +1236,7 @@ class SyncService extends Service {
             text: text,
             image: image,
             ts: DateTime.now(),
-          ).toJson(),
+          ),
         );
         _idToSeq[mapKey] = seq;
       }
@@ -1297,11 +1255,6 @@ class SyncService extends Service {
     return next;
   }
 
-  static Map<String, dynamic> _coerce(dynamic raw) {
-    if (raw is Map<String, dynamic>) return raw;
-    if (raw is Map) return raw.cast<String, dynamic>();
-    return <String, dynamic>{};
-  }
 
   static String _preview(String text, MessageImage? image) {
     if (text.isEmpty && image != null) return '📷 Image';

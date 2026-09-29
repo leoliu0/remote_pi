@@ -1,12 +1,12 @@
-// Plan/31 — SyncService is the single DB writer. Drives it through a fake
-// channel adopted into a real ConnectionManager and asserts box contents.
+// SyncService is the single SQLite session writer. Drive it through a fake
+// channel and assert committed typed-store projections.
 
 import 'dart:async';
-import 'dart:io';
 
-import 'package:app/data/local/boxes.dart';
+import 'package:app/data/local/app_database.dart';
 import 'package:app/data/local/records/message_record.dart';
 import 'package:app/data/local/records/session_index_record.dart';
+import 'package:app/data/local/session_store.dart';
 import 'package:app/data/repositories/session_read_repository.dart';
 import 'package:app/data/sync/sync_service.dart';
 import 'package:app/data/transport/channel.dart';
@@ -15,7 +15,6 @@ import 'package:app/domain/session_state.dart';
 import 'package:app/pairing/storage.dart';
 import 'package:app/protocol/protocol.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:hive/hive.dart';
 
 class _FakeChannel implements IChannel, IControlLink {
   final _ctrl = StreamController<ServerMessage>.broadcast();
@@ -40,24 +39,25 @@ class _FakeChannel implements IChannel, IControlLink {
 }
 
 class _FakeStorage extends PairingStorage {
+  _FakeStorage() : super(_database);
   @override
   Future<List<PeerRecord>> listPeers() async => const [];
 }
 
 int _counter = 0;
 
-late Directory _dir;
-
+late AppDatabase _database;
+late SessionStore _store;
 Future<void> _settle() =>
     Future<void>.delayed(const Duration(milliseconds: 30));
 void main() {
-  setUpAll(() async {
-    _dir = Directory.systemTemp.createTempSync('rp_v2_sync_');
-    await LocalBoxes.initForTest(_dir.path);
+  setUpAll(() {
+    _database = AppDatabase.memory();
+    _store = SessionStore(_database);
   });
-  tearDownAll(() async {
-    await Hive.close();
-    await _dir.delete(recursive: true);
+  tearDownAll(() {
+    _store.dispose();
+    _database.dispose();
   });
 
   Future<
@@ -70,10 +70,9 @@ void main() {
       storage: _FakeStorage(),
       emitDebounce: Duration.zero,
     );
-    final boxes = LocalBoxes();
     final sync = SyncService(
       conn,
-      boxes,
+      _store,
       pendingSendTimeout: pendingSendTimeout,
     );
     final epk = 'epk_sync_${++_counter}';
@@ -90,22 +89,10 @@ void main() {
     return (conn: conn, ch: ch, sync: sync, epk: epk);
   }
 
-  List<MessageRecord> messages(String epk, [String room = 'main']) {
-    final box = LocalBoxes().openMsgsBox(epk, room);
-    final out = [
-      for (final v in box.values)
-        MessageRecord.fromJson((v as Map).cast<String, dynamic>()),
-    ];
-    out.sort((a, b) => a.seq.compareTo(b.seq));
-    return out;
-  }
+  List<MessageRecord> messages(String epk, [String room = 'main']) =>
+      _store.messages(epk, room);
 
-  SessionIndexRecord? index(String epk) {
-    final raw = LocalBoxes().sessionsIndexBox().get('$epk:main');
-    return raw is Map
-        ? SessionIndexRecord.fromJson(raw.cast<String, dynamic>())
-        : null;
-  }
+  SessionIndexRecord? index(String epk) => _store.session(epk, 'main');
 
   group('assistant turn identity', () {
     test('back-to-back done and message persist one authoritative reply', () async {
@@ -678,6 +665,61 @@ void main() {
     s.sync.dispose();
   });
 
+  test('re-activating the loaded session preserves its live turn state',
+      () async {
+    final s = await setup();
+    s.ch.push(AgentChunk(inReplyTo: 'r1', delta: 'still streaming'));
+    await _settle();
+    expect(s.sync.streaming?.buffer, 'still streaming');
+    expect(s.sync.isWorking, isTrue);
+
+    await s.sync.activate(s.epk, 'main');
+
+    expect(s.sync.streaming?.buffer, 'still streaming');
+    expect(s.sync.isWorking, isTrue);
+    s.conn.dispose();
+    s.sync.dispose();
+  });
+
+  test('failed session load can be repaired and retried in the same service',
+      () async {
+    final s = await setup();
+    _database.db.execute(
+      '''
+      INSERT INTO messages(
+        peer_epk, room_id, seq, protocol_id, role, payload_json
+      ) VALUES (?, ?, ?, ?, ?, ?)
+      ''',
+      <Object?>['broken-peer', 'main', 0, 'broken', 'user', '{'],
+    );
+    await expectLater(
+      s.sync.activate('broken-peer', 'main'),
+      throwsFormatException,
+    );
+
+    _database.db.execute(
+      'DELETE FROM messages WHERE peer_epk = ? AND room_id = ?',
+      <Object?>['broken-peer', 'main'],
+    );
+    _store.upsertMessage(
+      'broken-peer',
+      'main',
+      MessageRecord(
+        id: 'pending-after-repair',
+        seq: 0,
+        role: MsgRole.user,
+        text: 'retry me',
+        ts: DateTime.now(),
+        pending: true,
+      ),
+    );
+
+    await s.sync.activate('broken-peer', 'main');
+    expect(s.sync.debugPendingSendTimerCount, 1);
+    s.conn.dispose();
+    s.sync.dispose();
+  });
+
   test('switching sessions resets the in-memory turn state — working/streaming '
       'do NOT leak into the next chat (plan/32)', () async {
     final s = await setup();
@@ -716,7 +758,7 @@ void main() {
 
     // The previous session's DURABLE index must stay "working" — the Pi
     // may still be mid-turn and Home reflects it (relay broadcast + DB).
-    // Clearing the in-memory signals must NOT idle the box row.
+    // Clearing the in-memory signals must NOT idle the durable index row.
     expect(
       index(s.epk)?.status,
       SessionActivity.working,
@@ -805,11 +847,12 @@ void main() {
     },
   );
 
-  test('re-applying an IDENTICAL SessionHistory is idempotent — no box churn, '
-      'so the relay re-sending history on every reconnect no longer tears the '
-      'list down and rebuilds it (plan/32 flicker fix)', () async {
+  test(
+    're-applying an IDENTICAL SessionHistory is idempotent — no DB churn, '
+    'so relay history replay no longer tears down and rebuilds the list',
+    () async {
     final s = await setup();
-    final read = SessionReadRepository(LocalBoxes());
+    final read = SessionReadRepository(_store);
     var emits = 0;
     final sub = read.watchMessages(s.epk, 'main').listen((_) => emits++);
     await _settle();
@@ -852,8 +895,8 @@ void main() {
 
   test(
     'switching the writer to a new session: a late frame from the OLD '
-    "connection is dropped — it neither writes the new box nor appears in the "
-    "new session's read projection (plan/32f session-switch bleed)",
+    "connection is dropped — it writes neither the new session nor its read "
+    "projection (plan/32f session-switch bleed)",
     () async {
       final s = await setup(); // bound to s.epk (peer A)
       s.ch.push(UserInput(id: 'a1', text: 'from chat1'));
@@ -865,7 +908,7 @@ void main() {
       // the old peer's channel down. _activeEpk moves; the old channel (origin
       // = peer A) is still draining.
       const epkB = 'epk_chat2_zzz';
-      final read = SessionReadRepository(LocalBoxes());
+      final read = SessionReadRepository(_store);
       final seenLens = <int>[];
       final sub = read
           .watchMessages(epkB, 'main')
@@ -880,7 +923,7 @@ void main() {
       expect(
         messages(epkB),
         isEmpty,
-        reason: 'old-connection frame must not bleed into the new box',
+        reason: 'old-connection frame must not bleed into the new session',
       );
       expect(
         seenLens.every((n) => n == 0),
@@ -890,7 +933,7 @@ void main() {
       expect(
         messages(s.epk),
         hasLength(1),
-        reason: 'chat 1 box keeps exactly its own row (late frame dropped)',
+        reason: 'chat 1 keeps exactly its own row (late frame dropped)',
       );
 
       await sub.cancel();
@@ -1134,7 +1177,7 @@ void main() {
         factory: (_, _) async => _FakeChannel(),
         storage: _FakeStorage(),
       );
-      final sync = SyncService(conn, LocalBoxes(), pendingSendTimeout: short);
+      final sync = SyncService(conn, _store, pendingSendTimeout: short);
       final epk = 'epk_offline_${++_counter}';
       await sync.activate(epk, 'main');
       await _settle();
@@ -1171,7 +1214,7 @@ void main() {
         await _settle();
         expect(messages(s.epk), hasLength(1));
 
-        // Leave quickly → live timer cancelled; row stays pending in the box.
+        // Leave quickly: the live timer is cancelled; the row stays pending.
         await s.sync.activate('epk_away_${++_counter}', 'main');
         await _settle();
         expect(
@@ -1182,7 +1225,7 @@ void main() {
         expect(
           messages(s.epk),
           hasLength(1),
-          reason: 'orphaned row still in box',
+          reason: 'orphaned row remains durable',
         );
 
         // Time passes beyond the window while away from the session.

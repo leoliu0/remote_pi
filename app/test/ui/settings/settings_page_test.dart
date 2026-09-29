@@ -4,17 +4,16 @@
 import 'dart:async';
 import 'dart:typed_data';
 
+import 'package:app/data/local/app_database.dart';
 import 'package:app/data/preferences/preferences.dart';
 import 'package:app/data/transport/connection_manager.dart';
 import 'package:app/data/transport/peer_channel.dart';
 import 'package:app/pairing/pair_request_flow.dart';
 import 'package:app/pairing/storage.dart';
-import 'package:app/ui/core/themes/app_font_scale.dart';
 import 'package:app/ui/core/themes/themes.dart';
 import 'package:app/ui/settings/settings_page.dart';
 import 'package:app/ui/settings/viewmodels/settings_viewmodel.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 
@@ -28,53 +27,12 @@ class _NoopTransport implements PeerTransport {
 }
 
 class _FakeStorage extends PairingStorage {
+  _FakeStorage() : super(AppDatabase.memory());
   @override
   Future<List<PeerRecord>> listPeers() async => const [];
 }
 
-class _FakeSecureStorage implements FlutterSecureStorage {
-  final Map<String, String> _store = {};
-  @override
-  Future<String?> read({
-    required String key,
-    IOSOptions? iOptions,
-    AndroidOptions? aOptions,
-    LinuxOptions? lOptions,
-    WebOptions? webOptions,
-    MacOsOptions? mOptions,
-    WindowsOptions? wOptions,
-  }) async => _store[key];
-  @override
-  Future<void> write({
-    required String key,
-    required String? value,
-    IOSOptions? iOptions,
-    AndroidOptions? aOptions,
-    LinuxOptions? lOptions,
-    WebOptions? webOptions,
-    MacOsOptions? mOptions,
-    WindowsOptions? wOptions,
-  }) async {
-    if (value == null) {
-      _store.remove(key);
-    } else {
-      _store[key] = value;
-    }
-  }
-
-  @override
-  Future<void> delete({
-    required String key,
-    IOSOptions? iOptions,
-    AndroidOptions? aOptions,
-    LinuxOptions? lOptions,
-    WebOptions? webOptions,
-    MacOsOptions? mOptions,
-    WindowsOptions? wOptions,
-  }) async => _store.remove(key);
-  @override
-  dynamic noSuchMethod(Invocation i) => super.noSuchMethod(i);
-}
+Preferences _preferences() => Preferences(AppDatabase.memory());
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -86,7 +44,7 @@ void main() {
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
 
-      final prefs = Preferences(_FakeSecureStorage());
+      final prefs = _preferences();
       await prefs.load();
       final conn = ConnectionManager(
         factory: (_, _) async =>
@@ -167,7 +125,7 @@ void main() {
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
 
-      final prefs = Preferences(_FakeSecureStorage());
+      final prefs = _preferences();
       await prefs.load();
       await prefs.setFontScale(AppFontScale.huge); // worst case: 1.45x
       final conn = ConnectionManager(

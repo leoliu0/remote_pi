@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:app/data/transport/epk_encoding.dart';
+import 'package:app/pairing/membership_journal.dart';
 import 'package:app/pairing/owner_identity_bridge.dart';
 import 'package:app/pairing/storage.dart';
 import 'package:flutter/foundation.dart';
@@ -9,320 +10,421 @@ import 'mesh_blob.dart';
 import 'mesh_client.dart';
 import 'mesh_envelope.dart';
 
-/// Orchestrates publish + pull-and-apply of the Owner's mesh blob
-/// against the relay's `/mesh` endpoint. Sits between the
-/// [PairingStorage] (local cache) and the [MeshClient] (network).
-///
-/// Single source of truth for the Owner's membership is the relay
-/// (plan/24); the local storage is a hydrated cache. Mutations:
-///   1. write through to local storage immediately (UI responsiveness)
-///   2. publish in background; on conflict/failure, the next
-///      [pullAndApply] reconciles.
-///
-/// Reads: [pullOnDemand] runs at boot, WS reconnect, deep links;
-/// [startPolling] keeps the cache fresh while the app is in foreground.
+enum MeshSyncProblem { corruptStoredSnapshot }
+
+/// Serializes verified relay snapshots with explicit, durable local membership
+/// intent. The visible peer projection is never used as a publication base.
 class MeshSyncService extends ChangeNotifier {
   final MeshClient _client;
   final OwnerIdentityBridge _ownerBridge;
   final PairingStorage _storage;
 
-  /// Last version we observed locally — used as the `since` query
-  /// parameter on subsequent fetches so the relay can short-circuit
-  /// to 304. Reset to 0 when the Owner key changes (sync drift).
+  Future<void> _serialTail = Future<void>.value();
+  Timer? _pollTimer;
+  bool _pollTickQueued = false;
+  bool _disposed = false;
+  MembershipScope? _observedStorageScope;
+  int _scopeGeneration = 0;
   int _lastVersion = 0;
 
-  /// True while a publish is in flight. Used by mutation paths to
-  /// avoid stampeding the relay.
-  bool _publishing = false;
-
-  /// Queued publish triggered while [_publishing] was true (e.g. applyNickname
-  /// called immediately after savePeer). Drained in the finally block.
-  bool _publishPending = false;
-  bool _pendingAllowEmpty = false;
-  Timer? _pollTimer;
-  bool _disposed = false;
-
-  /// Last observed [updatedAt] from the relay. Surfaced so the UI can
-  /// render "last synced ... ago" if it wants to.
   int? lastUpdatedAt;
+  MeshSyncProblem? lastProblem;
 
-  MeshSyncService(this._client, this._ownerBridge, this._storage);
+  MeshSyncService(this._client, this._ownerBridge, this._storage) {
+    _observedStorageScope = _storage.membershipScope;
+    _loadVisibleState(_observedStorageScope);
+    _storage.addListener(_onStorageChanged);
+  }
 
   int get lastVersion => _lastVersion;
 
-  // -------------------------------------------------------------------------
-  // Pull
-  // -------------------------------------------------------------------------
+  /// Boot/reconnect/resume operation: fetch a verified snapshot, apply it with
+  /// pending intent, then drain every durable operation. Calls are serialized.
+  Future<bool> synchronize() => _serialized(() async {
+        final capture = await _activateCurrentScope();
+        if (capture == null) return false;
+        final pulled = await _pull(capture);
+        if (!pulled || !_isCurrent(capture)) return false;
+        return _drain(capture);
+      });
 
-  /// One-shot fetch + apply. Called from boot, WS reconnection, deep
-  /// links. Returns `true` if the local cache now reflects a
-  /// successfully-verified relay version (including 304 "we're up to
-  /// date" and 404 "relay never had data"); `false` on failure.
-  Future<bool> pullOnDemand({Set<String>? preserveEpks}) async {
-    final pk = _ownerBridge.currentOwnerPk;
-    if (pk == null) {
-      return false;
+  /// Publishes queued intent without allowing another pull/publication to
+  /// interleave. The method keeps draining so operations written while a
+  /// request is in flight are not accidentally acknowledged or stranded.
+  Future<bool> drainPending() => _serialized(() async {
+        final capture = await _activateCurrentScope();
+        if (capture == null) return false;
+        return _drain(capture);
+      });
+
+  Future<T> _serialized<T>(Future<T> Function() operation) {
+    final previous = _serialTail;
+    final released = Completer<void>();
+    _serialTail = released.future;
+    return () async {
+      await previous;
+      try {
+        return await operation();
+      } finally {
+        released.complete();
+      }
+    }();
+  }
+
+  Future<_SyncCapture?> _activateCurrentScope() async {
+    if (_disposed) return null;
+    final ownerPk = _ownerBridge.currentOwnerPk;
+    if (ownerPk == null) return null;
+    final copiedOwner = Uint8List.fromList(ownerPk);
+    final String relay;
+    try {
+      relay = normalizeMembershipRelayUrl(_client.baseUrlProvider());
+    } catch (_) {
+      return null;
     }
-    final hash = await MeshClient.ownerPkHash(pk);
+
+    await _storage.initialize(ownerPk: copiedOwner, relayUrl: relay);
+    final currentOwner = _ownerBridge.currentOwnerPk;
+    if (currentOwner == null || !_bytesEqual(currentOwner, copiedOwner)) {
+      return null;
+    }
+    String currentRelay;
+    try {
+      currentRelay = normalizeMembershipRelayUrl(_client.baseUrlProvider());
+    } catch (_) {
+      return null;
+    }
+    if (currentRelay != relay) return null;
+    final scope = MembershipScope(ownerPk: copiedOwner, relayUrl: relay);
+    if (_storage.membershipScope != scope) return null;
+    return _SyncCapture(
+      scope: scope,
+      ownerPk: copiedOwner,
+      generation: _scopeGeneration,
+    );
+  }
+
+  Future<bool> _pull(_SyncCapture capture) async {
+    if (!_isCurrent(capture)) return false;
+    final storedSnapshot =
+        _storage.verifiedMembershipSnapshot(capture.scope);
+    var durable = storedSnapshot;
+    var replacingCorruptSnapshot = false;
+    if (storedSnapshot != null) {
+      final members = await _verifiedMembersFromStoredSnapshot(
+        storedSnapshot,
+        capture,
+      );
+      if (!_isCurrent(capture)) return false;
+      if (members == null) {
+        durable = null;
+        replacingCorruptSnapshot = true;
+        _setProblem(MeshSyncProblem.corruptStoredSnapshot);
+      }
+    }
+
+    final hash = await MeshClient.ownerPkHash(capture.ownerPk);
+    if (!_isCurrent(capture)) return false;
     final result = await _client.fetch(
       hash,
-      since: _lastVersion > 0 ? _lastVersion : null,
+      since: durable?.version,
     );
+    if (!_isCurrent(capture)) return false;
+
     switch (result) {
-      case MeshFetchOk(envelope: final env, version: final v, updatedAt: final u):
-        final applied = await _applyVerified(
-          env,
-          expectedOwnerPk: pk,
-          preserveEpks: preserveEpks,
-        );
-        if (applied) {
-          _lastVersion = v;
-          lastUpdatedAt = u;
-          notifyListeners();
-          return true;
-        }
-        return false;
       case MeshFetchNotModified():
+        if (durable == null) return false;
+        _clearProblem();
         return true;
       case MeshFetchNotFound():
+        if (replacingCorruptSnapshot) return false;
+        if (durable == null) {
+          _storage.authorizeLegacyMembershipRecovery(capture.scope);
+        }
+        // A 404 authorizes only the migration candidate captured separately;
+        // it is never treated as a generic empty roster.
+        _clearProblem();
         return true;
       case MeshFetchFailure():
         return false;
+      case MeshFetchOk(
+          envelope: final envelope,
+          version: final responseVersion,
+          updatedAt: final updatedAt,
+        ):
+        return _verifyAndApplyFetch(
+          capture,
+          envelope,
+          responseVersion,
+          updatedAt,
+          durable,
+          replaceCorruptSnapshot: replacingCorruptSnapshot,
+        );
     }
   }
 
-  /// Verify the envelope, parse, and overwrite the local storage with
-  /// the relay's view. Returns `false` when verification fails or the
-  /// embedded owner_pk doesn't match the one we expected — those are
-  /// silent drops (we do not touch the cache).
-  Future<bool> _applyVerified(
-    MeshEnvelope env, {
-    required Uint8List expectedOwnerPk,
-    Set<String>? preserveEpks,
+  Future<bool> _verifyAndApplyFetch(
+    _SyncCapture capture,
+    MeshEnvelope envelope,
+    int responseVersion,
+    int updatedAt,
+    VerifiedMembershipSnapshot? durable, {
+    required bool replaceCorruptSnapshot,
   }) async {
-    final ok = await MeshBlob.verifyEnvelope(env);
-    if (!ok) {
+    if (!await MeshBlob.verifyEnvelope(envelope)) return false;
+    if (!_isCurrent(capture)) return false;
+
+    final MeshBlob blob;
+    try {
+      blob = MeshBlob.fromCanonicalBytes(envelope.blob);
+    } catch (_) {
       return false;
     }
-    final blob = MeshBlob.fromCanonicalBytes(env.blob);
-    if (!_bytesEqual(blob.ownerPk, expectedOwnerPk)) {
+    if (blob.version != responseVersion ||
+        !_bytesEqual(blob.ownerPk, capture.ownerPk) ||
+        (durable != null && responseVersion <= durable.version)) {
       return false;
     }
-    await _replaceLocalCacheWith(blob, preserveEpks: preserveEpks);
+    final members = _membershipMembers(blob);
+    if (members == null || !_isCurrent(capture)) return false;
+
+    final snapshot = VerifiedMembershipSnapshot(
+      version: responseVersion,
+      updatedAt: updatedAt,
+      blob: envelope.blob,
+      signature: envelope.sig,
+    );
+    final applied = _storage.applyVerifiedProjection(
+      scope: capture.scope,
+      members: members,
+      snapshot: snapshot,
+      replaceCorruptSnapshot: replaceCorruptSnapshot,
+    );
+    if (!applied || !_isCurrent(capture)) return false;
+    _clearProblem();
+    _setVisibleState(snapshot);
     return true;
   }
 
-  /// Overwrite local peers + nicknames with what the relay says.
-  /// Implements the "relay is source of truth" contract from plan/24:
-  /// any peer in the local cache but absent from `blob.members` is
-  /// removed; renamed nicknames propagate; relay_url updates.
-  ///
-  /// Uses the **silent** variants of save/delete so the mutation hook
-  /// (which republishes) does not fire. Otherwise every pull would
-  /// loop into a publish, and any tiny diff (timestamp precision,
-  /// reordering) would round-trip back to the relay. Worse: a race
-  /// between the apply-phase intermediate states and a concurrent
-  /// `publish()` could observe an empty PairingStorage and ship
-  /// members=[] — the bug reproduced by the user, where pi-extension
-  /// self-revoked after the app silently published v2 empty.
-  Future<void> _replaceLocalCacheWith(
-    MeshBlob blob, {
-    Set<String>? preserveEpks,
-  }) async {
-    final existingList = await _storage.listPeers();
-    final existing = {
-      for (final p in existingList) p.remoteEpk: p,
-    };
-    final keep = <String>{};
-    for (final m in blob.members) {
-      final appEpk = toAppEpk(m.remoteEpk);
-      keep.add(appEpk);
-      final prev = existing[appEpk] ??
-          existing[m.remoteEpk] ??
-          existing[toStandardB64(m.remoteEpk)];
-      final next = PeerRecord(
-        remoteEpk: appEpk,
-        sessionName: prev?.sessionName ?? m.nickname ?? 'remote_pi',
-        relayUrl: m.relayUrl,
-        pairedAt: m.pairedAt,
-        nickname: prev?.nickname ?? m.nickname,
-        roomId: prev?.roomId,
-        harness: prev?.harness,
-      );
-      if (prev == null || prev.remoteEpk != appEpk || !_peerEqualsForMesh(prev, next)) {
-        await _storage.savePeerSilent(next);
-      }
-    }
-    final normalizedPreserve = preserveEpks != null
-        ? {
-            for (final epk in preserveEpks) toAppEpk(epk),
-          }
-        : const <String>{};
-    for (final p in existing.values) {
-      final pAppEpk = toAppEpk(p.remoteEpk);
-      final shouldKeep = keep.contains(pAppEpk) ||
-          normalizedPreserve.contains(pAppEpk);
-      if (!shouldKeep) {
-        await _storage.deletePeerSilent(p.remoteEpk);
-        await _storage.deleteRooms(p.remoteEpk);
-      } else if (p.remoteEpk != pAppEpk) {
-        // Clean up legacy/non-canonical exact key without deleting canonical peer
-        await _storage.pruneLegacyKeySilent(p.remoteEpk);
-      }
-    }
-  }
-
-  /// Compare the mesh-controlled fields only — `sessionName` and
-  /// `roomId` stay client-local and don't trigger a re-save when the
-  /// relay version arrives unchanged.
-  bool _peerEqualsForMesh(PeerRecord a, PeerRecord b) =>
-      toAppEpk(a.remoteEpk) == toAppEpk(b.remoteEpk) &&
-      a.relayUrl == b.relayUrl &&
-      a.pairedAt == b.pairedAt &&
-      a.nickname == b.nickname;
-
-  // -------------------------------------------------------------------------
-  // Publish
-  // -------------------------------------------------------------------------
-
-  /// Snapshot the current local peer list, bump version, sign, POST.
-  /// Conflict (409) → re-fetch then publish again with the higher
-  /// version. Network failure leaves the cache as-is — the next
-  /// [pullAndApply] tick will reconcile (LWW from plan/24 § Q5).
-  ///
-  /// [allowEmpty] opts out of the empty-on-existing safety net (see
-  /// [_publishOnce]). Used by the revoke-last-peer flow, which is the
-  /// only legitimate caller of "publish members=[] on top of a
-  /// non-zero version watermark" — every other caller leaves the
-  /// default `false` so the safety net still protects against races.
-  Future<MeshPublishResult> publish({bool allowEmpty = false}) async {
-    if (_publishing) {
-      _publishPending = true;
-      if (allowEmpty) {
-        _pendingAllowEmpty = true;
-      }
-      return const MeshPublishFailure('already in flight');
-    }
-    final pk = _ownerBridge.currentOwnerPk;
-    if (pk == null) {
-      return const MeshPublishFailure('owner pk not loaded');
-    }
-    _publishing = true;
-    try {
-      return await _publishOnce(
-        pk,
-        refetchOnConflict: true,
-        allowEmpty: allowEmpty,
-      );
-    } finally {
-      _publishing = false;
-      if (_publishPending) {
-        _publishPending = false;
-        final nextAllowEmpty = _pendingAllowEmpty;
-        _pendingAllowEmpty = false;
-        unawaited(publish(allowEmpty: nextAllowEmpty));
-      }
-    }
-  }
-  Future<MeshPublishResult> _publishOnce(
-    Uint8List pk, {
-    required bool refetchOnConflict,
-    required bool allowEmpty,
-  }) async {
-    final peers = await _storage.listPeers();
-    // Safety net (plan/24-fix-app-publish-race): never overwrite a
-    // non-empty membership with members=[] UNLESS the caller opted in
-    // via [allowEmpty]. The only legitimate "empty on top of non-zero
-    // version" path is the user revoking their last paired peer
-    // (SettingsViewModel.revoke); every other caller passes
-    // `allowEmpty:false` so we still refuse races (transient
-    // PairingStorage state, apply mid-flight, mistaken Owner-key
-    // reset) that would self-revoke pi-extension on every Pi the user
-    // owns.
-    if (peers.isEmpty && _lastVersion > 0 && !allowEmpty) {
-      return const MeshPublishFailure('refused empty-on-existing');
-    }
-    // Encoding gotcha: `PairingStorage.PeerRecord.remoteEpk` is whatever
-    // the QR / pair_ok handed us — historically base64url (no padding).
-    // The Pi-extension's self-revoke check compares `my_pubkey` (which
-    // it formats as base64 STANDARD, matching `owner_pk` in the blob)
-    // against the strings in `members[].remote_epk`. Mixing encodings
-    // looks like "I'm not listed" → self-revoke. Normalise on the way
-    // out so the blob is uniformly base64 standard, end-to-end.
-    final members = peers
-        .map((p) => MeshMember(
-              remoteEpk: toStandardB64(p.remoteEpk),
-              relayUrl: p.relayUrl,
-              pairedAt: p.pairedAt,
-              nickname: p.nickname,
-            ))
-        .toList(growable: false);
-    final nextVersion = _lastVersion + 1;
-    final blob = MeshBlob(
-      version: nextVersion,
-      issuedAt: DateTime.now().toUtc().millisecondsSinceEpoch,
-      ownerPk: pk,
-      members: members,
-    );
-    final keyPair = await _ownerBridge.requireKeyPair();
-    final envelope = await blob.signWith(keyPair);
-    final hash = await MeshClient.ownerPkHash(pk);
-    final result = await _client.publish(hash, envelope);
-    switch (result) {
-      case MeshPublishOk(version: final v, updatedAt: final u):
-        _lastVersion = v;
-        lastUpdatedAt = u;
-        notifyListeners();
-        return result;
-      case MeshPublishConflict():
-        if (!refetchOnConflict) return result;
-        final localEpks = peers.map((p) => p.remoteEpk).toSet();
-        await pullOnDemand(preserveEpks: localEpks);
-        return _publishOnce(
-          pk,
-          refetchOnConflict: false,
-          allowEmpty: allowEmpty,
+  Future<bool> _drain(_SyncCapture capture) async {
+    var conflicts = 0;
+    while (_isCurrent(capture)) {
+      final operations =
+          _storage.pendingMembershipOperations(capture.scope);
+      final baseSnapshot =
+          _storage.verifiedMembershipSnapshot(capture.scope);
+      final List<MembershipMember> baseMembers;
+      var publishingRecovery = false;
+      if (baseSnapshot != null) {
+        final verified = await _verifiedMembersFromStoredSnapshot(
+          baseSnapshot,
+          capture,
         );
-      case MeshPublishBadRequest():
-        return result;
-      case MeshPublishForbidden():
-      case MeshPublishTooLarge():
-      case MeshPublishFailure():
-        return result;
+        if (!_isCurrent(capture)) return false;
+        if (verified == null) {
+          _setProblem(MeshSyncProblem.corruptStoredSnapshot);
+          return false;
+        }
+        baseMembers = verified;
+      } else {
+        final recovery = _storage.legacyMembershipRecovery(capture.scope);
+        if (recovery != null) {
+          if (!recovery.authorizedByNotFound) return false;
+          baseMembers = recovery.members;
+          publishingRecovery = true;
+        } else {
+          baseMembers = const <MembershipMember>[];
+        }
+      }
+      if (operations.isEmpty && !publishingRecovery) return true;
+      final rebased = PairingStorage.rebaseMembership(baseMembers, operations);
+
+      if (rebased.isEmpty &&
+          !operations.any(
+            (operation) =>
+                operation.kind == MembershipOperationKind.revoke,
+          )) {
+        return false;
+      }
+
+      final nextVersion = (baseSnapshot?.version ?? 0) + 1;
+      final blob = MeshBlob(
+        version: nextVersion,
+        issuedAt: DateTime.now().toUtc().millisecondsSinceEpoch,
+        ownerPk: capture.ownerPk,
+        members: rebased
+            .map(
+              (member) => MeshMember(
+                remoteEpk: toStandardB64(member.remoteEpk),
+                relayUrl: member.relayUrl,
+                pairedAt: member.pairedAt,
+                nickname: member.nickname,
+              ),
+            )
+            .toList(growable: false),
+      );
+      final keyPair = await _ownerBridge.requireKeyPair();
+      if (!_isCurrent(capture)) return false;
+      final envelope = await blob.signWith(keyPair);
+      if (!_isCurrent(capture)) return false;
+      final hash = await MeshClient.ownerPkHash(capture.ownerPk);
+      if (!_isCurrent(capture)) return false;
+      final result = await _client.publish(hash, envelope);
+      if (!_isCurrent(capture)) return false;
+
+      switch (result) {
+        case MeshPublishOk(version: final version, updatedAt: final updatedAt):
+          if (version != nextVersion) return false;
+          final snapshot = VerifiedMembershipSnapshot(
+            version: version,
+            updatedAt: updatedAt,
+            blob: envelope.blob,
+            signature: envelope.sig,
+          );
+          final acknowledged = _storage.acknowledgePublishedSnapshot(
+            scope: capture.scope,
+            snapshot: snapshot,
+            acceptedMembers: rebased,
+            capturedSequences:
+                operations.map((operation) => operation.sequence),
+          );
+          if (!acknowledged || !_isCurrent(capture)) return false;
+          _clearProblem();
+          _setVisibleState(snapshot);
+          conflicts = 0;
+          continue;
+        case MeshPublishConflict():
+          conflicts++;
+          if (conflicts > 3 || !await _pull(capture)) return false;
+          continue;
+        case MeshPublishBadRequest():
+        case MeshPublishForbidden():
+        case MeshPublishTooLarge():
+        case MeshPublishFailure():
+          return false;
+      }
+    }
+    return false;
+  }
+
+  Future<List<MembershipMember>?> _verifiedMembersFromStoredSnapshot(
+    VerifiedMembershipSnapshot snapshot,
+    _SyncCapture capture,
+  ) async {
+    final envelope = MeshEnvelope(
+      blob: snapshot.blob,
+      sig: snapshot.signature,
+    );
+    if (!await MeshBlob.verifyEnvelope(envelope)) return null;
+    if (!_isCurrent(capture)) return null;
+    try {
+      final blob = MeshBlob.fromCanonicalBytes(snapshot.blob);
+      if (blob.version != snapshot.version ||
+          !_bytesEqual(blob.ownerPk, capture.ownerPk)) {
+        return null;
+      }
+      return _membershipMembers(blob);
+    } catch (_) {
+      return null;
     }
   }
 
-  // -------------------------------------------------------------------------
-  // Polling
-  // -------------------------------------------------------------------------
+  List<MembershipMember>? _membershipMembers(MeshBlob blob) {
+    final members = <MembershipMember>[];
+    final seen = <String>{};
+    for (final member in blob.members) {
+      final epk = toAppEpk(member.remoteEpk);
+      if (!seen.add(epk)) return null;
+      try {
+        // member.relayUrl is a legacy signed payload field. The configured
+        // MeshClient endpoint, captured separately, owns request scope.
+        normalizeMembershipRelayUrl(member.relayUrl);
+      } catch (_) {
+        return null;
+      }
+      members.add(
+        MembershipMember(
+          remoteEpk: epk,
+          relayUrl: member.relayUrl,
+          pairedAt: member.pairedAt,
+          nickname: member.nickname,
+        ),
+      );
+    }
+    members.sort((a, b) => a.remoteEpk.compareTo(b.remoteEpk));
+    return members;
+  }
 
-  /// Begin periodic [pullOnDemand] every [interval] (default 60s, the
-  /// Q1 value from plan/24). Idempotent — calling twice cancels the
-  /// previous timer first.
-  ///
-  /// The host (typically the router or a top-level lifecycle observer)
-  /// is responsible for stopping the polling when the app goes
-  /// background and restarting it on resume.
+
+  bool _isCurrent(_SyncCapture capture) {
+    if (_disposed || capture.generation != _scopeGeneration) return false;
+    if (_storage.membershipScope != capture.scope) return false;
+    final ownerPk = _ownerBridge.currentOwnerPk;
+    if (ownerPk == null || !_bytesEqual(ownerPk, capture.ownerPk)) return false;
+    try {
+      return normalizeMembershipRelayUrl(_client.baseUrlProvider()) ==
+          capture.scope.relayUrl;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  void _onStorageChanged() {
+    final current = _storage.membershipScope;
+    if (current == _observedStorageScope) return;
+    _observedStorageScope = current;
+    _scopeGeneration++;
+    _loadVisibleState(current);
+    notifyListeners();
+  }
+
+  void _loadVisibleState(MembershipScope? scope) {
+    lastProblem = null;
+    if (scope == null) {
+      _lastVersion = 0;
+      lastUpdatedAt = null;
+      return;
+    }
+    final snapshot = _storage.verifiedMembershipSnapshot(scope);
+    _lastVersion = snapshot?.version ?? 0;
+    lastUpdatedAt = snapshot?.updatedAt;
+  }
+
+  void _setProblem(MeshSyncProblem problem) {
+    if (lastProblem == problem) return;
+    lastProblem = problem;
+    notifyListeners();
+  }
+
+  void _clearProblem() {
+    if (lastProblem == null) return;
+    lastProblem = null;
+    notifyListeners();
+  }
+
+  void _setVisibleState(VerifiedMembershipSnapshot snapshot) {
+    _lastVersion = snapshot.version;
+    lastUpdatedAt = snapshot.updatedAt;
+    notifyListeners();
+  }
+
   void startPolling({Duration interval = const Duration(seconds: 60)}) {
+    if (_disposed) return;
     stopPolling();
     _pollTimer = Timer.periodic(interval, (_) {
-      // ignore: unawaited_futures
-      pullOnDemand();
+      if (_pollTickQueued || _disposed) return;
+      _pollTickQueued = true;
+      unawaited(
+        synchronize().whenComplete(() {
+          _pollTickQueued = false;
+        }),
+      );
     });
   }
 
   void stopPolling() {
-    if (_pollTimer != null) {
-      _pollTimer?.cancel();
-      _pollTimer = null;
-    }
-  }
-
-  /// Reset the version watermark — used by the Owner-key-replaced
-  /// path (sync drift in plan/23) so the next fetch is unconditional.
-  void resetVersionWatermark() {
-    _lastVersion = 0;
-    lastUpdatedAt = null;
+    _pollTimer?.cancel();
+    _pollTimer = null;
   }
 
   @override
@@ -330,14 +432,28 @@ class MeshSyncService extends ChangeNotifier {
     if (_disposed) return;
     _disposed = true;
     stopPolling();
+    _storage.removeListener(_onStorageChanged);
+    _storage.attachPeerMutationHook(null);
     super.dispose();
   }
 }
 
-bool _bytesEqual(Uint8List a, Uint8List b) {
-  if (a.length != b.length) return false;
-  for (var i = 0; i < a.length; i++) {
-    if (a[i] != b[i]) return false;
+final class _SyncCapture {
+  final MembershipScope scope;
+  final Uint8List ownerPk;
+  final int generation;
+
+  const _SyncCapture({
+    required this.scope,
+    required this.ownerPk,
+    required this.generation,
+  });
+}
+
+bool _bytesEqual(Uint8List first, Uint8List second) {
+  if (first.length != second.length) return false;
+  for (var index = 0; index < first.length; index++) {
+    if (first[index] != second[index]) return false;
   }
   return true;
 }

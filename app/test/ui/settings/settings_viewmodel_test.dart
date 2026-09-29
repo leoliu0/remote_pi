@@ -1,16 +1,20 @@
 import 'dart:async';
 import 'dart:typed_data';
 
+import 'package:app/data/local/app_database.dart';
+import 'package:app/data/mesh/mesh_client.dart';
+import 'package:app/data/mesh/mesh_sync_service.dart';
 import 'package:app/data/preferences/preferences.dart';
 import 'package:app/data/transport/connection_manager.dart';
 import 'package:app/data/transport/peer_channel.dart';
 import 'package:app/data/transport/relay_config.dart';
+import 'package:app/pairing/owner_identity_bridge.dart';
 import 'package:app/pairing/pair_request_flow.dart';
 import 'package:app/pairing/storage.dart';
 import 'package:app/ui/settings/states/settings_state.dart';
 import 'package:app/ui/settings/viewmodels/settings_viewmodel.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:remote_pi_identity/remote_pi_identity.dart';
 
 class _NoopTransport implements PeerTransport {
   @override Future<void> send(Uint8List data) async {}
@@ -29,13 +33,16 @@ ConnectionManager _conn({_FakeStorage? storage}) {
 
 class _FakeStorage extends PairingStorage {
   List<PeerRecord> peers;
-  _FakeStorage(this.peers);
+  _FakeStorage(this.peers) : super(AppDatabase.memory());
 
   @override
   Future<List<PeerRecord>> listPeers() async => List.of(peers);
 
   @override
-  Future<void> savePeer(PeerRecord r) async {
+  Future<void> savePeer(
+    PeerRecord r, {
+    required PeerSaveIntent intent,
+  }) async {
     peers = [r, ...peers.where((p) => p.remoteEpk != r.remoteEpk)];
   }
 
@@ -45,53 +52,61 @@ class _FakeStorage extends PairingStorage {
   }
 
   @override
-  Future<void> deletePeerSilent(String epk) async {
-    peers = peers.where((p) => p.remoteEpk != epk).toList();
+  Future<List<PersistedRoom>> loadRooms(String epk) async => const [];
+
+  @override
+  Future<void> saveRooms(String epk, List<PersistedRoom> rooms) async {}
+
+}
+
+class _RelayStorage extends _FakeStorage {
+  _RelayStorage(super.peers);
+
+  @override
+  Future<void> initialize({
+    required Uint8List ownerPk,
+    required String relayUrl,
+  }) async {}
+}
+
+class _RelayConnection extends ConnectionManager {
+  _RelayConnection(this.storage)
+      : super(
+          factory: (_, _) async => throw UnimplementedError(),
+          storage: storage,
+        );
+
+  final _RelayStorage storage;
+  final List<int> peerCountsAtReconnect = [];
+
+  @override
+  Future<void> reconnect({String? preferredEpk}) async {
+    peerCountsAtReconnect.add(storage.peers.length);
   }
 }
 
-class _FakeSecureStorage implements FlutterSecureStorage {
-  final Map<String, String> _store = {};
+class _RelayMeshSync extends MeshSyncService {
+  _RelayMeshSync(
+    OwnerIdentityBridge bridge,
+    this.storage,
+  ) : super(
+          MeshClient(baseUrlProvider: () => 'https://custom.example'),
+          bridge,
+          storage,
+        );
+
+  final _RelayStorage storage;
+  final synchronized = Completer<void>();
+
   @override
-  Future<String?> read({
-    required String key,
-    IOSOptions? iOptions,
-    AndroidOptions? aOptions,
-    LinuxOptions? lOptions,
-    WebOptions? webOptions,
-    MacOsOptions? mOptions,
-    WindowsOptions? wOptions,
-  }) async => _store[key];
-  @override
-  Future<void> write({
-    required String key,
-    required String? value,
-    IOSOptions? iOptions,
-    AndroidOptions? aOptions,
-    LinuxOptions? lOptions,
-    WebOptions? webOptions,
-    MacOsOptions? mOptions,
-    WindowsOptions? wOptions,
-  }) async {
-    if (value == null) {
-      _store.remove(key);
-    } else {
-      _store[key] = value;
-    }
+  Future<bool> synchronize() async {
+    storage.peers = [_peerA()];
+    if (!synchronized.isCompleted) synchronized.complete();
+    return true;
   }
-  @override
-  Future<void> delete({
-    required String key,
-    IOSOptions? iOptions,
-    AndroidOptions? aOptions,
-    LinuxOptions? lOptions,
-    WebOptions? webOptions,
-    MacOsOptions? mOptions,
-    WindowsOptions? wOptions,
-  }) async => _store.remove(key);
-  @override
-  dynamic noSuchMethod(Invocation i) => super.noSuchMethod(i);
 }
+
+Preferences _preferences() => Preferences(AppDatabase.memory());
 
 PeerRecord _peerA() => const PeerRecord(
   remoteEpk: 'epk_A',
@@ -104,7 +119,7 @@ void main() {
   group('SettingsViewModel', () {
     test('initial state is SettingsLoading', () {
       final storage = _FakeStorage([_peerA()]);
-      final prefs = Preferences(_FakeSecureStorage());
+      final prefs = _preferences();
       final vm = SettingsViewModel(storage, prefs, _conn(storage: storage));
       expect(vm.state, isA<SettingsLoading>());
       vm.dispose();
@@ -112,7 +127,7 @@ void main() {
 
     test('empty storage → SettingsNoPeer', () async {
       final storage = _FakeStorage([]);
-      final prefs = Preferences(_FakeSecureStorage());
+      final prefs = _preferences();
       final vm = SettingsViewModel(storage, prefs, _conn(storage: storage));
       await Future<void>.delayed(Duration.zero);
       expect(vm.state, isA<SettingsNoPeer>());
@@ -121,7 +136,7 @@ void main() {
 
     test('peers loaded → SettingsList', () async {
       final storage = _FakeStorage([_peerA()]);
-      final prefs = Preferences(_FakeSecureStorage());
+      final prefs = _preferences();
       final vm = SettingsViewModel(storage, prefs, _conn(storage: storage));
       await Future<void>.delayed(Duration.zero);
 
@@ -134,7 +149,7 @@ void main() {
     test('revoke deletes peer + clears selectedPeerEpk if it matched',
         () async {
       final storage = _FakeStorage([_peerA()]);
-      final prefs = Preferences(_FakeSecureStorage());
+      final prefs = _preferences();
       await prefs.setSelectedPeerEpk('epk_A');
 
       final vm = SettingsViewModel(storage, prefs, _conn(storage: storage));
@@ -152,7 +167,7 @@ void main() {
 
     test('revoke does NOT touch selectedPeerEpk if different', () async {
       final storage = _FakeStorage([_peerA()]);
-      final prefs = Preferences(_FakeSecureStorage());
+      final prefs = _preferences();
       await prefs.setSelectedPeerEpk('epk_other');
 
       final vm = SettingsViewModel(storage, prefs, _conn(storage: storage));
@@ -168,7 +183,7 @@ void main() {
 
     test('setNickname updates state and storage', () async {
       final storage = _FakeStorage([_peerA()]);
-      final prefs = Preferences(_FakeSecureStorage());
+      final prefs = _preferences();
       final vm = SettingsViewModel(storage, prefs, _conn(storage: storage));
       await Future<void>.delayed(Duration.zero);
 
@@ -186,7 +201,7 @@ void main() {
       final storage = _FakeStorage([
         _peerA().copyWith(nickname: 'Casa'),
       ]);
-      final prefs = Preferences(_FakeSecureStorage());
+      final prefs = _preferences();
       final vm = SettingsViewModel(storage, prefs, _conn(storage: storage));
       await Future<void>.delayed(Duration.zero);
 
@@ -203,7 +218,7 @@ void main() {
       final storage = _FakeStorage([
         _peerA().copyWith(nickname: 'Casa'),
       ]);
-      final prefs = Preferences(_FakeSecureStorage());
+      final prefs = _preferences();
       final vm = SettingsViewModel(storage, prefs, _conn(storage: storage));
       await Future<void>.delayed(Duration.zero);
 
@@ -217,7 +232,7 @@ void main() {
 
     test('setNickname is a no-op for unknown epk', () async {
       final storage = _FakeStorage([_peerA()]);
-      final prefs = Preferences(_FakeSecureStorage());
+      final prefs = _preferences();
       final vm = SettingsViewModel(storage, prefs, _conn(storage: storage));
       await Future<void>.delayed(Duration.zero);
 
@@ -233,7 +248,7 @@ void main() {
   group('SettingsViewModel — plan 14 relay config', () {
     test('saveRelayUrl with valid URL persists override + returns null',
         () async {
-      final prefs = Preferences(_FakeSecureStorage());
+      final prefs = _preferences();
       final vm = SettingsViewModel(_FakeStorage([]), prefs, _conn());
       await Future<void>.delayed(Duration.zero);
 
@@ -248,7 +263,7 @@ void main() {
     test(
       'saveRelayUrl with invalid URL returns error and does NOT persist',
       () async {
-        final prefs = Preferences(_FakeSecureStorage());
+        final prefs = _preferences();
         final vm = SettingsViewModel(_FakeStorage([]), prefs, _conn());
         await Future<void>.delayed(Duration.zero);
 
@@ -263,7 +278,7 @@ void main() {
     test(
       'saveRelayUrl normalizes ws(s):// to http(s):// before persisting',
       () async {
-        final prefs = Preferences(_FakeSecureStorage());
+        final prefs = _preferences();
         final vm = SettingsViewModel(_FakeStorage([]), prefs, _conn());
         await Future<void>.delayed(Duration.zero);
 
@@ -282,7 +297,7 @@ void main() {
     test(
       'saveRelayUrl auto-prefixes http:// when the scheme is missing',
       () async {
-        final prefs = Preferences(_FakeSecureStorage());
+        final prefs = _preferences();
         final vm = SettingsViewModel(_FakeStorage([]), prefs, _conn());
         await Future<void>.delayed(Duration.zero);
 
@@ -298,7 +313,7 @@ void main() {
       'saveRelayUrl with empty / blank / null resets to the default '
       'relay and clears the existing override',
       () async {
-        final prefs = Preferences(_FakeSecureStorage());
+        final prefs = _preferences();
         await prefs.setRelayUrl('https://x.example');
         final vm = SettingsViewModel(_FakeStorage([]), prefs, _conn());
         await Future<void>.delayed(Duration.zero);
@@ -331,7 +346,7 @@ void main() {
       'relayUrlOverride defaults to kDefaultRelayUrl (pre-fill for the '
       '"use default" button) and reflects a saved override',
       () async {
-        final prefs = Preferences(_FakeSecureStorage());
+        final prefs = _preferences();
         final vm = SettingsViewModel(_FakeStorage([]), prefs, _conn());
         await Future<void>.delayed(Duration.zero);
 
@@ -353,7 +368,7 @@ void main() {
         () async {
       final storage = _FakeStorage([_peerA()]);
       final conn = _conn(storage: storage);
-      final prefs = Preferences(_FakeSecureStorage());
+      final prefs = _preferences();
       await prefs.setSelectedPeerEpk('epk_A');
       final vm = SettingsViewModel(storage, prefs, conn);
       await Future<void>.delayed(Duration.zero);
@@ -370,6 +385,36 @@ void main() {
       expect(conn.status, isNot(isA<StatusNoPeer>()));
 
       vm.dispose();
+      conn.dispose();
+    });
+
+    test('relay change reconnects after mesh hydration restores peers',
+        () async {
+      final storage = _RelayStorage([]);
+      final prefs = _preferences();
+      final identityStore = InMemoryOwnerIdentityStore();
+      final bridge = OwnerIdentityBridge(identityStore, storage);
+      await bridge.boot();
+      final mesh = _RelayMeshSync(bridge, storage);
+      final conn = _RelayConnection(storage);
+      final vm = SettingsViewModel(storage, prefs, conn, mesh, bridge);
+
+      final error = await vm.saveRelayUrl(
+        'https://custom.example',
+        alwaysReconnect: true,
+      );
+      expect(error, isNull);
+      await mesh.synchronized.future;
+      await Future<void>.delayed(Duration.zero);
+
+      expect(storage.peers, [_peerA()]);
+      expect(conn.peerCountsAtReconnect, isNotEmpty);
+      expect(conn.peerCountsAtReconnect.last, 1);
+
+      vm.dispose();
+      mesh.dispose();
+      bridge.dispose();
+      identityStore.dispose();
       conn.dispose();
     });
   });

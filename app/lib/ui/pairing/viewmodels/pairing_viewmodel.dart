@@ -1,9 +1,11 @@
 import 'dart:io' show Platform;
+import 'dart:typed_data';
 
 import 'package:app/data/preferences/preferences.dart';
 import 'package:app/data/transport/connection_manager.dart';
 import 'package:app/data/transport/peer_channel.dart';
 import 'package:app/data/transport/relay_config.dart';
+import 'package:app/pairing/membership_journal.dart';
 import 'package:app/pairing/owner_identity_bridge.dart';
 import 'package:app/pairing/pair_request_flow.dart' as pair_flow;
 import 'package:app/pairing/qr_scanner.dart';
@@ -63,6 +65,15 @@ class PairingViewModel extends ViewModel<PairingState> {
       // the router's _BootState well before pairing is reachable, so
       // requireKeyPair() never throws here.
       final ownerKey = await _ownerBridge.requireKeyPair();
+      final currentOwnerPk = _ownerBridge.currentOwnerPk;
+      if (currentOwnerPk == null) {
+        throw const pair_flow.PairingError(
+          code: 'pairing_context_changed',
+          message: 'Owner identity changed — retry pairing',
+        );
+      }
+      final enrollmentOwnerPk = Uint8List.fromList(currentOwnerPk);
+      final enrollmentRelay = resolveRelayUrl(_prefs);
 
       final transport = await _transportFactory(qr, ownerKey);
       _transport = transport;
@@ -73,7 +84,11 @@ class PairingViewModel extends ViewModel<PairingState> {
             transport: transport,
             storage: _storage,
             deviceName: _deviceName(),
-            currentRelayUrl: resolveRelayUrl(_prefs),
+            currentRelayUrl: enrollmentRelay,
+            beforeEnroll: () => _activateEnrollmentScope(
+              ownerPk: enrollmentOwnerPk,
+              relayUrl: enrollmentRelay,
+            ),
           )
           .timeout(
             const Duration(seconds: 30),
@@ -119,7 +134,7 @@ class PairingViewModel extends ViewModel<PairingState> {
     final trimmed = nickname?.trim();
     if (trimmed == null || trimmed.isEmpty) return;
     final updated = s.peer.copyWith(nickname: trimmed);
-    await _storage.savePeer(updated);
+    await _storage.savePeer(updated, intent: PeerSaveIntent.nickname);
     emit(PairingPaired(peer: updated, hostnameHint: s.hostnameHint));
   }
 
@@ -132,11 +147,47 @@ class PairingViewModel extends ViewModel<PairingState> {
     _transport = null;
   }
 
+  Future<void> _activateEnrollmentScope({
+    required Uint8List ownerPk,
+    required String relayUrl,
+  }) async {
+    final expectedScope = MembershipScope(
+      ownerPk: ownerPk,
+      relayUrl: relayUrl,
+    );
+    if (!_sameOwner(ownerPk) ||
+        toWsRelayUrl(resolveRelayUrl(_prefs)) != toWsRelayUrl(relayUrl)) {
+      throw const pair_flow.PairingError(
+        code: 'pairing_context_changed',
+        message: 'Owner or relay changed — retry pairing',
+      );
+    }
+    await _storage.initialize(ownerPk: ownerPk, relayUrl: relayUrl);
+    if (_storage.membershipScope != expectedScope ||
+        !_sameOwner(ownerPk) ||
+        toWsRelayUrl(resolveRelayUrl(_prefs)) != toWsRelayUrl(relayUrl)) {
+      throw const pair_flow.PairingError(
+        code: 'pairing_context_changed',
+        message: 'Owner or relay changed — retry pairing',
+      );
+    }
+  }
+
+  bool _sameOwner(Uint8List expected) {
+    final current = _ownerBridge.currentOwnerPk;
+    if (current == null || current.length != expected.length) return false;
+    for (var i = 0; i < expected.length; i++) {
+      if (current[i] != expected[i]) return false;
+    }
+    return true;
+  }
+
   static String _friendlyError(pair_flow.PairingError e) => switch (e.code) {
     'token_expired' => 'QR expired — generate a new one on your Mac',
     'token_consumed' => 'QR already used — generate a new one',
     'token_unknown' => 'QR not recognized by Mac — re-run /remote-pi pair',
     'pair_timeout' => 'Timed out — make sure /remote-pi is running on your Mac',
+    'pairing_context_changed' => 'Owner or relay changed — retry pairing',
     _ => e.message.isEmpty ? e.code : e.message,
   };
 

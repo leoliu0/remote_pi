@@ -4,11 +4,11 @@
 // shows — proving the subtitle no longer depends on the async load (no flicker).
 
 import 'dart:async';
-import 'dart:io';
 
 import 'package:app/data/actions/actions_repository.dart';
 import 'package:app/data/images/image_picker_service.dart';
-import 'package:app/data/local/boxes.dart';
+import 'package:app/data/local/app_database.dart';
+import 'package:app/data/local/session_store.dart';
 import 'package:app/data/preferences/preferences.dart';
 import 'package:app/data/repositories/session_read_repository.dart';
 import 'package:app/data/sync/sync_service.dart';
@@ -23,9 +23,7 @@ import 'package:app/ui/chat/chat_page.dart';
 import 'package:app/ui/chat/viewmodels/chat_viewmodel.dart';
 import 'package:app/ui/chat/voice/viewmodels/voice_input_viewmodel.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:hive/hive.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:provider/provider.dart';
 
@@ -42,26 +40,14 @@ class _FakeChannel implements IChannel {
 /// No peer paired → ChatViewModel stays with activePeer == null (the case we
 /// want: the subtitle must come from initialDevice, not the PeerRecord).
 class _FakeStorage extends PairingStorage {
+  _FakeStorage() : super(AppDatabase.memory());
   @override
   Future<List<PeerRecord>> listPeers() async => const [];
   @override
   Future<PeerRecord?> loadPeer(String epk) async => null;
 }
 
-class _FakeSecureStorage implements FlutterSecureStorage {
-  @override
-  Future<String?> read({
-    required String key,
-    IOSOptions? iOptions,
-    AndroidOptions? aOptions,
-    LinuxOptions? lOptions,
-    WebOptions? webOptions,
-    MacOsOptions? mOptions,
-    WindowsOptions? wOptions,
-  }) async => null;
-  @override
-  dynamic noSuchMethod(Invocation i) => super.noSuchMethod(i);
-}
+
 
 class _FakeSpeech implements SpeechService {
   @override
@@ -74,28 +60,21 @@ class _FakePicker implements IImagePickerService {
 }
 
 void main() {
-  late Directory dir;
-  setUpAll(() async {
-    dir = Directory.systemTemp.createTempSync('rp_v2_chatpage_');
-    await LocalBoxes.initForTest(dir.path);
-  });
-  tearDownAll(() async {
-    await Hive.close();
-    await dir.delete(recursive: true);
-  });
 
   testWidgets(
     'AppBar line 2 shows the device from initialDevice immediately — no '
     'PeerRecord needed (plan/32g)',
     (tester) async {
+      final database = AppDatabase.memory();
+      addTearDown(database.dispose);
+      final store = SessionStore(database);
       final conn = ConnectionManager(
         factory: (_, _) async => _FakeChannel(),
         storage: _FakeStorage(),
       );
-      final boxes = LocalBoxes();
-      final sync = SyncService(conn, boxes);
-      final read = SessionReadRepository(boxes);
-      final prefs = Preferences(_FakeSecureStorage()); // no selected peer
+      final sync = SyncService(conn, store);
+      final read = SessionReadRepository(store);
+      final prefs = Preferences(database); // no selected peer
       final actions = ActionsRepository(conn);
       final vm = ChatViewModel(read, sync, conn, prefs, _FakeStorage());
       final voice = VoiceInputViewModel(_FakeSpeech());

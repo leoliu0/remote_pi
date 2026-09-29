@@ -4,6 +4,7 @@
 import 'dart:async';
 import 'dart:typed_data';
 
+import 'package:app/data/local/app_database.dart';
 import 'package:app/data/transport/channel.dart';
 import 'package:app/data/transport/connection_manager.dart';
 import 'package:app/protocol/protocol.dart';
@@ -27,13 +28,16 @@ class _FakeStorage extends PairingStorage {
   final List<PeerRecord> peers;
   final List<PeerRecord> savedPeers = [];
   final Map<String, List<PersistedRoom>> _roomsByEpk = {};
-  _FakeStorage(this.peers);
+  _FakeStorage(this.peers) : super(AppDatabase.memory());
 
   @override
   Future<List<PeerRecord>> listPeers() async => peers;
 
   @override
-  Future<void> savePeer(PeerRecord r) async {
+  Future<void> savePeer(
+    PeerRecord r, {
+    required PeerSaveIntent intent,
+  }) async {
     savedPeers.add(r);
   }
 
@@ -49,6 +53,20 @@ class _FakeStorage extends PairingStorage {
   @override
   Future<void> deleteRooms(String epk) async {
     _roomsByEpk.remove(epk);
+  }
+}
+
+class _BlockingListStorage extends _FakeStorage {
+  _BlockingListStorage(super.peers);
+
+  final listStarted = Completer<void>();
+  final releaseList = Completer<void>();
+
+  @override
+  Future<List<PeerRecord>> listPeers() async {
+    if (!listStarted.isCompleted) listStarted.complete();
+    await releaseList.future;
+    return super.listPeers();
   }
 }
 
@@ -422,6 +440,107 @@ void main() {
           reason: 'stale onDone must not schedule a retry',
         );
         expect(cm.status, isA<StatusOnline>());
+
+        cm.dispose();
+      },
+    );
+
+    test(
+      'disconnect invalidates a reconnect that is still reading storage',
+      () async {
+        final storage = _BlockingListStorage([_fakePeer()]);
+        final channels = [_ControllableChannel(), _ControllableChannel()];
+        var factoryCalls = 0;
+        final cm = ConnectionManager(
+          factory: (_, _) async => channels[factoryCalls++],
+          storage: storage,
+          emitDebounce: Duration.zero,
+        );
+
+        await cm.connectTo(_fakePeer());
+        expect(factoryCalls, 1);
+
+        final staleReconnect = cm.reconnect();
+        await storage.listStarted.future;
+        await cm.disconnect();
+        storage.releaseList.complete();
+        await staleReconnect;
+
+        expect(
+          factoryCalls,
+          1,
+          reason: 'a completed owner/relay reset must own the coordinator',
+        );
+        expect(cm.status, isA<StatusNoPeer>());
+        expect(cm.activePeer, isNull);
+
+        cm.dispose();
+      },
+    );
+
+    test(
+      'disconnect invalidates boot while cached rooms are still restoring',
+      () async {
+        final storage = _BlockingListStorage([_fakePeer()]);
+        var factoryCalls = 0;
+        final cm = ConnectionManager(
+          factory: (_, _) async {
+            factoryCalls++;
+            return _ControllableChannel();
+          },
+          storage: storage,
+          emitDebounce: Duration.zero,
+        );
+
+        final staleBoot = cm.boot();
+        await storage.listStarted.future;
+        await cm.disconnect();
+        storage.releaseList.complete();
+        await staleBoot;
+
+        expect(factoryCalls, 0);
+        expect(cm.status, isA<StatusNoPeer>());
+        expect(cm.activePeer, isNull);
+
+        cm.dispose();
+      },
+    );
+
+    test(
+      'late control callback from a replaced relay cannot replace live rooms',
+      () async {
+        final oldChannel = _LeakyControlChannel();
+        final newChannel = _LeakyControlChannel();
+        var nextChannel = 0;
+        final cm = ConnectionManager(
+          factory: (_, _) async => [oldChannel, newChannel][nextChannel++],
+          storage: _FakeStorage([_fakePeer()]),
+          emitDebounce: Duration.zero,
+        );
+
+        await cm.connectTo(_fakePeer());
+        await cm.reconnect();
+        newChannel.pushControl(
+          const RoomsSnapshot(
+            peer: 'epk_test',
+            rooms: [RoomInfo(roomId: 'current', startedAt: 2)],
+          ),
+        );
+        await Future<void>.delayed(Duration.zero);
+        expect(cm.isRoomInLiveSet('epk_test', 'current'), isTrue);
+
+        // Models a callback that was already queued below the transport
+        // subscription when cancellation completed.
+        oldChannel.pushControl(
+          const RoomsSnapshot(
+            peer: 'epk_test',
+            rooms: [RoomInfo(roomId: 'stale', startedAt: 1)],
+          ),
+        );
+        await Future<void>.delayed(Duration.zero);
+
+        expect(cm.isRoomInLiveSet('epk_test', 'current'), isTrue);
+        expect(cm.isRoomInLiveSet('epk_test', 'stale'), isFalse);
 
         cm.dispose();
       },
@@ -1053,6 +1172,7 @@ class _ControllableChannel implements IChannel, IControlLink {
   @override
   Stream<ServerMessage> get serverMessages => _ctrl.stream;
 
+  @override
   Future<void> send(ClientMessage msg) async => sent.add(msg);
 
   @override
@@ -1080,6 +1200,72 @@ class _ControllableChannel implements IChannel, IControlLink {
   void pushControl(ControlInbound c) {
     if (!_controlCtrl.isClosed) _controlCtrl.add(c);
   }
+}
+
+/// Control stream that deliberately delivers after subscription cancellation.
+/// This models an event already queued by a platform/transport callback.
+class _LeakyControlStream extends Stream<ControlInbound> {
+  void Function(ControlInbound)? _listener;
+
+  void add(ControlInbound event) => _listener?.call(event);
+
+  @override
+  StreamSubscription<ControlInbound> listen(
+    void Function(ControlInbound event)? onData, {
+    Function? onError,
+    void Function()? onDone,
+    bool? cancelOnError,
+  }) {
+    _listener = onData;
+    return _LeakySubscription((listener) => _listener = listener);
+  }
+}
+
+class _LeakySubscription implements StreamSubscription<ControlInbound> {
+  _LeakySubscription(this._replaceListener);
+
+  final void Function(void Function(ControlInbound)?) _replaceListener;
+  bool _paused = false;
+
+  @override
+  Future<void> cancel() async {
+    // Intentionally retain the listener to exercise the coordinator's
+    // generation guard rather than relying on StreamSubscription.cancel.
+  }
+
+  @override
+  void onData(void Function(ControlInbound data)? handleData) {
+    _replaceListener(handleData);
+  }
+
+  @override
+  void onError(Function? handleError) {}
+
+  @override
+  void onDone(void Function()? handleDone) {}
+
+  @override
+  void pause([Future<void>? resumeSignal]) => _paused = true;
+
+  @override
+  void resume() => _paused = false;
+
+  @override
+  bool get isPaused => _paused;
+
+  @override
+  Future<E> asFuture<E>([E? futureValue]) =>
+      throw UnsupportedError('not used by this test stream');
+}
+
+class _LeakyControlChannel extends _ControllableChannel {
+  final _leakyControl = _LeakyControlStream();
+
+  @override
+  Stream<ControlInbound> get controlFrames => _leakyControl;
+
+  @override
+  void pushControl(ControlInbound c) => _leakyControl.add(c);
 }
 
 // ---------------------------------------------------------------------------
@@ -1267,7 +1453,8 @@ void _registerRoomsTests() {
       },
     );
 
-    test('reconnect drops cached rooms so Home shows the new relay', () async {
+    test('reconnect keeps cached rooms available while the relay is silent',
+        () async {
       final ch1 = _ControllableChannel();
       final ch2 = _ControllableChannel();
       var n = 0;
@@ -1279,22 +1466,28 @@ void _registerRoomsTests() {
       await cm.connectTo(_fakePeer());
       await Future<void>.delayed(const Duration(milliseconds: 10));
       ch1.pushControl(const RoomsSnapshot(peer: 'epk_test', rooms: [
-        RoomInfo(roomId: 'old', startedAt: 1),
+        RoomInfo(roomId: 'cached', startedAt: 1),
       ]));
       await Future<void>.delayed(const Duration(milliseconds: 5));
-      expect(cm.liveRoomsKnown, isTrue);
-      expect(cm.roomsFor('epk_test'), isNotEmpty);
 
       await cm.reconnect();
       expect(cm.liveRoomsKnown, isFalse);
-      expect(cm.roomsSnapshot, isEmpty);
+      expect(
+        cm.roomsFor('epk_test').map((room) => room.roomId),
+        contains('cached'),
+      );
+      expect(cm.isRoomInLiveSet('epk_test', 'cached'), isFalse);
 
       ch2.pushControl(const RoomsSnapshot(peer: 'epk_test', rooms: [
-        RoomInfo(roomId: 'new', startedAt: 2),
+        RoomInfo(roomId: 'current', startedAt: 2),
       ]));
       await Future<void>.delayed(const Duration(milliseconds: 5));
       expect(cm.liveRoomsKnown, isTrue);
-      expect(cm.roomsFor('epk_test').single.roomId, 'new');
+      expect(
+        cm.roomsFor('epk_test').map((room) => room.roomId).toSet(),
+        {'cached', 'current'},
+      );
+      expect(cm.isRoomInLiveSet('epk_test', 'current'), isTrue);
 
       cm.dispose();
     });

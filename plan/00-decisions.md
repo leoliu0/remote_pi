@@ -153,6 +153,14 @@ Estas decisões foram **propositalmente adiadas**. Quando alguém quiser fechar,
 
 ---
 
+## Android storage and synchronization (approved 2026-09-29 — plans 63/64)
+
+- **Scope:** Android client controls existing interactive Linux Pi/OMP terminals. No Linux graphical client and no mandatory daemon. User explicitly confirmed terminal-only Linux use.
+- **Storage:** user approved redesign and implementation. Replace active metadata/history persistence with transactional SQLite, retaining legacy Hive/secure-store readers only for validated, non-destructive import. This revises plan 31's engine-retention decision while preserving row-level writes, reactive readers, and volatile streaming.
+- **Synchronization:** durable explicit membership operations over verified server snapshots. Conflict resolution must not restore unrelated revoked devices; acknowledgment clears only the operations sent. Identity and relay scope changes invalidate stale results.
+- **Unchanged:** Flutter, native owner signing identity, relay wire protocol, personal relay configuration, and existing terminal command semantics. No approval for a Kotlin rewrite, new workspace authorization protocol, or removal of authentication.
+- **Evidence boundary:** the 1.2.40 phone recovery and cold restart are recorded in `review/TESTING.md`; native secure-storage enumeration failure remains a hypothesis. SQLite is selected for atomic data/membership updates, not as proof that Hive or Flutter caused that native failure.
+
 ## Como atualizar este arquivo
 
 - **Decisão nova fechada em conversa** → adicione bullet na seção certa

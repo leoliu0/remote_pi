@@ -16,6 +16,14 @@ one Pi" into a **mesh of coding agents** running on multiple machines, with
 the phone acting purely as the initial authenticator. Covers plans 23, 24, 25,
 and 27 (see [`plan/`](plan/) directory for design history).
 
+### Android storage and synchronization
+
+- Replace active Hive/secure-store metadata persistence with transactional SQLite for saved peers, rooms, finalized history, session indexes, preferences, and drafts. Signing keys remain in the existing native identity store.
+- Import legacy data without deleting its source; retain stable message IDs and complete rendering payloads. Runtime presence resets on restart rather than showing stale online state.
+- Persist owner-and-configured-relay-scoped membership operations separately from verified snapshots. Conflict reconciliation replays explicit intent, not every cached peer; publication acknowledgment clears only the captured operations.
+- Preserve configured-relay routing when legacy peer metadata contains a different relay URL. Cached Home/history remain available offline.
+- Reject callbacks from replaced connection attempts. Storage initialization failures have a recovery path instead of silently presenting an empty pairing list.
+
 ### Fixed
 
 - Mobile prompts now inject directly into the interactive terminal editor and input pipeline (`_tryExecuteTerminalInput`), executing natively as interactive turns or steers instead of bypassing the prompt and steering background subagents.

@@ -1,336 +1,186 @@
 import 'dart:io';
-import 'dart:async';
 
-import 'package:fake_async/fake_async.dart';
-
+import 'package:app/data/local/app_database.dart';
 import 'package:app/data/preferences/preferences.dart';
 import 'package:app/ui/core/themes/app_font_family.dart';
 import 'package:app/ui/core/themes/app_font_scale.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:flutter/material.dart' show ThemeMode;
 import 'package:flutter_test/flutter_test.dart';
-class _FakeSecureStorage implements FlutterSecureStorage {
-  final Map<String, String> _store = {};
-  final bool emptyReadAll;
-  _FakeSecureStorage({this.emptyReadAll = false});
-  @override
-  Future<String?> read({
-    required String key,
-    IOSOptions? iOptions,
-    AndroidOptions? aOptions,
-    LinuxOptions? lOptions,
-    WebOptions? webOptions,
-    MacOsOptions? mOptions,
-    WindowsOptions? wOptions,
-  }) async => _store[key];
-
-  @override
-  Future<void> write({
-    required String key,
-    required String? value,
-    IOSOptions? iOptions,
-    AndroidOptions? aOptions,
-    LinuxOptions? lOptions,
-    WebOptions? webOptions,
-    MacOsOptions? mOptions,
-    WindowsOptions? wOptions,
-  }) async {
-    if (value == null) {
-      _store.remove(key);
-    } else {
-      _store[key] = value;
-    }
-  }
-
-  @override
-  Future<void> delete({
-    required String key,
-    IOSOptions? iOptions,
-    AndroidOptions? aOptions,
-    LinuxOptions? lOptions,
-    WebOptions? webOptions,
-    MacOsOptions? mOptions,
-    WindowsOptions? wOptions,
-  }) async {
-    _store.remove(key);
-  }
-
-  @override
-  Future<Map<String, String>> readAll({
-    IOSOptions? iOptions,
-    AndroidOptions? aOptions,
-    LinuxOptions? lOptions,
-    WebOptions? webOptions,
-    MacOsOptions? mOptions,
-    WindowsOptions? wOptions,
-  }) async =>
-      emptyReadAll ? <String, String>{} : Map<String, String>.from(_store);
-
-  @override
-  dynamic noSuchMethod(Invocation i) => super.noSuchMethod(i);
-}
-
-/// Regression (2026-09-14 boot-splash freeze): when Android Keystore
-/// `readAll` comes back empty, `load()` used to fall back to raw
-/// `_store.read()` calls with NO timeout. A single hung platform read
-/// left `_BootState.load` incomplete → router stuck on /boot forever.
-/// `load()` must always complete even if every individual read hangs.
-class _HangingReadStorage extends _FakeSecureStorage {
-  @override
-  Future<String?> read({
-    required String key,
-    IOSOptions? iOptions,
-    AndroidOptions? aOptions,
-    LinuxOptions? lOptions,
-    WebOptions? webOptions,
-    MacOsOptions? mOptions,
-    WindowsOptions? wOptions,
-  }) =>
-      Completer<String?>().future;
-}
-
 
 void main() {
-  group('Preferences', () {
-    test('defaults to hideToolCalls=false before load()', () {
-      final p = Preferences(_FakeSecureStorage());
-      expect(p.hideToolCalls, isFalse);
+  group('Preferences SQLite persistence', () {
+    late AppDatabase database;
+
+    setUp(() {
+      database = AppDatabase.memory();
     });
 
-    test('load() hydrates from storage', () async {
-      final store = _FakeSecureStorage();
-      await store.write(key: 'prefs.hide_tool_calls', value: 'true');
-      final p = Preferences(store);
-      await p.load();
-      expect(p.hideToolCalls, isTrue);
+    tearDown(() {
+      database.dispose();
     });
 
-    test('load() completes when every secure-storage read hangs (boot-splash freeze)', () {
-      final p = Preferences(_HangingReadStorage());
-      FakeAsync().run((async) {
-        var completed = false;
-        p.load().then((_) => completed = true);
-        // Far beyond the sum of all per-read timeouts — must be done.
-        async.elapse(const Duration(seconds: 30));
-        expect(completed, isTrue);
-      });
+    test('uses existing defaults before and after an empty load', () async {
+      final preferences = Preferences(database);
+      expect(preferences.toolCallDisplay, ToolCallDisplay.brief);
+      expect(preferences.hideToolCalls, isFalse);
+      expect(preferences.selectedPeerEpk, isNull);
+      expect(preferences.relayUrl, isNull);
+      expect(preferences.onboardingCompleted, isFalse);
+      expect(preferences.themeMode, ThemeMode.system);
+      expect(preferences.fontScale, AppFontScale.large);
+      expect(preferences.fontFamily, AppFontFamily.jetbrainsMono);
+
+      await preferences.load();
+      expect(preferences.toolCallDisplay, ToolCallDisplay.brief);
+      expect(preferences.fontScale, AppFontScale.large);
     });
 
-    test('setHideToolCalls writes to storage and notifies', () async {
-      final store = _FakeSecureStorage();
-      final p = Preferences(store);
-      var notifs = 0;
-      p.addListener(() => notifs++);
-
-      await p.setHideToolCalls(true);
-      expect(p.hideToolCalls, isTrue);
-      expect(await store.read(key: 'prefs.hide_tool_calls'), 'true');
-      expect(notifs, 1);
-
-      // No-op if value unchanged.
-      await p.setHideToolCalls(true);
-      expect(notifs, 1);
-
-      await p.setHideToolCalls(false);
-      expect(p.hideToolCalls, isFalse);
-      expect(notifs, 2);
-    });
-
-    test('relayUrl defaults to null and round-trips via setRelayUrl',
+    test('all settings round-trip through a new Preferences instance',
         () async {
-      final store = _FakeSecureStorage();
-      final p = Preferences(store);
-      expect(p.relayUrl, isNull);
+      final first = Preferences(database);
+      await first.setToolCallDisplay(ToolCallDisplay.hidden);
+      await first.setSelectedRoom(epk: 'abc123', roomId: 'room-xyz');
+      await first.setRelayUrl('https://custom.example.com');
+      await first.setOnboardingCompleted(true);
+      await first.setThemeMode(ThemeMode.dark);
+      await first.setFontScale(AppFontScale.standard);
+      await first.setFontFamily(AppFontFamily.firaCode);
+      first.setDraft('abc123', 'room-xyz', 'unfinished text');
 
-      await p.setRelayUrl('wss://custom.example.com');
-      expect(p.relayUrl, 'wss://custom.example.com');
-      expect(await store.read(key: 'prefs.relay_url'),
-          'wss://custom.example.com');
-
-      // Reload from cold start → value survives.
-      final p2 = Preferences(store);
-      await p2.load();
-      expect(p2.relayUrl, 'wss://custom.example.com');
-
-      // Clearing sends null and removes the key.
-      await p.setRelayUrl(null);
-      expect(p.relayUrl, isNull);
-      expect(await store.read(key: 'prefs.relay_url'), isNull);
-
-      // Empty string also clears.
-      await p.setRelayUrl('wss://x');
-      await p.setRelayUrl('');
-      expect(p.relayUrl, isNull);
+      final reopened = Preferences(database);
+      await reopened.load();
+      expect(reopened.toolCallDisplay, ToolCallDisplay.hidden);
+      expect(reopened.hideToolCalls, isTrue);
+      expect(reopened.selectedPeerEpk, 'abc123');
+      expect(reopened.selectedRoomId, 'room-xyz');
+      expect(reopened.selectedRoomRaw, 'abc123:room-xyz');
+      expect(reopened.relayUrl, 'https://custom.example.com');
+      expect(reopened.onboardingCompleted, isTrue);
+      expect(reopened.themeMode, ThemeMode.dark);
+      expect(reopened.fontScale, AppFontScale.standard);
+      expect(reopened.fontFamily, AppFontFamily.firaCode);
+      expect(reopened.getDraft('abc123', 'room-xyz'), 'unfinished text');
     });
 
-    test('relayUrl survives load when readAll returns empty', () async {
-      final store = _FakeSecureStorage(emptyReadAll: true);
-      final p = Preferences(store);
-      await p.setRelayUrl('https://custom.example.com');
-      final p2 = Preferences(store);
-      await p2.load();
-      expect(p2.relayUrl, 'https://custom.example.com');
-    });
-
-    test('relayUrl survives load via file layer when secure store is empty',
+    test('legacy selected peer without room still defaults at the caller',
         () async {
-      final dir = Directory.systemTemp.createTempSync('rp_prefs_test');
-      addTearDown(() => dir.deleteSync(recursive: true));
-      final file = File('${dir.path}/relay_url.txt');
-      final p = Preferences(_FakeSecureStorage(emptyReadAll: true), file);
-      await p.setRelayUrl('http://192.168.1.10:8787');
-      expect(file.readAsStringSync(), 'http://192.168.1.10:8787');
+      database.db.execute(
+        'INSERT INTO preferences(key, value) VALUES (?, ?)',
+        <Object?>['prefs.selected_peer_epk', 'legacy_epk'],
+      );
+      final preferences = Preferences(database);
+      await preferences.load();
 
-      // Cold start with both secure store and Hive unavailable -> the file
-      // still carries the relay URL.
-      final p2 = Preferences(_FakeSecureStorage(emptyReadAll: true), file);
-      await p2.load();
-      expect(p2.relayUrl, 'http://192.168.1.10:8787');
-
-      // Clearing removes the file too.
-      await p2.setRelayUrl(null);
-      expect(file.existsSync(), isFalse);
-      expect(p2.relayUrl, isNull);
+      expect(preferences.selectedPeerEpk, 'legacy_epk');
+      expect(preferences.selectedRoomId, isNull);
     });
 
-    test(
-      'onboardingCompleted defaults to false and round-trips via '
-      'setOnboardingCompleted',
-      () async {
-        final store = _FakeSecureStorage();
-        final p = Preferences(store);
-        expect(p.onboardingCompleted, isFalse);
-
-        await p.setOnboardingCompleted(true);
-        expect(p.onboardingCompleted, isTrue);
-        expect(
-          await store.read(key: 'prefs.onboarding_completed'),
-          'true',
-        );
-
-        final p2 = Preferences(store);
-        await p2.load();
-        expect(p2.onboardingCompleted, isTrue);
-      },
-    );
-
-    test('selectedRoom round-trips epk + roomId composite (plan 17)',
+    test('drafts are scoped, synchronously durable, and clear independently',
         () async {
-      final store = _FakeSecureStorage();
-      final p = Preferences(store);
-      await p.setSelectedRoom(epk: 'abc123', roomId: 'room-xyz');
-      expect(p.selectedPeerEpk, 'abc123');
-      expect(p.selectedRoomId, 'room-xyz');
-      expect(p.selectedRoomRaw, 'abc123:room-xyz');
+      final preferences = Preferences(database);
+      preferences.setDraft('peer-a', 'room-1', 'A1');
+      preferences.setDraft('peer-a', 'room-2', 'A2');
+      preferences.setDraft('peer-b', 'room-1', 'B1');
 
-      // Reload from cold → preserved
-      final p2 = Preferences(store);
-      await p2.load();
-      expect(p2.selectedPeerEpk, 'abc123');
-      expect(p2.selectedRoomId, 'room-xyz');
+      final reopened = Preferences(database);
+      await reopened.load();
+      expect(reopened.getDraft('peer-a', 'room-1'), 'A1');
+      expect(reopened.getDraft('peer-a', 'room-2'), 'A2');
+      expect(reopened.getDraft('peer-b', 'room-1'), 'B1');
+
+      reopened.clearDraft('peer-a', 'room-1');
+      final afterClear = Preferences(database);
+      await afterClear.load();
+      expect(afterClear.getDraft('peer-a', 'room-1'), isEmpty);
+      expect(afterClear.getDraft('peer-a', 'room-2'), 'A2');
     });
 
-    test(
-      'backward-compat: legacy value (no `:room` suffix) returns epk '
-      'and null roomId so caller defaults to "main"',
-      () async {
-        final store = _FakeSecureStorage();
-        // Pre-populate with legacy format (just the epk, no suffix).
-        await store.write(
-          key: 'prefs.selected_peer_epk',
-          value: 'legacy_epk',
-        );
-        final p = Preferences(store);
-        await p.load();
-        expect(p.selectedPeerEpk, 'legacy_epk');
-        expect(p.selectedRoomId, isNull);
-      },
-    );
-
-    // Issue #114 — in-app text size.
-    test('fontScale defaults to large (1.15x) and round-trips through storage', () async {
-      final store = _FakeSecureStorage();
-      final p = Preferences(store);
-      await p.load();
-      expect(p.fontScale, AppFontScale.large);
-
-      await p.setFontScale(AppFontScale.standard);
-      expect(p.fontScale, AppFontScale.standard);
-
-      final reloaded = Preferences(store);
-      await reloaded.load();
-      expect(reloaded.fontScale, AppFontScale.standard);
-    });
-
-    test('an unknown persisted font scale falls back to large', () async {
-      final store = _FakeSecureStorage();
-      // A stale/corrupt value must never leave the app at an unreadable size.
-      await store.write(key: 'prefs.font_scale', value: 'gigantic');
-      final p = Preferences(store);
-      await p.load();
-      expect(p.fontScale, AppFontScale.large);
-    });
-
-    test('setFontScale notifies listeners only on a real change', () async {
-      final p = Preferences(_FakeSecureStorage());
+    test('setters notify once after a durable change and not for no-ops',
+        () async {
+      final preferences = Preferences(database);
       var calls = 0;
-      p.addListener(() => calls++);
+      preferences.addListener(() => calls++);
 
-      await p.setFontScale(AppFontScale.small);
+      await preferences.setFontScale(AppFontScale.small);
       expect(calls, 1);
-      await p.setFontScale(AppFontScale.small);
+      expect(
+        database.db.select(
+          'SELECT value FROM preferences WHERE key = ?',
+          <Object?>['prefs.font_scale'],
+        ).single['value'],
+        AppFontScale.small.name,
+      );
+
+      await preferences.setFontScale(AppFontScale.small);
       expect(calls, 1);
-    });
-    test('fontFamily defaults to jetbrainsMono and round-trips through storage', () async {
-      final store = _FakeSecureStorage();
-      final p = Preferences(store);
-      await p.load();
-      expect(p.fontFamily, AppFontFamily.jetbrainsMono);
-
-      await p.setFontFamily(AppFontFamily.firaCode);
-      expect(p.fontFamily, AppFontFamily.firaCode);
-
-      final reloaded = Preferences(store);
-      await reloaded.load();
-      expect(reloaded.fontFamily, AppFontFamily.firaCode);
+      await preferences.setHideToolCalls(true);
+      expect(calls, 2);
+      await preferences.setHideToolCalls(true);
+      expect(calls, 2);
     });
 
-    test('an unknown persisted font family falls back to jetbrainsMono', () async {
-      final store = _FakeSecureStorage();
-      await store.write(key: 'prefs.font_family', value: 'comic_sans');
-      final p = Preferences(store);
-      await p.load();
-      expect(p.fontFamily, AppFontFamily.jetbrainsMono);
+    test('clearing nullable settings deletes their durable rows', () async {
+      final preferences = Preferences(database);
+      await preferences.setSelectedRoom(epk: 'abc', roomId: 'r');
+      await preferences.setRelayUrl('https://relay.example');
+      await preferences.setSelectedRoom(epk: null);
+      await preferences.setRelayUrl('');
+
+      final reopened = Preferences(database);
+      await reopened.load();
+      expect(reopened.selectedPeerEpk, isNull);
+      expect(reopened.relayUrl, isNull);
+      expect(
+        database.db.select(
+          'SELECT key FROM preferences WHERE key IN (?, ?)',
+          <Object?>['prefs.selected_peer_epk', 'prefs.relay_url'],
+        ),
+        isEmpty,
+      );
     });
 
-    test('toolCallDisplay defaults to brief and round-trips through storage', () async {
-      final store = _FakeSecureStorage();
-      final p = Preferences(store);
-      await p.load();
-      expect(p.toolCallDisplay, ToolCallDisplay.brief);
-      expect(p.hideToolCalls, isFalse);
+    test('preferences survive a physical SQLite close and reopen', () async {
+      final directory = Directory.systemTemp.createTempSync('rp_prefs_reopen_');
+      addTearDown(() => directory.deleteSync(recursive: true));
+      final path = '${directory.path}/remote_pi.sqlite';
+      final firstDatabase = AppDatabase.openForTest(path);
+      final first = Preferences(firstDatabase);
+      await first.setRelayUrl('https://durable.example');
+      await first.setSelectedRoom(epk: 'peer', roomId: 'room');
+      first.setDraft('peer', 'room', 'survive process death');
+      firstDatabase.dispose();
 
-      await p.setToolCallDisplay(ToolCallDisplay.brief);
-      expect(p.toolCallDisplay, ToolCallDisplay.brief);
-      expect(p.hideToolCalls, isFalse);
-
-      await p.setToolCallDisplay(ToolCallDisplay.hidden);
-      expect(p.toolCallDisplay, ToolCallDisplay.hidden);
-      expect(p.hideToolCalls, isTrue);
-
-      final reloaded = Preferences(store);
-      await reloaded.load();
-      expect(reloaded.toolCallDisplay, ToolCallDisplay.hidden);
-      expect(reloaded.hideToolCalls, isTrue);
+      final reopenedDatabase = AppDatabase.openForTest(path);
+      addTearDown(reopenedDatabase.dispose);
+      final reopened = Preferences(reopenedDatabase);
+      await reopened.load();
+      expect(reopened.relayUrl, 'https://durable.example');
+      expect(reopened.selectedRoomRaw, 'peer:room');
+      expect(reopened.getDraft('peer', 'room'), 'survive process death');
     });
 
-    test('setSelectedRoom with null epk clears the selection', () async {
-      final store = _FakeSecureStorage();
-      final p = Preferences(store);
-      await p.setSelectedRoom(epk: 'abc', roomId: 'r');
-      expect(p.selectedPeerEpk, 'abc');
-      await p.setSelectedRoom(epk: null);
-      expect(p.selectedPeerEpk, isNull);
-      expect(p.selectedRoomRaw, isNull);
+    test('unknown enum values fall back without erasing their source rows',
+        () async {
+      database.db.execute(
+        'INSERT INTO preferences(key, value) VALUES (?, ?), (?, ?)',
+        <Object?>[
+          'prefs.font_scale',
+          'gigantic',
+          'prefs.font_family',
+          'comic_sans',
+        ],
+      );
+      final preferences = Preferences(database);
+      await preferences.load();
+
+      expect(preferences.fontScale, AppFontScale.large);
+      expect(preferences.fontFamily, AppFontFamily.jetbrainsMono);
+      expect(
+        database.db.select(
+          'SELECT COUNT(*) AS count FROM preferences',
+        ).single['count'],
+        2,
+      );
     });
   });
 }

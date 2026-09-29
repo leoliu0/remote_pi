@@ -1,7 +1,6 @@
-/// Plan/31 — VOLATILE runtime state (#3). Lives in the `runtime` box that is
-/// wiped on every boot, so it never reports stale online/presence across
-/// restarts. Reduced enums (not the rich sealed `ConnectionStatus`, which
-/// carries a live channel and can't be serialized).
+/// Volatile runtime state. SQLite rows are deleted on every database open, so
+/// stale online/presence can never survive process death. These reduced enums
+/// omit live channel objects carried by the richer connection status types.
 enum RuntimeConnection { connecting, online, offline, retrying }
 
 enum RuntimePresence { alive, stale, unknown }

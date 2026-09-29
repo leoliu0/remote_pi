@@ -1,77 +1,20 @@
+import 'package:app/data/local/app_database.dart';
 import 'package:app/data/preferences/preferences.dart';
 import 'package:app/ui/chat/widgets/input_bar.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-class _FakeSecureStorage implements FlutterSecureStorage {
-  final Map<String, String> _store = {};
 
-  @override
-  Future<String?> read({
-    required String key,
-    IOSOptions? iOptions,
-    AndroidOptions? aOptions,
-    LinuxOptions? lOptions,
-    WebOptions? webOptions,
-    MacOsOptions? mOptions,
-    WindowsOptions? wOptions,
-  }) async => _store[key];
-
-  @override
-  Future<Map<String, String>> readAll({
-    IOSOptions? iOptions,
-    AndroidOptions? aOptions,
-    LinuxOptions? lOptions,
-    WebOptions? webOptions,
-    MacOsOptions? mOptions,
-    WindowsOptions? wOptions,
-  }) async => Map.from(_store);
-
-  @override
-  Future<void> write({
-    required String key,
-    required String? value,
-    IOSOptions? iOptions,
-    AndroidOptions? aOptions,
-    LinuxOptions? lOptions,
-    WebOptions? webOptions,
-    MacOsOptions? mOptions,
-    WindowsOptions? wOptions,
-  }) async {
-    if (value != null) {
-      _store[key] = value;
-    } else {
-      _store.remove(key);
-    }
-  }
-
-  @override
-  Future<void> delete({
-    required String key,
-    IOSOptions? iOptions,
-    AndroidOptions? aOptions,
-    LinuxOptions? lOptions,
-    WebOptions? webOptions,
-    MacOsOptions? mOptions,
-    WindowsOptions? wOptions,
-  }) async {
-    _store.remove(key);
-  }
-
-  @override
-  dynamic noSuchMethod(Invocation i) => super.noSuchMethod(i);
-}
 
 void main() {
   group('Preferences draft management', () {
     test('getDraft returns empty string by default', () {
-      final prefs = Preferences(_FakeSecureStorage());
+      final prefs = Preferences(AppDatabase.memory());
       expect(prefs.getDraft('peer1', 'room1'), '');
     });
 
     test('setDraft saves per peer and room, clearDraft removes it', () {
-      final prefs = Preferences(_FakeSecureStorage());
+      final prefs = Preferences(AppDatabase.memory());
       prefs.setDraft('peerA', 'room1', 'draft for A1');
       prefs.setDraft('peerA', 'room2', 'draft for A2');
       prefs.setDraft('peerB', 'room1', 'draft for B1');
@@ -85,17 +28,19 @@ void main() {
       expect(prefs.getDraft('peerA', 'room2'), 'draft for A2');
     });
 
-    test('load() hydrates drafts from secure storage', () async {
-      final storage = _FakeSecureStorage();
-      await storage.write(
-        key: 'prefs.draft.peerX:roomY',
-        value: 'persisted draft message',
+    test('load() hydrates drafts from SQLite', () async {
+      final database = AppDatabase.memory();
+      Preferences(database).setDraft(
+        'peerX',
+        'roomY',
+        'persisted draft message',
       );
 
-      final prefs = Preferences(storage);
+      final prefs = Preferences(database);
       await prefs.load();
 
       expect(prefs.getDraft('peerX', 'roomY'), 'persisted draft message');
+      database.dispose();
     });
   });
 

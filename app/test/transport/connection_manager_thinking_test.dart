@@ -5,6 +5,7 @@
 import 'dart:async';
 import 'dart:typed_data';
 
+import 'package:app/data/local/app_database.dart';
 import 'package:app/data/transport/channel.dart';
 import 'package:app/data/transport/connection_manager.dart';
 import 'package:app/pairing/storage.dart';
@@ -20,13 +21,16 @@ PeerRecord _fakePeer() => const PeerRecord(
 
 class _FakeStorage extends PairingStorage {
   final List<PeerRecord> peers;
-  _FakeStorage(this.peers);
+  _FakeStorage(this.peers) : super(AppDatabase.memory());
 
   @override
   Future<List<PeerRecord>> listPeers() async => peers;
 
   @override
-  Future<void> savePeer(PeerRecord r) async {}
+  Future<void> savePeer(
+    PeerRecord r, {
+    required PeerSaveIntent intent,
+  }) async {}
 
   @override
   Future<void> saveRooms(String epk, List<PersistedRoom> rooms) async {}

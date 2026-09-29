@@ -7,6 +7,7 @@
 import 'dart:async';
 
 import 'package:app/data/actions/actions_repository.dart';
+import 'package:app/data/local/app_database.dart';
 import 'package:app/data/transport/channel.dart';
 import 'package:app/data/transport/connection_manager.dart';
 import 'package:app/pairing/storage.dart';
@@ -43,9 +44,12 @@ class _FakeChannel implements IChannel, IControlLink {
 }
 
 class _FakeStorage extends PairingStorage {
+  _FakeStorage() : super(_database);
   @override
   Future<List<PeerRecord>> listPeers() async => const [];
 }
+
+late AppDatabase _database;
 
 Future<({ActionsRepository repo, ConnectionManager cm, _FakeChannel ch})>
 _setup({Duration timeout = const Duration(seconds: 5)}) async {
@@ -75,6 +79,13 @@ _setup({Duration timeout = const Duration(seconds: 5)}) async {
 }
 
 void main() {
+  setUpAll(() {
+    _database = AppDatabase.memory();
+  });
+  tearDownAll(() {
+    _database.dispose();
+  });
+
   group('ActionsRepository — typed action dispatch', () {
     test('compact() resolves on action_ok with matching id', () async {
       final s = await _setup();

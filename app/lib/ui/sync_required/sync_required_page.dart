@@ -1,10 +1,7 @@
 import 'dart:io' show Platform;
 
-import 'package:app/config/dependencies.dart';
-import 'package:app/pairing/owner_identity_bridge.dart';
 import 'package:app/ui/core/themes/themes.dart';
 import 'package:flutter/material.dart';
-import 'package:go_router/go_router.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 /// Plan 23 — first-launch gate when the platform's key-sync surface
@@ -12,8 +9,9 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 /// not available. The app cannot proceed without it because the Owner
 /// Ed25519 keypair has no other persistence path.
 class SyncRequiredPage extends StatefulWidget {
-  const SyncRequiredPage({super.key});
+  const SyncRequiredPage({required this.onCheck, super.key});
 
+  final Future<void> Function() onCheck;
   @override
   State<SyncRequiredPage> createState() => _SyncRequiredPageState();
 }
@@ -24,14 +22,9 @@ class _SyncRequiredPageState extends State<SyncRequiredPage> {
   Future<void> _recheck() async {
     if (_checking) return;
     setState(() => _checking = true);
-    final result = await injector.get<OwnerIdentityBridge>().boot();
+    await widget.onCheck();
     if (!mounted) return;
     setState(() => _checking = false);
-    if (result is! SyncUnavailableResult) {
-      // Bounce through /boot so the router's redirect logic re-evaluates
-      // (pairs-empty → /onboarding, pairs-non-empty → /home).
-      context.go('/boot');
-    }
   }
 
   @override

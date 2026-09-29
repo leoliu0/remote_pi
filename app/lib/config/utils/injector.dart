@@ -18,8 +18,14 @@ class CustomInjector {
   T get<T extends Object>() => _injector.get<T>();
 
   /// Registers a pre-built singleton instance.
-  void addInstance<T>(T instance) {
-    _injector.addInstance<T>(instance);
+  void addInstance<T>(
+    T instance, {
+    void Function(T value)? onDispose,
+  }) {
+    _injector.addInstance<T>(
+      instance,
+      config: onDispose == null ? null : BindConfig(onDispose: onDispose),
+    );
   }
 
   /// Registers a lazy singleton for infrastructure types outside domain contracts.

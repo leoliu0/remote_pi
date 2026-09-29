@@ -5,11 +5,12 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:app/data/local/app_database.dart';
 import 'package:app/data/preferences/preferences.dart';
 import 'package:app/data/transport/channel.dart';
 import 'package:app/data/transport/connection_manager.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:app/pairing/owner_identity_bridge.dart';
+import 'package:app/pairing/membership_journal.dart';
 import 'package:app/pairing/pair_request_flow.dart' show PeerTransport;
 import 'package:app/pairing/storage.dart';
 import 'package:app/ui/pairing/states/pairing_state.dart';
@@ -54,54 +55,7 @@ class _MemTransport implements PeerTransport {
   Future<void> close() async {}
 }
 
-/// In-memory fake of FlutterSecureStorage so Preferences can be
-/// constructed in tests without touching the platform channel.
-class _FakeSecureStorage implements FlutterSecureStorage {
-  final Map<String, String> _store = {};
-  @override
-  Future<String?> read({
-    required String key,
-    IOSOptions? iOptions,
-    AndroidOptions? aOptions,
-    LinuxOptions? lOptions,
-    WebOptions? webOptions,
-    MacOsOptions? mOptions,
-    WindowsOptions? wOptions,
-  }) async => _store[key];
-  @override
-  Future<void> write({
-    required String key,
-    required String? value,
-    IOSOptions? iOptions,
-    AndroidOptions? aOptions,
-    LinuxOptions? lOptions,
-    WebOptions? webOptions,
-    MacOsOptions? mOptions,
-    WindowsOptions? wOptions,
-  }) async {
-    if (value == null) {
-      _store.remove(key);
-    } else {
-      _store[key] = value;
-    }
-  }
 
-  @override
-  Future<void> delete({
-    required String key,
-    IOSOptions? iOptions,
-    AndroidOptions? aOptions,
-    LinuxOptions? lOptions,
-    WebOptions? webOptions,
-    MacOsOptions? mOptions,
-    WindowsOptions? wOptions,
-  }) async {
-    _store.remove(key);
-  }
-
-  @override
-  noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
-}
 
 /// Synchronous Preferences subclass for tests. Pre-set relay URL to
 /// `ws://localhost` so it matches `_qrUri` (which still embeds the
@@ -112,19 +66,68 @@ class _PrefsForTest extends Preferences {
   final String? _relay;
   _PrefsForTest({String? relay = 'ws://localhost'})
     : _relay = relay,
-      super(_FakeSecureStorage());
+      super(AppDatabase.memory());
   @override
   String? get relayUrl => _relay;
 }
 
 class _FakeStorage extends PairingStorage {
   final List<PeerRecord> _saved = [];
+  MembershipScope? _scope;
+
+  @override
+  MembershipScope? get membershipScope => _scope;
+
+  @override
+  Future<void> initialize({
+    required Uint8List ownerPk,
+    required String relayUrl,
+  }) async {
+    _scope = MembershipScope(ownerPk: ownerPk, relayUrl: relayUrl);
+  }
+
+  _FakeStorage() : super(AppDatabase.memory());
 
   @override
   Future<List<PeerRecord>> listPeers() async => _saved;
 
   @override
-  Future<void> savePeer(PeerRecord r) async => _saved.add(r);
+  Future<void> savePeer(
+    PeerRecord r, {
+    required PeerSaveIntent intent,
+  }) async => _saved.add(r);
+}
+
+class _ScopedStorage extends PairingStorage {
+  _ScopedStorage() : super(AppDatabase.memory());
+
+  MembershipScope? activeScope;
+  final List<MembershipScope> initializedScopes = [];
+  final Map<MembershipScope, List<PeerRecord>> savedByScope = {};
+
+  @override
+  MembershipScope? get membershipScope => activeScope;
+
+  @override
+  Future<void> initialize({
+    required Uint8List ownerPk,
+    required String relayUrl,
+  }) async {
+    activeScope = MembershipScope(ownerPk: ownerPk, relayUrl: relayUrl);
+    initializedScopes.add(activeScope!);
+  }
+
+  @override
+  Future<List<PeerRecord>> listPeers() async =>
+      List.of(savedByScope[activeScope] ?? const <PeerRecord>[]);
+
+  @override
+  Future<void> savePeer(
+    PeerRecord record, {
+    required PeerSaveIntent intent,
+  }) async {
+    savedByScope.putIfAbsent(activeScope!, () => []).add(record);
+  }
 }
 
 /// Helper: build a fully-booted [OwnerIdentityBridge] backed by an
@@ -142,6 +145,10 @@ const _qrUri =
     'remotepi://pair?t=AAAAAAAAAAAAAAAAAAAAAA&'
     'epk=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&'
     'r=ws%3A%2F%2Flocalhost&n=test+session';
+
+const _qrUriWithoutRelay =
+    'remotepi://pair?t=AAAAAAAAAAAAAAAAAAAAAA&'
+    'epk=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&n=test+session';
 
 /// A pairing transport factory that runs a fake "Pi" responder which replies
 /// with the given inner message to whatever `pair_request` it receives.
@@ -258,6 +265,50 @@ void main() {
 
       vm.dispose();
     });
+
+    test(
+      'pairing activates the current owner and configured relay before enroll',
+      () async {
+        final storage = _ScopedStorage();
+        final bridge = await _bootedBridge(storage);
+        final ownerPk = bridge.currentOwnerPk!;
+        await storage.initialize(
+          ownerPk: ownerPk,
+          relayUrl: 'https://default.example',
+        );
+        final prefs = _PrefsForTest(relay: 'https://custom.example');
+        final vm = PairingViewModel(
+          storage,
+          _factoryReplyingWith({
+            'type': 'pair_ok',
+            'session_name': 'test session',
+          }),
+          _SpyConn(),
+          prefs,
+          bridge,
+        );
+
+        await vm.onQrScanned(_qrUriWithoutRelay);
+
+        final custom = MembershipScope(
+          ownerPk: ownerPk,
+          relayUrl: 'https://custom.example',
+        );
+        final defaultScope = MembershipScope(
+          ownerPk: ownerPk,
+          relayUrl: 'https://default.example',
+        );
+        expect(storage.activeScope, custom);
+        expect(storage.savedByScope[custom], hasLength(1));
+        expect(
+          storage.savedByScope[defaultScope] ?? const <PeerRecord>[],
+          isEmpty,
+        );
+        expect(storage.initializedScopes, [defaultScope, custom]);
+
+        vm.dispose();
+      },
+    );
 
     test('pair_error → PairingError(canRetry: true)', () async {
       final storage = _FakeStorage();

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:typed_data';
 
+import 'package:app/data/local/app_database.dart';
 import 'package:app/data/preferences/preferences.dart';
 import 'package:app/data/transport/channel.dart';
 import 'package:app/data/transport/connection_manager.dart';
@@ -14,22 +15,25 @@ import 'package:app/pairing/storage.dart';
 import 'package:app/protocol/protocol.dart';
 import 'package:app/routing/adaptive.dart';
 import 'package:app/ui/home/home_page.dart';
+import 'package:app/ui/home/states/home_state.dart';
 import 'package:app/ui/home/viewmodels/home_viewmodel.dart';
 import 'package:app/ui/update/viewmodels/update_banner_viewmodel.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 
 class _FakeStorage extends PairingStorage {
   List<PeerRecord> peers;
-  _FakeStorage(this.peers);
+  _FakeStorage(this.peers) : super(AppDatabase.memory());
 
   @override
   Future<List<PeerRecord>> listPeers() async => List.of(peers);
 
   @override
-  Future<void> savePeer(PeerRecord r) async {
+  Future<void> savePeer(
+    PeerRecord r, {
+    required PeerSaveIntent intent,
+  }) async {
     peers = [r, ...peers.where((p) => p.remoteEpk != r.remoteEpk)];
   }
 
@@ -65,10 +69,7 @@ class _GateStorage extends _FakeStorage {
   }
 }
 
-class _FakeSecureStorage implements FlutterSecureStorage {
-  @override
-  dynamic noSuchMethod(Invocation i) => super.noSuchMethod(i);
-}
+Preferences _preferences() => Preferences(AppDatabase.memory());
 
 class _NoopTransport implements PeerTransport {
   @override
@@ -154,7 +155,7 @@ void main() {
       storage: storage,
       emitDebounce: Duration.zero,
     );
-    final vm = HomeViewModel(storage, Preferences(_FakeSecureStorage()), conn);
+    final vm = HomeViewModel(storage, _preferences(), conn);
     final banner = _banner();
 
     await tester.pumpWidget(_home(vm: vm, banner: banner));
@@ -182,7 +183,7 @@ void main() {
         storage: storage,
         emitDebounce: Duration.zero,
       );
-      final vm = HomeViewModel(storage, Preferences(_FakeSecureStorage()), conn);
+      final vm = HomeViewModel(storage, _preferences(), conn);
       final banner = _banner();
       await conn.connectTo(_peerA);
       await tester.pump(const Duration(milliseconds: 10));
@@ -192,6 +193,7 @@ void main() {
       );
       ch.pushControl(const RoomEnded(peer: 'epk_A', roomId: 'r1', sinceTs: 2));
       await tester.pump(const Duration(milliseconds: 10));
+      vm.setFilter(HomeFilter.online);
 
       await tester.pumpWidget(_home(vm: vm, banner: banner));
       await tester.pump();
@@ -216,7 +218,7 @@ void main() {
         storage: storage,
         emitDebounce: Duration.zero,
       );
-      final vm = HomeViewModel(storage, Preferences(_FakeSecureStorage()), conn);
+      final vm = HomeViewModel(storage, _preferences(), conn);
       final banner = _banner();
       await conn.connectTo(_peerA);
       await tester.pump(const Duration(milliseconds: 10));

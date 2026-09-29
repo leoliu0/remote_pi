@@ -1,110 +1,101 @@
-// Plan/31 — read repos project the DB reactively. Write to a box → the watch
-// stream emits the updated list (incremental projection).
-
-import 'dart:io';
-
-import 'package:app/data/local/boxes.dart';
+import 'package:app/data/local/app_database.dart';
 import 'package:app/data/local/records/message_record.dart';
 import 'package:app/data/local/records/runtime_record.dart';
 import 'package:app/data/local/records/session_index_record.dart';
+import 'package:app/data/local/session_store.dart';
 import 'package:app/data/repositories/home_read_repository.dart';
 import 'package:app/data/repositories/session_read_repository.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:hive/hive.dart';
 
-int _c = 0;
-late Directory _dir;
-
-MessageRecord _msg(int seq, String id, String text) => MessageRecord(
-  id: id,
-  seq: seq,
-  role: MsgRole.user,
-  text: text,
-  ts: DateTime.fromMillisecondsSinceEpoch(seq + 1),
-);
+MessageRecord _message(int seq, String id, String text) => MessageRecord(
+      id: id,
+      seq: seq,
+      role: MsgRole.user,
+      text: text,
+      ts: DateTime.fromMillisecondsSinceEpoch(seq + 1),
+    );
 
 void main() {
-  setUpAll(() async {
-    _dir = Directory.systemTemp.createTempSync('rp_v2_read_');
-    await LocalBoxes.initForTest(_dir.path);
+  late AppDatabase database;
+  late SessionStore store;
+
+  setUp(() {
+    database = AppDatabase.memory();
+    store = SessionStore(database);
   });
-  tearDownAll(() async {
-    await Hive.close();
-    await _dir.delete(recursive: true);
+
+  tearDown(() {
+    store.dispose();
+    database.dispose();
   });
 
-  test(
-    'watchMessages emits the current snapshot then updates on write',
-    () async {
-      final boxes = LocalBoxes();
-      final repo = SessionReadRepository(boxes);
-      final epk = 'epk_read_${++_c}';
-      final box = await boxes.msgsBox(epk, 'main');
-      await box.put(0, _msg(0, 'a', 'first').toJson());
+  test('watchMessages emits current ordered snapshot then committed updates',
+      () async {
+    store.upsertMessage('peer', 'main', _message(2, 'b', 'second'));
+    store.upsertMessage('peer', 'main', _message(0, 'a', 'first'));
+    final repository = SessionReadRepository(store);
+    final emissions = <List<MessageRecord>>[];
+    final sub = repository.watchMessages('peer', 'main').listen(emissions.add);
+    addTearDown(sub.cancel);
 
-      final stream = repo.watchMessages(epk, 'main');
-      final emissions = <List<MessageRecord>>[];
-      final sub = stream.listen(emissions.add);
-
-      await Future<void>.delayed(Duration.zero);
-      expect(emissions.last, hasLength(1));
-      expect(emissions.last.first.text, 'first');
-
-      // Incremental update: a single new row → next emit has both, ordered.
-      await box.put(1, _msg(1, 'b', 'second').toJson());
-      await Future<void>.delayed(Duration.zero);
-      expect(emissions.last, hasLength(2));
-      expect(emissions.last.map((m) => m.text), ['first', 'second']);
-
-      await sub.cancel();
-    },
-  );
-
-  test('watchRuntime reflects writes for the (epk, room) key', () async {
-    final boxes = LocalBoxes();
-    final repo = SessionReadRepository(boxes);
-    final epk = 'epk_rt_${++_c}';
-    final got = <RuntimeRecord>[];
-    final sub = repo.watchRuntime(epk, 'main').listen(got.add);
     await Future<void>.delayed(Duration.zero);
-    expect(got.last.connection, RuntimeConnection.connecting); // default
+    expect(emissions.single.map((message) => message.text), <String>[
+      'first',
+      'second',
+    ]);
 
-    await boxes.runtimeBox().put(
-      LocalBoxes.sessionKey(epk, 'main'),
+    store.upsertMessage('peer', 'main', _message(3, 'c', 'third'));
+    await Future<void>.delayed(Duration.zero);
+    expect(emissions.last.map((message) => message.text), <String>[
+      'first',
+      'second',
+      'third',
+    ]);
+  });
+
+  test('watchRuntime emits its safe default and committed updates', () async {
+    final repository = SessionReadRepository(store);
+    final emissions = <RuntimeRecord>[];
+    final sub = repository.watchRuntime('peer', 'main').listen(emissions.add);
+    addTearDown(sub.cancel);
+
+    await Future<void>.delayed(Duration.zero);
+    expect(emissions.single, const RuntimeRecord());
+
+    store.putRuntime(
+      'peer',
+      'main',
       const RuntimeRecord(
         connection: RuntimeConnection.online,
         presence: RuntimePresence.alive,
-      ).toJson(),
+      ),
     );
     await Future<void>.delayed(Duration.zero);
-    expect(got.last.connection, RuntimeConnection.online);
-    expect(got.last.presence, RuntimePresence.alive);
-    await sub.cancel();
+    expect(emissions.last.connection, RuntimeConnection.online);
+    expect(emissions.last.presence, RuntimePresence.alive);
   });
 
-  test('watchSessions emits the session index reactively', () async {
-    final boxes = LocalBoxes();
-    final repo = HomeReadRepository(boxes);
-    final epk = 'epk_idx_${++_c}';
-    final got = <List<SessionIndexRecord>>[];
-    final sub = repo.watchSessions().listen(got.add);
+  test('Home repository snapshot and stream use the durable session index',
+      () async {
+    final repository = HomeReadRepository(store);
+    final emissions = <List<SessionIndexRecord>>[];
+    final sub = repository.watchSessions().listen(emissions.add);
+    addTearDown(sub.cancel);
     await Future<void>.delayed(Duration.zero);
-    final initialCount = got.last.length;
+    expect(emissions.single, isEmpty);
 
-    await boxes.sessionsIndexBox().put(
-      '$epk:main',
-      SessionIndexRecord(
-        epk: epk,
-        roomId: 'main',
-        status: SessionActivity.working,
-      ).toJson(),
+    const record = SessionIndexRecord(
+      epk: 'peer',
+      roomId: 'main',
+      displayName: 'provider:model',
+      status: SessionActivity.working,
     );
+    store.upsertSession(record);
     await Future<void>.delayed(Duration.zero);
-    expect(got.last.length, initialCount + 1);
-    expect(
-      got.last.where((r) => r.epk == epk).single.status,
-      SessionActivity.working,
-    );
-    await sub.cancel();
+
+    expect(emissions.last, <SessionIndexRecord>[record]);
+    expect(repository.snapshot(), <String, SessionIndexRecord>{
+      'peer:main': record,
+    });
   });
 }

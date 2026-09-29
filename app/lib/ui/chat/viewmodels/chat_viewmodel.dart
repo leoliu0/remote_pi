@@ -159,23 +159,23 @@ class ChatViewModel extends ViewModel<ChatState> {
     _activePeer = sessionPeer;
     _activeRoomId = roomId;
 
-    // Bind transport before the singleton writer. Otherwise a same-peer room
-    // switch can briefly accept old-room frames while SyncService already
-    // writes to the new room.
-    _conn.switchRoom(roomId);
-    if (_conn.activePeer?.remoteEpk != sessionPeer.remoteEpk) {
-      await _conn.switchTo(sessionPeer);
-      if (_disposed) return;
+    // Local history is the first-class boot surface. Rebinding a remote
+    // connection can wait indefinitely while offline, so activate and watch
+    // the durable session before starting that work.
+    final switchingPeer =
+        _conn.activePeer?.remoteEpk != null &&
+        _conn.activePeer!.remoteEpk != sessionPeer.remoteEpk;
+    Future<void>? disconnecting;
+    if (switchingPeer) {
+      // disconnect() invalidates callbacks synchronously before its first
+      // await, preventing old-peer frames from crossing the local rebind.
+      disconnecting = _conn.disconnect();
+    } else {
       _conn.switchRoom(roomId);
     }
 
-    // Bind the writer + watch the DB for this (peer, room).
     await _sync.activate(epk, roomId);
     if (_disposed) return;
-    // Plan/32f — now that the writer owns THIS session (activate reset the
-    // turn state on a switch, or kept it when re-entering the same session),
-    // seed the in-memory streaming/working from it. Doing this here instead of
-    // the constructor avoids inheriting the previous chat's bubble/pill.
     _streaming = _sync.streaming;
     _working = _sync.isWorking;
     _queuedMessages = _sync.queuedMessages;
@@ -185,6 +185,27 @@ class ChatViewModel extends ViewModel<ChatState> {
     _bootstrapping = false;
     _sync.requestSync();
     _recompute();
+
+    if (_conn.activePeer?.remoteEpk != sessionPeer.remoteEpk) {
+      unawaited(_connectAfterLocalBoot(sessionPeer, disconnecting));
+    }
+  }
+
+  Future<void> _connectAfterLocalBoot(
+    PeerRecord peer,
+    Future<void>? disconnecting,
+  ) async {
+    try {
+      await disconnecting;
+      if (_disposed) return;
+      await _conn.switchTo(peer);
+      if (_disposed) return;
+      _conn.switchRoom(_activeRoomId);
+      _sync.requestSync();
+    } catch (_) {
+      // ConnectionManager owns visible retry state. Cached history remains
+      // usable and a later lifecycle resume retries the active peer.
+    }
   }
 
   void _onMessages(List<MessageRecord> rows) {

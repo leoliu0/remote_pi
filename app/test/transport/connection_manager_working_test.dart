@@ -6,6 +6,7 @@
 import 'dart:async';
 import 'dart:typed_data';
 
+import 'package:app/data/local/app_database.dart';
 import 'package:app/data/transport/channel.dart';
 import 'package:app/data/transport/connection_manager.dart';
 import 'package:app/pairing/storage.dart';
@@ -21,13 +22,16 @@ PeerRecord _fakePeer() => const PeerRecord(
 
 class _FakeStorage extends PairingStorage {
   final List<PeerRecord> peers;
-  _FakeStorage(this.peers);
+  _FakeStorage(this.peers) : super(AppDatabase.memory());
 
   @override
   Future<List<PeerRecord>> listPeers() async => peers;
 
   @override
-  Future<void> savePeer(PeerRecord r) async {}
+  Future<void> savePeer(
+    PeerRecord r, {
+    required PeerSaveIntent intent,
+  }) async {}
 
   @override
   Future<void> saveRooms(String epk, List<PersistedRoom> rooms) async {}
@@ -276,9 +280,10 @@ void main() {
         'isRoomUnreadFinished is NOT set during intermediate tool debounce and only set when turn truly finishes',
         () async {
       final ch = _ControllableChannel();
+      final peer = _fakePeer().copyWith(roomId: 'main');
       final cm = ConnectionManager(
         factory: (_, _) async => ch,
-        storage: _FakeStorage([_fakePeer()]),
+        storage: _FakeStorage([peer]),
         emitDebounce: Duration.zero,
         workingOffDebounce: const Duration(milliseconds: 100),
       );

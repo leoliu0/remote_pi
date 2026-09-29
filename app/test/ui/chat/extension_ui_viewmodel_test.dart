@@ -3,9 +3,9 @@
 // dismiss, and the offline fail-fast on respond.
 
 import 'dart:async';
-import 'dart:io';
 
-import 'package:app/data/local/boxes.dart';
+import 'package:app/data/local/app_database.dart';
+import 'package:app/data/local/session_store.dart';
 import 'package:app/data/preferences/preferences.dart';
 import 'package:app/data/repositories/session_read_repository.dart';
 import 'package:app/data/sync/sync_service.dart';
@@ -15,9 +15,7 @@ import 'package:app/pairing/storage.dart';
 import 'package:app/protocol/protocol.dart';
 import 'package:app/ui/chat/states/chat_state.dart';
 import 'package:app/ui/chat/viewmodels/chat_viewmodel.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:hive/hive.dart';
 
 class _FakeChannel implements IChannel, IControlLink {
   final _ctrl = StreamController<ServerMessage>.broadcast();
@@ -46,39 +44,6 @@ class _FakeChannel implements IChannel, IControlLink {
   void push(ServerMessage m) => _ctrl.add(m);
 }
 
-class _FakeSecureStorage implements FlutterSecureStorage {
-  final Map<String, String> _s = {};
-  @override
-  Future<String?> read({
-    required String key,
-    IOSOptions? iOptions,
-    AndroidOptions? aOptions,
-    LinuxOptions? lOptions,
-    WebOptions? webOptions,
-    MacOsOptions? mOptions,
-    WindowsOptions? wOptions,
-  }) async => _s[key];
-  @override
-  Future<void> write({
-    required String key,
-    required String? value,
-    IOSOptions? iOptions,
-    AndroidOptions? aOptions,
-    LinuxOptions? lOptions,
-    WebOptions? webOptions,
-    MacOsOptions? mOptions,
-    WindowsOptions? wOptions,
-  }) async {
-    if (value == null) {
-      _s.remove(key);
-    } else {
-      _s[key] = value;
-    }
-  }
-
-  @override
-  dynamic noSuchMethod(Invocation i) => super.noSuchMethod(i);
-}
 
 const _peer = PeerRecord(
   remoteEpk: 'epk_extui',
@@ -88,13 +53,17 @@ const _peer = PeerRecord(
 );
 
 class _FakeStorage extends PairingStorage {
+  _FakeStorage() : super(AppDatabase.memory());
   @override
   Future<List<PeerRecord>> listPeers() async => const [_peer];
   @override
   Future<PeerRecord?> loadPeer(String epk) async =>
       epk == _peer.remoteEpk ? _peer : null;
   @override
-  Future<void> savePeer(PeerRecord r) async {}
+  Future<void> savePeer(
+    PeerRecord r, {
+    required PeerSaveIntent intent,
+  }) async {}
 
   final Map<String, List<PersistedRoom>> _rooms = {};
   @override
@@ -115,16 +84,17 @@ ExtensionUiRequest _request(String flowId) => ExtensionUiRequest(
   ask: AskEnrichmentWire(flowId: flowId, source: 'tool'),
 );
 
-late Directory _dir;
+late AppDatabase _database;
+late SessionStore _store;
 
 void main() {
-  setUpAll(() async {
-    _dir = Directory.systemTemp.createTempSync('rp_v2_extui_vm_');
-    await LocalBoxes.initForTest(_dir.path);
+  setUp(() {
+    _database = AppDatabase.memory();
+    _store = SessionStore(_database);
   });
-  tearDownAll(() async {
-    await Hive.close();
-    await _dir.delete(recursive: true);
+  tearDown(() {
+    _store.dispose();
+    _database.dispose();
   });
 
   Future<
@@ -142,10 +112,9 @@ void main() {
       factory: (_, _) async => ch,
       storage: storage,
     );
-    final boxes = LocalBoxes();
-    final sync = SyncService(conn, boxes);
-    final read = SessionReadRepository(boxes);
-    final prefs = Preferences(_FakeSecureStorage());
+    final sync = SyncService(conn, _store);
+    final read = SessionReadRepository(_store);
+    final prefs = Preferences(_database);
     await prefs.setSelectedPeerEpk(_peer.remoteEpk);
     await prefs.setSelectedRoom(epk: _peer.remoteEpk, roomId: 'main');
 
@@ -261,8 +230,7 @@ void main() {
         factory: (_, _) async => ch,
         storage: storage,
       );
-      final boxes = LocalBoxes();
-      final sync = SyncService(conn, boxes);
+      final sync = SyncService(conn, _store);
 
       // No adopt → no live channel → nothing sent, false returned.
       final sent = await sync.respondExtensionUi(

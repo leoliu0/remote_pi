@@ -2,9 +2,10 @@
 // to the DB (via the channel → SyncService) must surface in ChatState.
 
 import 'dart:async';
-import 'dart:io';
 
-import 'package:app/data/local/boxes.dart';
+import 'package:app/data/local/app_database.dart';
+import 'package:app/data/local/session_store.dart';
+import 'package:app/data/local/records/message_record.dart';
 import 'package:app/data/preferences/preferences.dart';
 import 'package:app/data/repositories/session_read_repository.dart';
 import 'package:app/data/sync/sync_service.dart';
@@ -15,9 +16,7 @@ import 'package:app/pairing/storage.dart';
 import 'package:app/protocol/protocol.dart';
 import 'package:app/ui/chat/states/chat_state.dart';
 import 'package:app/ui/chat/viewmodels/chat_viewmodel.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:hive/hive.dart';
 
 class _FakeChannel implements IChannel, IControlLink {
   final _ctrl = StreamController<ServerMessage>.broadcast();
@@ -41,39 +40,6 @@ class _FakeChannel implements IChannel, IControlLink {
   void pushControl(ControlInbound m) => _control.add(m);
 }
 
-class _FakeSecureStorage implements FlutterSecureStorage {
-  final Map<String, String> _s = {};
-  @override
-  Future<String?> read({
-    required String key,
-    IOSOptions? iOptions,
-    AndroidOptions? aOptions,
-    LinuxOptions? lOptions,
-    WebOptions? webOptions,
-    MacOsOptions? mOptions,
-    WindowsOptions? wOptions,
-  }) async => _s[key];
-  @override
-  Future<void> write({
-    required String key,
-    required String? value,
-    IOSOptions? iOptions,
-    AndroidOptions? aOptions,
-    LinuxOptions? lOptions,
-    WebOptions? webOptions,
-    MacOsOptions? mOptions,
-    WindowsOptions? wOptions,
-  }) async {
-    if (value == null) {
-      _s.remove(key);
-    } else {
-      _s[key] = value;
-    }
-  }
-
-  @override
-  dynamic noSuchMethod(Invocation i) => super.noSuchMethod(i);
-}
 
 const _peer = PeerRecord(
   remoteEpk: 'epk_chat',
@@ -83,13 +49,17 @@ const _peer = PeerRecord(
 );
 
 class _FakeStorage extends PairingStorage {
+  _FakeStorage() : super(AppDatabase.memory());
   @override
   Future<List<PeerRecord>> listPeers() async => const [_peer];
   @override
   Future<PeerRecord?> loadPeer(String epk) async =>
       epk == _peer.remoteEpk ? _peer : null;
   @override
-  Future<void> savePeer(PeerRecord r) async {}
+  Future<void> savePeer(
+    PeerRecord r, {
+    required PeerSaveIntent intent,
+  }) async {}
 
   // In-memory rooms so a RoomAnnounced landing on the real ConnectionManager
   // (_persistRoomsForPeer) never touches flutter_secure_storage.
@@ -104,16 +74,57 @@ class _FakeStorage extends PairingStorage {
   Future<void> deleteRooms(String epk) async => _rooms.remove(epk);
 }
 
-late Directory _dir;
+late AppDatabase _database;
+late SessionStore _store;
 
 void main() {
-  setUpAll(() async {
-    _dir = Directory.systemTemp.createTempSync('rp_v2_chatvm_');
-    await LocalBoxes.initForTest(_dir.path);
+  setUp(() {
+    _database = AppDatabase.memory();
+    _store = SessionStore(_database);
   });
-  tearDownAll(() async {
-    await Hive.close();
-    await _dir.delete(recursive: true);
+  tearDown(() {
+    _store.dispose();
+    _database.dispose();
+  });
+
+  test('cached history renders while the connection attempt is still pending',
+      () async {
+    const roomId = 'offline-cache';
+    _store.upsertMessage(
+      _peer.remoteEpk,
+      roomId,
+      MessageRecord(
+        id: 'cached-user',
+        seq: 0,
+        role: MsgRole.user,
+        text: 'available offline',
+        ts: DateTime.utc(2026),
+      ),
+    );
+
+    final connectionGate = Completer<IChannel>();
+    final storage = _FakeStorage();
+    final conn = ConnectionManager(
+      factory: (_, _) => connectionGate.future,
+      storage: storage,
+    );
+    final sync = SyncService(conn, _store);
+    final read = SessionReadRepository(_store);
+    final prefs = Preferences(_database);
+    await prefs.setSelectedRoom(epk: _peer.remoteEpk, roomId: roomId);
+
+    final vm = ChatViewModel(read, sync, conn, prefs, storage);
+    await Future<void>.delayed(const Duration(milliseconds: 30));
+
+    expect(vm.state, isA<ChatReady>());
+    expect(
+      (vm.state as ChatReady).messages.whereType<UserMsg>().map((m) => m.text),
+      contains('available offline'),
+    );
+
+    vm.dispose();
+    sync.dispose();
+    conn.dispose();
   });
 
   test('a message written to the DB surfaces in ChatState', () async {
@@ -123,10 +134,9 @@ void main() {
       factory: (_, _) async => ch,
       storage: storage,
     );
-    final boxes = LocalBoxes();
-    final sync = SyncService(conn, boxes);
-    final read = SessionReadRepository(boxes);
-    final prefs = Preferences(_FakeSecureStorage());
+    final sync = SyncService(conn, _store);
+    final read = SessionReadRepository(_store);
+    final prefs = Preferences(_database);
     await prefs.setSelectedPeerEpk(_peer.remoteEpk);
     await prefs.setSelectedRoom(epk: _peer.remoteEpk, roomId: 'main');
 
@@ -171,10 +181,9 @@ void main() {
       factory: (_, _) async => ch,
       storage: storage,
     );
-    final boxes = LocalBoxes();
-    final sync = SyncService(conn, boxes);
-    final read = SessionReadRepository(boxes);
-    final prefs = Preferences(_FakeSecureStorage());
+    final sync = SyncService(conn, _store);
+    final read = SessionReadRepository(_store);
+    final prefs = Preferences(_database);
     await prefs.setSelectedPeerEpk(_peer.remoteEpk);
     await prefs.setSelectedRoom(epk: _peer.remoteEpk, roomId: 'main');
 
@@ -209,12 +218,10 @@ void main() {
         factory: (_, _) async => ch,
         storage: storage,
       );
-      final boxes = LocalBoxes();
-      final msgBox = await boxes.msgsBox(_peer.remoteEpk, 'main');
-      await msgBox.clear();
-      final sync = SyncService(conn, boxes);
-      final read = SessionReadRepository(boxes);
-      final prefs = Preferences(_FakeSecureStorage());
+      _store.clearSession(_peer.remoteEpk, 'main');
+      final sync = SyncService(conn, _store);
+      final read = SessionReadRepository(_store);
+      final prefs = Preferences(_database);
       await prefs.setSelectedPeerEpk(_peer.remoteEpk);
       await prefs.setSelectedRoom(epk: _peer.remoteEpk, roomId: 'main');
 
@@ -262,10 +269,9 @@ void main() {
         factory: (_, _) async => ch,
         storage: storage,
       );
-      final boxes = LocalBoxes();
-      final sync = SyncService(conn, boxes);
-      final read = SessionReadRepository(boxes);
-      final prefs = Preferences(_FakeSecureStorage());
+      final sync = SyncService(conn, _store);
+      final read = SessionReadRepository(_store);
+      final prefs = Preferences(_database);
       await prefs.setSelectedPeerEpk(_peer.remoteEpk);
       await prefs.setSelectedRoom(epk: _peer.remoteEpk, roomId: 'main');
 
@@ -302,10 +308,9 @@ void main() {
       factory: (_, _) async => ch,
       storage: storage,
     );
-    final boxes = LocalBoxes();
-    final sync = SyncService(conn, boxes);
-    final read = SessionReadRepository(boxes);
-    final prefs = Preferences(_FakeSecureStorage());
+    final sync = SyncService(conn, _store);
+    final read = SessionReadRepository(_store);
+    final prefs = Preferences(_database);
     await prefs.setSelectedPeerEpk(_peer.remoteEpk);
     await prefs.setSelectedRoom(epk: _peer.remoteEpk, roomId: 'main');
 
@@ -368,13 +373,9 @@ void main() {
         factory: (_, _) async => ch,
         storage: storage,
       );
-      final boxes = LocalBoxes();
-      // The msgs box is shared across tests in this file (setUpAll) — start
-      // this one from a clean slate so "empty session" really is empty.
-      (await boxes.msgsBox(_peer.remoteEpk, 'main')).clear();
-      final sync = SyncService(conn, boxes);
-      final read = SessionReadRepository(boxes);
-      final prefs = Preferences(_FakeSecureStorage());
+      final sync = SyncService(conn, _store);
+      final read = SessionReadRepository(_store);
+      final prefs = Preferences(_database);
       await prefs.setSelectedPeerEpk(_peer.remoteEpk);
       await prefs.setSelectedRoom(epk: _peer.remoteEpk, roomId: 'main');
 
@@ -406,10 +407,9 @@ void main() {
       storage: storage,
       emitDebounce: Duration.zero,
     );
-    final boxes = LocalBoxes();
-    final sync = SyncService(conn, boxes);
-    final read = SessionReadRepository(boxes);
-    final prefs = Preferences(_FakeSecureStorage());
+    final sync = SyncService(conn, _store);
+    final read = SessionReadRepository(_store);
+    final prefs = Preferences(_database);
     await prefs.setSelectedPeerEpk(_peer.remoteEpk);
     await prefs.setSelectedRoom(epk: _peer.remoteEpk, roomId: 'main');
 
@@ -503,10 +503,9 @@ void main() {
       emitDebounce: Duration.zero,
       workingOffDebounce: Duration.zero,
     );
-    final boxes = LocalBoxes();
-    final sync = SyncService(conn, boxes);
-    final read = SessionReadRepository(boxes);
-    final prefs = Preferences(_FakeSecureStorage());
+    final sync = SyncService(conn, _store);
+    final read = SessionReadRepository(_store);
+    final prefs = Preferences(_database);
     await prefs.setSelectedPeerEpk(_peer.remoteEpk);
     await prefs.setSelectedRoom(epk: _peer.remoteEpk, roomId: 'main');
 

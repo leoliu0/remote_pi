@@ -146,6 +146,10 @@ class ConnectionManager extends Service {
   final Set<String> _unreadFinishedRooms = {};
   // whether a connect is in flight (without poking at the live token).
   bool _connectInFlight = false;
+  // Monotonic owner for every connection/scope-changing operation. Async
+  // completions and transport callbacks may mutate state only while they own
+  // the current generation.
+  int _generation = 0;
 
   // Debounce timers — relay's control-frame firehose (peer_online +
   // presence + rooms snapshots, often dozens per second when multiple
@@ -187,10 +191,35 @@ class ConnectionManager extends Service {
       if (_status is StatusOnline) return;
       if (_connectInFlight) return;
       if (_retryTimer != null) return;
-      // We SHOULD be reconnecting but nothing's scheduled and no
-      // attempt is in flight. Kick the retry chain.
-      _scheduleRetry(peer);
+      _scheduleRetry(peer, _generation);
     });
+  }
+
+  int _claimOwnership() {
+    _generation++;
+    _presenceEmitTimer?.cancel();
+    _presenceEmitTimer = null;
+    _roomsEmitTimer?.cancel();
+    _roomsEmitTimer = null;
+    for (final timer in _workingOffTimers.values) {
+      timer.cancel();
+    }
+    _workingOffTimers.clear();
+    return _generation;
+  }
+
+  bool _owns(int generation) => generation == _generation;
+
+  void _clearLiveState() {
+    _presence.clear();
+    _liveRoomIds.clear();
+    _liveRoomsKnown = false;
+    if (!_presenceController.isClosed) {
+      _presenceController.add(presenceSnapshot);
+    }
+    if (!_roomsController.isClosed) {
+      _roomsController.add(_roomsSnapshot());
+    }
   }
 
   ConnectionStatus get status => _status;
@@ -287,15 +316,19 @@ class ConnectionManager extends Service {
     final active = _activePeer;
     if (active == null) return;
 
-    if (_status is StatusOnline) {
-      final cur = _status as StatusOnline;
-      try {
-        cur.channel.send(Ping(id: _newId()));
-      } catch (_) {
-        _connect(active);
-      }
+    if (_status case StatusOnline(:final channel)) {
+      final observedGeneration = _generation;
+      unawaited(
+        channel.send(Ping(id: _newId())).catchError((Object _) {
+          if (_owns(observedGeneration)) {
+            final generation = _claimOwnership();
+            unawaited(_connect(active, generation));
+          }
+        }),
+      );
     } else {
-      _connect(active);
+      final generation = _claimOwnership();
+      unawaited(_connect(active, generation));
     }
   }
 
@@ -376,32 +409,28 @@ class ConnectionManager extends Service {
   /// retrying). In that case we still re-subscribe presence with the
   /// full peer list, since the storage may have changed.
   Future<void> boot({String? preferredEpk}) async {
-    // Plan-17 follow-up — restore cached rooms from disk FIRST so
-    // Home tiles render with last-known state even before the relay
-    // pushes a fresh snapshot. Idempotent so reentrant boots are
-    // harmless.
-    await _restoreCachedRooms();
+    final restoreGeneration = _generation;
+    await _restoreCachedRooms(expectedGeneration: restoreGeneration);
+    if (!_owns(restoreGeneration)) return;
+
+    // A chat-triggered switch/connect or disconnect owns the coordinator.
+    // Boot must never resume after cache hydration under a newer generation.
     if (_activePeer != null) {
       final peers = await _storage.listPeers();
+      if (!_owns(restoreGeneration)) return;
       subscribeToPeers(peers.map((p) => p.remoteEpk).toList());
       return;
     }
     if (_status is StatusOnline) return;
+
+    final generation = _claimOwnership();
     final peers = await _storage.listPeers();
+    if (!_owns(generation)) return;
     if (peers.isEmpty) {
+      _activePeer = null;
       _emit(const StatusNoPeer());
       return;
     }
-    // IMPORTANT: route through `subscribeToPeers` so the epks land in
-    // `_subscribedEpks` already normalised to standard base64. Direct
-    // assignment used to leave url-safe values here, and the
-    // `_replaySubscriptions` call inside `_connect` would then send
-    // `subscribe_presence` with the wrong encoding — relay indexes its
-    // PresenceManager by standard (from `hello.pubkey`), would not
-    // match, and Home dots stayed cinza intermittently (race with
-    // `HomeViewModel._load` which DOES normalise). The WS isn't online
-    // yet here, so subscribeToPeers will just store + defer; the actual
-    // frames go out via `_replaySubscriptions` once `_connect` succeeds.
     subscribeToPeers(peers.map((p) => p.remoteEpk).toList());
     PeerRecord target;
     if (preferredEpk != null) {
@@ -416,37 +445,35 @@ class ConnectionManager extends Service {
     } else {
       target = peers.first;
     }
-    await _connect(target);
+    await _connect(target, generation);
   }
 
   // Connect to a specific peer (used after fresh pairing).
-  Future<void> connectTo(PeerRecord peer) => _connect(peer);
+  Future<void> connectTo(PeerRecord peer) {
+    final generation = _claimOwnership();
+    return _connect(peer, generation);
+  }
 
   /// Force an immediate reconnection with the current/preferred peer.
   /// Used when the relay endpoint or network settings change, so the
   /// app reconnects immediately without requiring an app restart.
   Future<void> reconnect({String? preferredEpk}) async {
+    final generation = _claimOwnership();
     _cancelRetry();
     _cancelPing();
     _connectCancel?.cancel();
-
-    // New relay: drop live presence/rooms so Home does not keep the
-    // previous relay's sessions, and so "No sessions online" cannot
-    // flash before the first snapshot from the new endpoint.
-    _presence.clear();
-    _liveRoomIds.clear();
-    _roomsByPeer.clear();
-    _liveRoomsKnown = false;
-    if (!_presenceController.isClosed) {
-      _presenceController.add(presenceSnapshot);
-    }
-    if (!_roomsController.isClosed) {
-      _roomsController.add(_roomsSnapshot());
-    }
+    _clearLiveState();
 
     final peers = await _storage.listPeers();
+    if (!_owns(generation)) return;
+    await _restoreCachedRooms(
+      peers: peers,
+      force: true,
+      expectedGeneration: generation,
+    );
+    if (!_owns(generation)) return;
     if (peers.isEmpty) {
-      await _teardownActive(emitNoPeer: true);
+      await _teardownActive(emitNoPeer: true, generation: generation);
       return;
     }
 
@@ -463,8 +490,9 @@ class ConnectionManager extends Service {
         : (_activePeer ?? peers.first);
 
     subscribeToPeers(peers.map((p) => p.remoteEpk).toList());
-    await _teardownActive(emitNoPeer: false);
-    await _connect(target);
+    await _teardownActive(emitNoPeer: false, generation: generation);
+    if (!_owns(generation)) return;
+    await _connect(target, generation);
   }
 
   /// Idempotent switch to another paired peer. If `peer` already matches
@@ -477,13 +505,16 @@ class ConnectionManager extends Service {
     if (fromEpk == peer.remoteEpk && _status is StatusOnline) {
       return;
     }
-    await _teardownActive(emitNoPeer: false);
-    await _connect(peer);
+    final generation = _claimOwnership();
+    await _teardownActive(emitNoPeer: false, generation: generation);
+    if (!_owns(generation)) return;
+    await _connect(peer, generation);
   }
   // Adopt a channel that was established by an external flow (e.g. the
   // pairing handshake). Skips the factory entirely — the channel is already
   // connected and ready for use.
   void adopt(IChannel channel, PeerRecord peer) {
+    _claimOwnership();
     _cancelRetry();
     _cancelPing();
     _connectCancel?.cancel();
@@ -491,34 +522,36 @@ class ConnectionManager extends Service {
     _channelSub = null;
     _controlSub?.cancel();
     _controlSub = null;
-    if (_status is StatusOnline) {
-      final old = (_status as StatusOnline).channel;
-      // ignore: unawaited_futures
-      Future(() async {
-        try {
-          await old.close();
-        } catch (_) {}
-      });
+    if (_status case StatusOnline(channel: final oldChannel)) {
+      unawaited(oldChannel.close().catchError((Object _) {}));
     }
     _retryAttempt = 0;
     _missedPings = 0;
     _activePeer = peer;
     _emit(StatusOnline(channel));
-    _startPing(peer, channel);
-    _watchChannel(peer, channel);
-    _watchControl(channel);
+    final generation = _generation;
+    _startPing(peer, channel, generation);
+    _watchChannel(peer, channel, generation);
+    _watchControl(channel, generation);
     _replaySubscriptions();
   }
 
   // Permanently disconnect and go to NoPeer.
-  Future<void> disconnect() => _teardownActive(emitNoPeer: true);
+  Future<void> disconnect() {
+    final generation = _claimOwnership();
+    return _teardownActive(emitNoPeer: true, generation: generation);
+  }
 
   /// Shared implementation between [disconnect] and [switchTo]. When
   /// [emitNoPeer] is false (switch path), the `_status` is left as-is so
   /// a subsequent `_connect` can emit `StatusConnecting` directly,
   /// avoiding the visible Online → NoPeer → Connecting flicker that used
   /// to trip up `ChatViewModel._bootstrap`.
-  Future<void> _teardownActive({required bool emitNoPeer}) async {
+  Future<void> _teardownActive({
+    required bool emitNoPeer,
+    required int generation,
+  }) async {
+    if (!_owns(generation)) return;
     _cancelRetry();
     _cancelPing();
     _connectCancel?.cancel();
@@ -526,22 +559,31 @@ class ConnectionManager extends Service {
     _channelSub = null;
     _controlSub?.cancel();
     _controlSub = null;
-    if (_status is StatusOnline) {
-      await (_status as StatusOnline).channel.close();
+    final activeChannel =
+        _status is StatusOnline ? (_status as StatusOnline).channel : null;
+    if (activeChannel != null) {
+      try {
+        await activeChannel.close();
+      } catch (_) {}
     }
+    if (!_owns(generation)) return;
     if (emitNoPeer) {
       _activePeer = null;
+      _roomsRestored = false;
+      _clearLiveState();
       _emit(const StatusNoPeer());
     }
-    // When emitNoPeer is false, `_connect` will immediately overwrite
-    // `_activePeer` and emit `StatusConnecting`, so we deliberately leave
-    // the state alone here.
   }
 
   @override
   void dispose() {
+    final activeChannel =
+        _status is StatusOnline ? (_status as StatusOnline).channel : null;
+    _claimOwnership();
     _cancelRetry();
     _cancelPing();
+    _connectCancel?.cancel();
+    _connectInFlight = false;
     _watchdogTimer?.cancel();
     _watchdogTimer = null;
     _presenceEmitTimer?.cancel();
@@ -556,12 +598,18 @@ class ConnectionManager extends Service {
     _channelSub = null;
     _controlSub?.cancel();
     _controlSub = null;
+    _activePeer = null;
+    if (activeChannel != null) {
+      unawaited(activeChannel.close().catchError((Object _) {}));
+    }
     _statusController.close();
     _presenceController.close();
+    _roomsController.close();
   }
   // ---------------------------------------------------------------------------
 
-  Future<void> _connect(PeerRecord peer) async {
+  Future<void> _connect(PeerRecord peer, int generation) async {
+    if (!_owns(generation)) return;
     _cancelRetry();
     _cancelPing();
     _connectCancel?.cancel();
@@ -573,26 +621,10 @@ class ConnectionManager extends Service {
     final token = CancelToken();
     _connectCancel = token;
     _connectInFlight = true;
-    // Plan 17 fix — set the destination room from the persisted
-    // PeerRecord BEFORE emitting StatusOnline so the very first send
-    // after connect goes to the right (peer, room) on the relay. If
-    // the PeerRecord predates this fix (`roomId == null`), we keep
-    // `_activeRoomId = 'main'` and rely on the discovery flow in
-    // `_onControl` to learn the real room from a subsequent
-    // `room_announced` push and then update _activeRoomId + persist.
-    //
-    // Same-peer reconnect (WS retry after backgrounding): the `peer`
-    // argument is often a stale capture from `_watchChannel` while
-    // `switchRoom` already moved `_activeRoomId` for the cwd the user
-    // is viewing. Trust the live selection — never clobber it from a
-    // lagging peer.roomId (fixes header=cwd-A, messages/sync=cwd-B).
     final samePeer = _activePeer?.remoteEpk == peer.remoteEpk;
     if (samePeer && _activePeer?.roomId != null) {
       _activePeer = peer.copyWith(roomId: _activeRoomId);
     } else {
-      // Keep a legacy peer unbound until room discovery can persist its
-      // canonical room. Assigning the implicit `main` here would make
-      // `_maybeAdoptLegacyRoom` treat it as already bound.
       _activePeer = peer;
       final boundRoom = peer.roomId ?? 'main';
       if (boundRoom != _activeRoomId) {
@@ -603,39 +635,44 @@ class ConnectionManager extends Service {
 
     try {
       final ch = await _factory(peer, token);
-      if (token.isCancelled) {
+      if (token.isCancelled || !_owns(generation)) {
         await ch.close();
         return;
       }
       _missedPings = 0;
-      // Push down the active room to the WS so the outer envelope
-      // carries it from frame 1 (factory creates a fresh WsTransport
-      // every reconnect — default _activeRoom='main' unless we set).
       _propagateActiveRoom(_activeRoomId, ch);
       _emit(StatusOnline(ch));
-      _startPing(peer, ch);
-      _watchChannel(peer, ch);
-      _watchControl(ch);
+      _startPing(peer, ch, generation);
+      _watchChannel(peer, ch, generation);
+      _watchControl(ch, generation);
       _replaySubscriptions();
-    } catch (e) {
-      if (!token.isCancelled) _scheduleRetry(peer);
+    } catch (_) {
+      if (!token.isCancelled && _owns(generation)) {
+        _scheduleRetry(peer, generation);
+      }
     } finally {
-      // Only clear the flight flag if THIS call is still the active
-      // attempt — a newer _connect may have superseded us.
       if (identical(_connectCancel, token)) _connectInFlight = false;
     }
   }
 
-  void _watchControl(IChannel ch) {
+  void _watchControl(IChannel ch, int generation) {
     _controlSub?.cancel();
-    if (ch is! IControlLink) {
+    final control = ch is IControlLink ? ch as IControlLink : null;
+    if (control == null) {
       _controlSub = null;
       return;
     }
-    _controlSub = (ch as IControlLink).controlFrames.listen(_onControl);
+    _controlSub = control.controlFrames.listen(
+      (event) => _onControl(event, ch, generation),
+    );
   }
 
-  void _onControl(ControlInbound c) {
+  void _onControl(ControlInbound c, IChannel source, int generation) {
+    if (!_owns(generation)) return;
+    final status = _status;
+    if (status is! StatusOnline || !identical(status.channel, source)) {
+      return;
+    }
     // Relay-reported epks are base64 STANDARD (they came in from the
     // remote peer's `hello.pubkey`). Normalise once on insert so the map
     // is always keyed in the same canonical form regardless of what we
@@ -749,13 +786,13 @@ class ConnectionManager extends Service {
         roomsDirty = true;
         // Persist the new view so cold restart shows the same tiles.
         // ignore: unawaited_futures
-        _persistRoomsForPeer(key);
+        _persistRoomsForPeer(key, generation);
         // Plan 17 fix — legacy discovery: if the active peer has no
         // persisted roomId yet (PeerRecord saved before this fix or
         // QR without `rm`), adopt the first room we learn about as
         // the canonical one. Persists the choice on the PeerRecord
         // so future reconnects address it directly.
-        _maybeAdoptLegacyRoom(key, roomId);
+        _maybeAdoptLegacyRoom(key, roomId, generation);
       case RoomEnded(:final peer, :final roomId):
         final key = toStandardB64(peer);
         // Mark the room offline but KEEP it in the cached set so the
@@ -819,7 +856,7 @@ class ConnectionManager extends Service {
           );
           roomsDirty = true;
           // ignore: unawaited_futures
-          _persistRoomsForPeer(key);
+          _persistRoomsForPeer(key, generation);
         } else if (working == false) {
           if (hasModel || hasThinking || hasGoal || hasLoop || hasPlan) {
             list[idx] = current.copyWith(
@@ -831,7 +868,7 @@ class ConnectionManager extends Service {
             );
           }
           if (current.working) {
-            _scheduleRoomWorkingOff(key, roomId);
+            _scheduleRoomWorkingOff(key, roomId, generation);
           }
         } else {
           if (current.model == nextModel &&
@@ -850,7 +887,7 @@ class ConnectionManager extends Service {
           );
           roomsDirty = true;
           // ignore: unawaited_futures
-          _persistRoomsForPeer(key);
+          _persistRoomsForPeer(key, generation);
         }
       case RoomsSnapshot(:final peer, :final rooms):
         _liveRoomsKnown = true;
@@ -899,10 +936,10 @@ class ConnectionManager extends Service {
         _liveRoomIds[key] = newLive;
         roomsDirty = true;
         // ignore: unawaited_futures
-        _persistRoomsForPeer(key);
+        _persistRoomsForPeer(key, generation);
         // Same legacy-discovery hook as RoomAnnounced.
         if (rooms.isNotEmpty) {
-          _maybeAdoptLegacyRoom(key, rooms.first.roomId);
+          _maybeAdoptLegacyRoom(key, rooms.first.roomId, generation);
         }
     }
     if (presenceDirty) _schedulePresenceEmit();
@@ -1087,41 +1124,47 @@ class ConnectionManager extends Service {
       list[idx] = list[idx].copyWith(working: true);
       _scheduleRoomsEmit();
       // ignore: unawaited_futures
-      _persistRoomsForPeer(key);
+      _persistRoomsForPeer(key, _generation);
     } else {
       if (!list[idx].working) return;
-      _scheduleRoomWorkingOff(key, roomId);
+      _scheduleRoomWorkingOff(key, roomId, _generation);
     }
   }
 
-  void _scheduleRoomWorkingOff(String key, String roomId) {
+  void _scheduleRoomWorkingOff(
+    String key,
+    String roomId,
+    int generation,
+  ) {
     final timerKey = '$key:$roomId';
     if (_workingOffTimers.containsKey(timerKey)) return;
     if (_workingOffDebounce == Duration.zero) {
-      _commitRoomWorkingOff(key, roomId);
+      _commitRoomWorkingOff(key, roomId, generation);
       return;
     }
     _workingOffTimers[timerKey] = Timer(_workingOffDebounce, () {
       _workingOffTimers.remove(timerKey);
-      _commitRoomWorkingOff(key, roomId);
+      if (!_owns(generation)) return;
+      _commitRoomWorkingOff(key, roomId, generation);
     });
   }
 
-  void _commitRoomWorkingOff(String key, String roomId) {
+  void _commitRoomWorkingOff(String key, String roomId, int generation) {
+    if (!_owns(generation)) return;
     final list = _roomsByPeer[key];
     if (list == null) return;
     final idx = list.indexWhere((r) => r.roomId == roomId);
     if (idx < 0) return;
     if (!list[idx].working) return;
     final isCurrentActive =
-        _activePeer?.remoteEpk == key && _activeRoomId == roomId;
+        toStandardB64(_activePeer?.remoteEpk ?? '') == key &&
+        _activeRoomId == roomId;
     if (!isCurrentActive) {
       _unreadFinishedRooms.add('$key:$roomId');
     }
     list[idx] = list[idx].copyWith(working: false);
     _scheduleRoomsEmit();
-    // ignore: unawaited_futures
-    _persistRoomsForPeer(key);
+    unawaited(_persistRoomsForPeer(key, generation));
   }
 
   bool isRoomUnreadFinished(String epk, String roomId) =>
@@ -1137,65 +1180,78 @@ class ConnectionManager extends Service {
   /// Plan-17 follow-up — hydrate `_roomsByPeer` from disk on boot so
   /// Home tiles persist across cold starts even before the relay
   /// pushes a fresh snapshot. Idempotent.
-  Future<void> _restoreCachedRooms() async {
-    if (_roomsRestored) return;
-    _roomsRestored = true;
-    final peers = await _storage.listPeers();
-    for (final p in peers) {
-      final cached = await _storage.loadRooms(p.remoteEpk);
+  Future<void> _restoreCachedRooms({
+    List<PeerRecord>? peers,
+    bool force = false,
+    int? expectedGeneration,
+  }) async {
+    if (_roomsRestored && !force) return;
+    final generation = expectedGeneration ?? _generation;
+    final scopedPeers = peers ?? await _storage.listPeers();
+    if (!_owns(generation)) return;
+
+    final restored = <String, List<RoomInfo>>{};
+    for (final peer in scopedPeers) {
+      final cached = await _storage.loadRooms(peer.remoteEpk);
+      if (!_owns(generation)) return;
       if (cached.isEmpty) continue;
-      final key = toStandardB64(p.remoteEpk);
-      _roomsByPeer[key] = cached
+      restored[toStandardB64(peer.remoteEpk)] = cached
           .map(
-            (c) => RoomInfo(
-              roomId: c.roomId,
-              name: c.localName ?? c.name,
-              cwd: c.cwd,
-              startedAt: c.startedAt,
-              model: c.model,
+            (room) => RoomInfo(
+              roomId: room.roomId,
+              name: room.localName ?? room.name,
+              cwd: room.cwd,
+              startedAt: room.startedAt,
+              model: room.model,
             ),
           )
           .toList();
-      // Note: nothing in _liveRoomIds yet — those rooms are "offline"
-      // until the relay announces them again.
     }
+    if (!_owns(generation)) return;
+    _roomsByPeer
+      ..clear()
+      ..addAll(restored);
+    _roomsRestored = true;
     if (!_roomsController.isClosed) {
       _roomsController.add(_roomsSnapshot());
     }
   }
 
-  Future<void> _persistRoomsForPeer(String peerKey) async {
+  Future<void> _persistRoomsForPeer(String peerKey, int generation) async {
+    if (!_owns(generation)) return;
     final peers = await _storage.listPeers();
+    if (!_owns(generation)) return;
     PeerRecord? match;
-    for (final p in peers) {
-      if (toStandardB64(p.remoteEpk) == peerKey) {
-        match = p;
+    for (final peer in peers) {
+      if (toStandardB64(peer.remoteEpk) == peerKey) {
+        match = peer;
         break;
       }
     }
     if (match == null) return;
-    final list = _roomsByPeer[peerKey] ?? const <RoomInfo>[];
-    // Read the current on-disk localNames so we don't drop the user's
-    // long-press rename when we re-persist in response to a wire
-    // metadata refresh.
+    final list = List<RoomInfo>.of(
+      _roomsByPeer[peerKey] ?? const <RoomInfo>[],
+    );
     final existing = await _storage.loadRooms(match.remoteEpk);
+    if (!_owns(generation)) return;
     final localById = {
-      for (final p in existing)
-        if (p.localName != null && p.localName!.isNotEmpty)
-          p.roomId: p.localName!,
+      for (final room in existing)
+        if (room.localName != null && room.localName!.isNotEmpty)
+          room.roomId: room.localName!,
     };
     final persisted = list
         .map(
-          (r) => PersistedRoom(
-            roomId: r.roomId,
-            name: r.name,
-            cwd: r.cwd,
-            startedAt: r.startedAt,
-            localName: localById[r.roomId],
-            model: r.model,
+          (room) => PersistedRoom(
+            roomId: room.roomId,
+            name: room.name,
+            cwd: room.cwd,
+            startedAt: room.startedAt,
+            localName: localById[room.roomId],
+            model: room.model,
           ),
         )
         .toList();
+    if (!_owns(generation)) return;
     await _storage.saveRooms(match.remoteEpk, persisted);
   }
 
@@ -1257,27 +1313,29 @@ class ConnectionManager extends Service {
   ///   3. Persist the choice on the PeerRecord via storage so
   ///      subsequent app launches address (peer, room) from the start
   ///      and don't re-trigger discovery.
-  void _maybeAdoptLegacyRoom(String peerKey, String discoveredRoom) {
+  void _maybeAdoptLegacyRoom(
+    String peerKey,
+    String discoveredRoom,
+    int generation,
+  ) {
+    if (!_owns(generation)) return;
     final active = _activePeer;
     if (active == null) return;
     if (toStandardB64(active.remoteEpk) != peerKey) return;
-    if (active.roomId != null) {
-      return; // explicit room selection — discovery must not override it
-    }
+    if (active.roomId != null) return;
     _activeRoomId = discoveredRoom;
     final cur = _status;
     if (cur is StatusOnline) {
       _propagateActiveRoom(discoveredRoom, cur.channel);
     }
-    // Persist asynchronously — failure here is non-fatal (next discovery
-    // round will re-adopt).
     final updated = active.copyWith(roomId: discoveredRoom);
     _activePeer = updated;
-    // ignore: unawaited_futures
-    _storage
-        .savePeer(updated)
-        .then((_) {})
-        .catchError((Object e, StackTrace _) {});
+    unawaited(
+      _storage
+          .savePeer(updated, intent: PeerSaveIntent.localMetadata)
+          .then((_) {})
+          .catchError((Object _, StackTrace _) {}),
+    );
   }
 
   /// On (re)connect, re-send the last subscribe_presence so the relay
@@ -1296,87 +1354,60 @@ class ConnectionManager extends Service {
     link.sendControl(roomsCheckFrame(_subscribedEpks));
   }
 
-  void _watchChannel(PeerRecord peer, IChannel ch) {
+  void _watchChannel(PeerRecord peer, IChannel ch, int generation) {
     _channelSub?.cancel();
     _channelSub = ch.serverMessages.listen(
-      (msg) {
-        // Real inbound — the Pi is alive and reachable. Safe to reset
-        // both the ping miss counter and the retry backoff.
-        final wasMissed = _missedPings;
-        if (wasMissed > 0) {}
-        if (_retryAttempt != 0) {}
+      (_) {
+        if (!_owns(generation)) return;
+        final status = _status;
+        if (status is! StatusOnline || !identical(status.channel, ch)) return;
         _missedPings = 0;
         _retryAttempt = 0;
       },
-      onError: (_) => _onChannelLost(peer, ch),
-      onDone: () => _onChannelLost(peer, ch),
+      onError: (_) => _onChannelLost(peer, ch, generation),
+      onDone: () => _onChannelLost(peer, ch, generation),
     );
   }
 
-  void _onChannelLost(PeerRecord peer, IChannel ch) {
-    if (_status is! StatusOnline) return;
-    final cur = (_status as StatusOnline).channel;
-    if (!identical(cur, ch)) {
-      // Stale: this onDone came from a channel we already replaced. The
-      // relay typically kicks the previous WS when our retry authenticates
-      // again — that close would otherwise trigger an immediate
-      // self-sustaining retry loop.
-      return;
-    }
+  void _onChannelLost(PeerRecord peer, IChannel ch, int generation) {
+    if (!_owns(generation)) return;
+    final status = _status;
+    if (status is! StatusOnline || !identical(status.channel, ch)) return;
     _cancelPing();
-    _scheduleRetry(peer);
+    _scheduleRetry(peer, generation);
   }
 
-  void _scheduleRetry(PeerRecord peer) {
+  void _scheduleRetry(PeerRecord peer, int generation) {
+    if (!_owns(generation)) return;
     final delay = _backoffFor(_retryAttempt);
     _emit(StatusRetrying(nextRetry: delay, attempt: _retryAttempt));
-    // Cancel any previous timer before scheduling — prevents the
-    // "two timers firing back-to-back" footgun.
     _retryTimer?.cancel();
     _retryTimer = Timer(delay, () {
       _retryTimer = null;
+      if (!_owns(generation)) return;
       _retryAttempt++;
-      _connect(peer);
+      unawaited(_connect(peer, generation));
     });
   }
 
-  void _startPing(PeerRecord peer, IChannel ch) {
+  void _startPing(PeerRecord peer, IChannel ch, int generation) {
     _pingTimer = Timer.periodic(const Duration(seconds: 25), (_) async {
-      if (_status is! StatusOnline) return;
-      // Plan-18 follow-up — DECOUPLED Pi-liveness from WS-liveness.
-      //
-      // Before: 3 missed Pongs from the Pi triggered `_onChannelLost`,
-      // which tore down the WS to the relay. The relay only frees
-      // the slot when its own `sink.send` returns an error (which
-      // can take MINUTES on certain network failures — half-open
-      // TCP), so every reconnect attempt during that window hit
-      // `room_already_open` and the app sat permanently offline.
-      // [ORCH:19-heartbeat-investigate] reported this.
-      //
-      // After: the WS↔relay keep-alive is now exclusively handled
-      // by RFC 6455 Ping/Pong (IOWebSocketChannel.pingInterval).
-      // Protocol Ping/Pong here is a Pi-LIVENESS probe — when it
-      // fails, we mark the active room as offline locally so Home /
-      // chat reflect it; the WS stays online for presence updates
-      // and other rooms. A real WS failure surfaces via the catch
-      // below (ping SEND fails) or via the channel listener's
-      // onError / onDone, both of which still trigger
-      // `_onChannelLost`.
+      if (!_owns(generation)) return;
+      final status = _status;
+      if (status is! StatusOnline || !identical(status.channel, ch)) return;
+      // This protocol ping probes Pi liveness. The WebSocket transport owns
+      // relay keep-alives, so missed Pi replies only age the active room out
+      // of the live set; they do not force destructive command replay.
       _missedPings++;
       if (_missedPings == 3) {
         _markActiveRoomOffline();
-        // No `return` — keep firing pings. When Pi comes back, the
-        // inbound Pong (or any other frame) resets _missedPings via
-        // _watchChannel, and `room_announced` repopulates
-        // _liveRoomIds → tile + AppBar flip back to green
-        // automatically.
       }
       try {
-        final id = _newId();
-        await ch.send(Ping(id: id));
-      } catch (e) {
+        await ch.send(Ping(id: _newId()));
+      } catch (_) {
+        if (!_owns(generation)) return;
         _cancelPing();
-        _onChannelLost(peer, ch);
+        _onChannelLost(peer, ch, generation);
       }
     });
   }

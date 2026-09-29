@@ -119,33 +119,19 @@ class OwnerIdentityBridge extends ChangeNotifier {
     return _ed25519.newKeyPairFromSeed(id.ownerSk);
   }
 
-  /// Subscribe to platform sync events. When the incoming Owner-pk
-  /// differs from [_current], the bridge:
-  ///   1. wipes [PairingStorage] (peers + rooms) — stale handles.
-  ///   2. caches the new identity.
-  ///   3. calls [onReset] so the host can force a fresh router boot.
+  /// Subscribe to platform sync events.
   ///
-  /// Same-pk events are dropped — re-saves of identical content (echo
-  /// from our own write) shouldn't reset state.
+  /// A different Owner key is made visible immediately so in-flight mesh work
+  /// fails its owner check. [onBeforeReset] then invalidates connection
+  /// callbacks before peer/room/journal state is wiped. [onReset] runs after
+  /// that transaction commits and may rebuild the application graph.
   ///
-  /// Initial-emit race: both the iOS plugin (`KeychainSyncStore`
-  /// onListen → emitIfChanged) and the Android plugin (initial
-  /// `store.load()` on subscribe) push the current blob to the event
-  /// channel as soon as we `.listen()`. If we subscribed before
-  /// [boot] populated `_current`, that initial emit would look like
-  /// a "different owner_pk" (because current is null) and trigger a
-  /// spurious `wipeAll`. That cleared the freshly-paired peer set,
-  /// and a downstream `_maybeAdoptLegacyRoom` (driven by an incoming
-  /// `room_announced`) would then re-publish v=N+1 with members=[],
-  /// causing the pi-extension to self-revoke ~60s later.
-  ///
-  /// Defence: when `_current` is null at observation time, treat the
-  /// event as the platform's initial-snapshot and *adopt without
-  /// wiping*. The host should also order calls so `startWatching`
-  /// runs after `boot()` whenever possible, but this guard makes the
-  /// bridge correct even when the order is reversed (e.g. router
-  /// boot is fire-and-forget).
-  void startWatching({required Future<void> Function() onReset}) {
+  /// Same-key events are dropped. When [_current] is still null, the first
+  /// event is the platform's initial snapshot and is adopted without wiping.
+  void startWatching({
+    Future<void> Function()? onBeforeReset,
+    required Future<void> Function() onReset,
+  }) {
     _watchSub?.cancel();
     _watchSub = _store.watch().listen((incoming) async {
       final current = _current;
@@ -153,14 +139,23 @@ class OwnerIdentityBridge extends ChangeNotifier {
         _current = incoming;
         return;
       }
-      if (_bytesEqual(current.ownerPk, incoming.ownerPk)) {
-        return;
-      }
+      if (_bytesEqual(current.ownerPk, incoming.ownerPk)) return;
+
+      // Change the observable owner before the first await. Mesh requests
+      // captured under the previous identity must be rejected even while the
+      // runtime is disconnecting.
       _current = incoming;
+      if (onBeforeReset != null) {
+        try {
+          await onBeforeReset();
+        } catch (_) {
+          // A failed runtime cleanup must not preserve the previous owner's
+          // durable membership. Continue with the transactional wipe.
+        }
+      }
       await _pairing.wipeAll();
       await onReset();
-    }, onError: (Object e) {
-    });
+    }, onError: (Object _) {});
   }
 
   @override

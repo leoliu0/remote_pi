@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:app/data/local/app_database.dart';
 import 'package:app/pairing/pair_request_flow.dart';
 import 'package:app/pairing/qr_scanner.dart';
 import 'package:app/pairing/storage.dart';
@@ -38,13 +39,31 @@ class _MemTransport implements PeerTransport {
 }
 
 class _FakeStorage extends PairingStorage {
-  final List<PeerRecord> saved = [];
+  final AppDatabase database;
+  final List<PeerRecord> saved = <PeerRecord>[];
+  final List<PeerSaveIntent> intents = <PeerSaveIntent>[];
+
+  _FakeStorage._(this.database) : super(database);
+
+  factory _FakeStorage() => _FakeStorage._(AppDatabase.memory());
 
   @override
   Future<List<PeerRecord>> listPeers() async => saved;
 
   @override
-  Future<void> savePeer(PeerRecord r) async => saved.add(r);
+  Future<void> savePeer(
+    PeerRecord record, {
+    required PeerSaveIntent intent,
+  }) async {
+    saved.add(record);
+    intents.add(intent);
+  }
+
+  @override
+  void dispose() {
+    database.dispose();
+    super.dispose();
+  }
 }
 
 QrPairPayload _qr({String? relayUrl}) => QrPairPayload(
@@ -64,12 +83,13 @@ void main() {
         final q2 = _Q();
         final transport = _MemTransport(send: q1, recv: q2);
         final qr = _qr(relayUrl: 'wss://other-relay.example');
-
+        final storage = _FakeStorage();
+        addTearDown(storage.dispose);
         await expectLater(
           performPairing(
             qr: qr,
             transport: transport,
-            storage: _FakeStorage(),
+            storage: storage,
             deviceName: 'phone',
             currentRelayUrl: 'wss://my-relay.example',
           ),
@@ -93,6 +113,7 @@ void main() {
         final app = _MemTransport(send: q2, recv: q1);
         final qr = _qr(relayUrl: 'ws://localhost');
         final storage = _FakeStorage();
+        addTearDown(storage.dispose);
 
         // Pi-side responder.
         unawaited(() async {
@@ -115,6 +136,7 @@ void main() {
         expect(result.peer.sessionName, 'Pi');
         expect(result.peer.relayUrl, 'ws://localhost');
         expect(storage.saved, hasLength(1));
+        expect(storage.intents, <PeerSaveIntent>[PeerSaveIntent.enroll]);
       },
     );
 
@@ -126,6 +148,7 @@ void main() {
         final pi = _MemTransport(send: q1, recv: q2);
         final app = _MemTransport(send: q2, recv: q1);
         final storage = _FakeStorage();
+        addTearDown(storage.dispose);
         // QR carries the Pi-side room id explicitly.
         final qr = QrPairPayload(
           token: 'AAAAAAAAAAAAAAAAAAAAAA',
@@ -167,6 +190,8 @@ void main() {
         final q2 = _Q();
         final pi = _MemTransport(send: q1, recv: q2);
         final app = _MemTransport(send: q2, recv: q1);
+        final storage = _FakeStorage();
+        addTearDown(storage.dispose);
         final qr = QrPairPayload(
           token: 'AAAAAAAAAAAAAAAAAAAAAA',
           epk: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
@@ -189,7 +214,7 @@ void main() {
         final result = await performPairing(
           qr: qr,
           transport: app,
-          storage: _FakeStorage(),
+          storage: storage,
           deviceName: 'phone',
           currentRelayUrl: 'wss://relay.example',
         );
@@ -208,6 +233,7 @@ void main() {
         final app = _MemTransport(send: q2, recv: q1);
         final qr = _qr();
         final storage = _FakeStorage();
+        addTearDown(storage.dispose);
 
         unawaited(() async {
           final raw = await pi.receive();

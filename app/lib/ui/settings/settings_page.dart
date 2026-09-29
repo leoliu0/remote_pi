@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'package:app/config/dependencies.dart';
 import 'package:app/data/preferences/preferences.dart';
 import 'package:app/data/transport/relay_config.dart';
 import 'package:app/pairing/storage.dart';

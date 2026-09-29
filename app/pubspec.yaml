@@ -16,7 +16,7 @@ publish_to: "none" # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.2.40+2051
+version: 1.2.41+2052
 
 environment:
   sdk: ^3.11.5
@@ -43,12 +43,15 @@ dependencies:
   auto_injector: ^2.0.5
   provider: ^6.1.2
 
-  # Local session cache (per-peer chat history)
-  hive: ^2.2.3
-  hive_flutter: ^1.1.0
-  # App-support dir for the file-backed relay-URL backup (survives
-  # secure-store/keystore resets on Android).
+  # Transactional app-private persistence. The 2.x line intentionally pairs
+  # with sqlite3_flutter_libs; both support the pinned Flutter/Dart toolchain.
+  sqlite3: ^2.9.4
+  sqlite3_flutter_libs: ^0.5.42
   path_provider: ^2.1.5
+
+  # Import-only readers for upgrades from the former rp_v2 Hive namespace.
+  # No runtime writer uses Hive after the SQLite cutover.
+  hive: ^2.2.3
 
   # Owner-key sync (plan 23) — Ed25519 keypair persisted in iCloud
   # Keychain / Android Block Store. Local path dep, not pub.dev.

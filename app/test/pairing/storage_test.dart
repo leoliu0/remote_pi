@@ -1,15 +1,29 @@
-// Tests for the PairingStorage surface that survives plan 23 (W2A):
-// PeerRecord (de)serialization, nickname/roomId edges, and the new
-// `wipeAll()` helper that the OwnerIdentityBridge calls on sync-reset.
-
+import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
+import 'dart:typed_data';
+
+import 'package:app/data/local/app_database.dart';
+import 'package:app/pairing/legacy_pairing_migration.dart';
 import 'package:app/pairing/storage.dart';
 import 'package:app/protocol/protocol.dart' show PiHarness;
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 class _FakeSecureStorage implements FlutterSecureStorage {
-  final Map<String, String> _store = {};
+  final Map<String, String> values;
+  final Set<String> unreadableKeys;
+  bool failAllReads;
+  bool failReadAll;
+  int readCount = 0;
+
+  _FakeSecureStorage({
+    Map<String, String>? values,
+    Set<String>? unreadableKeys,
+    this.failAllReads = false,
+    this.failReadAll = false,
+  })  : values = values ?? <String, String>{},
+        unreadableKeys = unreadableKeys ?? <String>{};
 
   @override
   Future<String?> read({
@@ -20,7 +34,29 @@ class _FakeSecureStorage implements FlutterSecureStorage {
     WebOptions? webOptions,
     MacOsOptions? mOptions,
     WindowsOptions? wOptions,
-  }) async => _store[key];
+  }) async {
+    readCount++;
+    if (failAllReads || unreadableKeys.contains(key)) {
+      throw StateError('secure value is unreadable: $key');
+    }
+    return values[key];
+  }
+
+  @override
+  Future<Map<String, String>> readAll({
+    IOSOptions? iOptions,
+    AndroidOptions? aOptions,
+    LinuxOptions? lOptions,
+    WebOptions? webOptions,
+    MacOsOptions? mOptions,
+    WindowsOptions? wOptions,
+  }) async {
+    readCount++;
+    if (failAllReads || failReadAll) {
+      throw StateError('secure inventory is unreadable');
+    }
+    return Map<String, String>.of(values);
+  }
 
   @override
   Future<void> write({
@@ -34,9 +70,9 @@ class _FakeSecureStorage implements FlutterSecureStorage {
     WindowsOptions? wOptions,
   }) async {
     if (value == null) {
-      _store.remove(key);
+      values.remove(key);
     } else {
-      _store[key] = value;
+      values[key] = value;
     }
   }
 
@@ -49,153 +85,20 @@ class _FakeSecureStorage implements FlutterSecureStorage {
     WebOptions? webOptions,
     MacOsOptions? mOptions,
     WindowsOptions? wOptions,
-  }) async => _store.remove(key);
-
-  @override
-  Future<Map<String, String>> readAll({
-    IOSOptions? iOptions,
-    AndroidOptions? aOptions,
-    LinuxOptions? lOptions,
-    WebOptions? webOptions,
-    MacOsOptions? mOptions,
-    WindowsOptions? wOptions,
-  }) async => Map.from(_store);
-
-  @override
-  Future<void> deleteAll({
-    IOSOptions? iOptions,
-    AndroidOptions? aOptions,
-    LinuxOptions? lOptions,
-    WebOptions? webOptions,
-    MacOsOptions? mOptions,
-    WindowsOptions? wOptions,
-  }) async => _store.clear();
-
-  @override
-  Future<bool> containsKey({
-    required String key,
-    IOSOptions? iOptions,
-    AndroidOptions? aOptions,
-    LinuxOptions? lOptions,
-    WebOptions? webOptions,
-    MacOsOptions? mOptions,
-    WindowsOptions? wOptions,
-  }) async => _store.containsKey(key);
-
-  @override
-  dynamic noSuchMethod(Invocation i) => super.noSuchMethod(i);
-}
-class _EmptyReadAllFakeSecureStorage implements FlutterSecureStorage {
-  final Map<String, String> _store = {};
-
-  @override
-  Future<String?> read({
-    required String key,
-    IOSOptions? iOptions,
-    AndroidOptions? aOptions,
-    LinuxOptions? lOptions,
-    WebOptions? webOptions,
-    MacOsOptions? mOptions,
-    WindowsOptions? wOptions,
-  }) async => _store[key];
-
-  @override
-  Future<void> write({
-    required String key,
-    required String? value,
-    IOSOptions? iOptions,
-    AndroidOptions? aOptions,
-    LinuxOptions? lOptions,
-    WebOptions? webOptions,
-    MacOsOptions? mOptions,
-    WindowsOptions? wOptions,
   }) async {
-    if (value == null) {
-      _store.remove(key);
-    } else {
-      _store[key] = value;
-    }
+    values.remove(key);
   }
 
   @override
-  Future<void> delete({
-    required String key,
-    IOSOptions? iOptions,
-    AndroidOptions? aOptions,
-    LinuxOptions? lOptions,
-    WebOptions? webOptions,
-    MacOsOptions? mOptions,
-    WindowsOptions? wOptions,
-  }) async => _store.remove(key);
-
-  @override
-  Future<Map<String, String>> readAll({
-    IOSOptions? iOptions,
-    AndroidOptions? aOptions,
-    LinuxOptions? lOptions,
-    WebOptions? webOptions,
-    MacOsOptions? mOptions,
-    WindowsOptions? wOptions,
-  }) async => <String, String>{};
-
-  @override
-  Future<void> deleteAll({
-    IOSOptions? iOptions,
-    AndroidOptions? aOptions,
-    LinuxOptions? lOptions,
-    WebOptions? webOptions,
-    MacOsOptions? mOptions,
-    WindowsOptions? wOptions,
-  }) async => _store.clear();
-
-  @override
-  Future<bool> containsKey({
-    required String key,
-    IOSOptions? iOptions,
-    AndroidOptions? aOptions,
-    LinuxOptions? lOptions,
-    WebOptions? webOptions,
-    MacOsOptions? mOptions,
-    WindowsOptions? wOptions,
-  }) async => _store.containsKey(key);
-
-  @override
-  dynamic noSuchMethod(Invocation i) => super.noSuchMethod(i);
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
-class _FailingWriteSecureStorage extends _EmptyReadAllFakeSecureStorage {
-  bool failNextWrite = false;
-  bool failIndexWrite = false;
-  @override
-  Future<void> write({
-    required String key,
-    required String? value,
-    IOSOptions? iOptions,
-    AndroidOptions? aOptions,
-    LinuxOptions? lOptions,
-    WebOptions? webOptions,
-    MacOsOptions? mOptions,
-    WindowsOptions? wOptions,
-  }) async {
-    if (failNextWrite || (failIndexWrite && key == 'dev.remotepi.peers_index')) {
-      throw Exception('Simulated storage write failure');
-    }
-    await super.write(
-      key: key,
-      value: value,
-      iOptions: iOptions,
-      aOptions: aOptions,
-      lOptions: lOptions,
-      webOptions: webOptions,
-      mOptions: mOptions,
-      wOptions: wOptions,
-    );
-  }
-}
-class _InterceptingSecureStorage implements FlutterSecureStorage {
-  final FlutterSecureStorage _delegate;
-  final String? Function(String key)? onRead;
 
-  _InterceptingSecureStorage(this._delegate, {this.onRead});
+class _BlockingFirstIndexReadStorage extends _FakeSecureStorage {
+  final Completer<void> firstReadStarted = Completer<void>();
+  final Completer<void> releaseFirstRead = Completer<void>();
+  bool _blocked = false;
+
+  _BlockingFirstIndexReadStorage({required super.values});
 
   @override
   Future<String?> read({
@@ -207,9 +110,12 @@ class _InterceptingSecureStorage implements FlutterSecureStorage {
     MacOsOptions? mOptions,
     WindowsOptions? wOptions,
   }) async {
-    final override = onRead?.call(key);
-    if (override != null) return override;
-    return _delegate.read(
+    if (key == legacyPeersIndexKey && !_blocked) {
+      _blocked = true;
+      firstReadStarted.complete();
+      await releaseFirstRead.future;
+    }
+    return super.read(
       key: key,
       iOptions: iOptions,
       aOptions: aOptions,
@@ -219,536 +125,429 @@ class _InterceptingSecureStorage implements FlutterSecureStorage {
       wOptions: wOptions,
     );
   }
+}
 
-  @override
-  Future<void> write({
-    required String key,
-    required String? value,
-    IOSOptions? iOptions,
-    AndroidOptions? aOptions,
-    LinuxOptions? lOptions,
-    WebOptions? webOptions,
-    MacOsOptions? mOptions,
-    WindowsOptions? wOptions,
-  }) => _delegate.write(
-    key: key,
-    value: value,
-    iOptions: iOptions,
-    aOptions: aOptions,
-    lOptions: lOptions,
-    webOptions: webOptions,
-    mOptions: mOptions,
-    wOptions: wOptions,
-  );
+final Uint8List _ownerA = Uint8List.fromList(List<int>.generate(32, (i) => i));
+final Uint8List _ownerB = Uint8List.fromList(List<int>.generate(32, (i) => 31 - i));
 
-  @override
-  Future<void> delete({
-    required String key,
-    IOSOptions? iOptions,
-    AndroidOptions? aOptions,
-    LinuxOptions? lOptions,
-    WebOptions? webOptions,
-    MacOsOptions? mOptions,
-    WindowsOptions? wOptions,
-  }) => _delegate.delete(
-    key: key,
-    iOptions: iOptions,
-    aOptions: aOptions,
-    lOptions: lOptions,
-    webOptions: webOptions,
-    mOptions: mOptions,
-    wOptions: wOptions,
-  );
+const _peer = PeerRecord(
+  remoteEpk: 'epk-one',
+  sessionName: 'workstation',
+  relayUrl: 'wss://Relay.Example.test/',
+  pairedAt: '2026-09-20T12:00:00Z',
+  nickname: 'Desk',
+  roomId: 'main',
+  harness: PiHarness(name: 'Pi coding agent', version: '0.5.0'),
+);
 
-  @override
-  Future<Map<String, String>> readAll({
-    IOSOptions? iOptions,
-    AndroidOptions? aOptions,
-    LinuxOptions? lOptions,
-    WebOptions? webOptions,
-    MacOsOptions? mOptions,
-    WindowsOptions? wOptions,
-  }) => _delegate.readAll(
-    iOptions: iOptions,
-    aOptions: aOptions,
-    lOptions: lOptions,
-    webOptions: webOptions,
-    mOptions: mOptions,
-    wOptions: wOptions,
-  );
-
-  @override
-  Future<void> deleteAll({
-    IOSOptions? iOptions,
-    AndroidOptions? aOptions,
-    LinuxOptions? lOptions,
-    WebOptions? webOptions,
-    MacOsOptions? mOptions,
-    WindowsOptions? wOptions,
-  }) => _delegate.deleteAll(
-    iOptions: iOptions,
-    aOptions: aOptions,
-    lOptions: lOptions,
-    webOptions: webOptions,
-    mOptions: mOptions,
-    wOptions: wOptions,
-  );
-
-  @override
-  Future<bool> containsKey({
-    required String key,
-    IOSOptions? iOptions,
-    AndroidOptions? aOptions,
-    LinuxOptions? lOptions,
-    WebOptions? webOptions,
-    MacOsOptions? mOptions,
-    WindowsOptions? wOptions,
-  }) => _delegate.containsKey(
-    key: key,
-    iOptions: iOptions,
-    aOptions: aOptions,
-    lOptions: lOptions,
-    webOptions: webOptions,
-    mOptions: mOptions,
-    wOptions: wOptions,
-  );
-
-  @override
-  dynamic noSuchMethod(Invocation i) => super.noSuchMethod(i);
+Future<PairingStorage> _storage(
+  AppDatabase database, {
+  FlutterSecureStorage? legacyStore,
+  Uint8List? ownerPk,
+  String relayUrl = 'https://relay.example.test',
+}) async {
+  final storage = PairingStorage(database, legacyStore: legacyStore);
+  await storage.initialize(ownerPk: ownerPk ?? _ownerA, relayUrl: relayUrl);
+  return storage;
 }
 
 void main() {
-  group('PeerRecord — minimal post-rollback shape', () {
-    test('serializes and deserializes the 4 retained fields', () {
-      const record = PeerRecord(
-        remoteEpk: 'pk_ed25519',
-        sessionName: 'test',
-        relayUrl: 'ws://localhost',
-        pairedAt: '2026-01-01T00:00:00Z',
+  group('Pairing records', () {
+    test('peer and room JSON retain every rendering and routing field', () {
+      expect(PeerRecord.fromJson(_peer.toJson()), _peer);
+
+      const room = PersistedRoom(
+        roomId: 'room-1',
+        name: 'Agent',
+        cwd: '/home/leo/project',
+        startedAt: 42,
+        localName: 'Release',
+        model: 'openai-codex:gpt-5.6-codex',
       );
-
-      final json = record.toJson();
-      expect(json['remote_epk'], 'pk_ed25519');
-      expect(json['session_name'], 'test');
-      expect(json['relay_url'], 'ws://localhost');
-      expect(json['paired_at'], '2026-01-01T00:00:00Z');
-      expect(json['nickname'], isNull);
-
-      final restored = PeerRecord.fromJson(json);
-      expect(restored.remoteEpk, 'pk_ed25519');
-      expect(restored.sessionName, 'test');
-      expect(restored.nickname, isNull);
-    });
-
-    test('nickname round-trips through toJson/fromJson', () {
-      const record = PeerRecord(
-        remoteEpk: 'pk1',
-        sessionName: 'remote_pi · main',
-        relayUrl: 'ws://x',
-        pairedAt: '2026-01-01T00:00:00Z',
-        nickname: 'Mac de casa',
-      );
-      final restored = PeerRecord.fromJson(record.toJson());
-      expect(restored.nickname, 'Mac de casa');
-      expect(restored.sessionName, 'remote_pi · main');
-    });
-
-    test('legacy record without nickname field → fromJson returns null', () {
-      final restored = PeerRecord.fromJson({
-        'remote_epk': 'pk1',
-        'session_name': 'name',
-        'relay_url': 'ws://x',
-        'paired_at': '2026-01-01T00:00:00Z',
-      });
-      expect(restored.nickname, isNull);
-    });
-
-    test('copyWith(nickname: null) clears the nickname', () {
-      const record = PeerRecord(
-        remoteEpk: 'pk1',
-        sessionName: 'n',
-        relayUrl: 'ws://x',
-        pairedAt: '2026-01-01T00:00:00Z',
-        nickname: 'old',
-      );
-      final cleared = record.copyWith(nickname: null);
-      expect(cleared.nickname, isNull);
-
-      final preserved = record.copyWith(sessionName: 'new');
-      expect(preserved.nickname, 'old');
-      expect(preserved.sessionName, 'new');
-    });
-
-    test('harness round-trips through toJson/fromJson (plan/27 Wave A)', () {
-      const record = PeerRecord(
-        remoteEpk: 'pk1',
-        sessionName: 'name',
-        relayUrl: 'ws://x',
-        pairedAt: '2026-01-01T00:00:00Z',
-        harness: PiHarness(name: 'Pi coding agent', version: '0.4.2'),
-      );
-      final json = record.toJson();
-      expect(json['harness'], {'name': 'Pi coding agent', 'version': '0.4.2'});
-      final restored = PeerRecord.fromJson(json);
-      expect(restored.harness, isNotNull);
-      expect(restored.harness!.name, 'Pi coding agent');
-      expect(restored.harness!.version, '0.4.2');
-    });
-
-    test('legacy record without harness field → fromJson keeps null', () {
-      final restored = PeerRecord.fromJson({
-        'remote_epk': 'pk1',
-        'session_name': 'name',
-        'relay_url': 'ws://x',
-        'paired_at': '2026-01-01T00:00:00Z',
-      });
-      expect(restored.harness, isNull);
-    });
-
-    test('copyWith(harness: ...) updates while preserving other fields', () {
-      const record = PeerRecord(
-        remoteEpk: 'pk1',
-        sessionName: 'n',
-        relayUrl: 'ws://x',
-        pairedAt: '2026-01-01T00:00:00Z',
-        nickname: 'Macbook',
-        harness: PiHarness(name: 'Pi coding agent', version: '0.4.0'),
-      );
-      final updated = record.copyWith(
-        harness: const PiHarness(name: 'Claude Code', version: '0.7.1'),
-      );
-      expect(updated.harness!.name, 'Claude Code');
-      expect(updated.nickname, 'Macbook');
-      // Sentinel default: omitting harness preserves it.
-      final preserved = record.copyWith(nickname: 'mac');
-      expect(preserved.harness!.version, '0.4.0');
-    });
-
-    test('list/save/load round-trips through fake storage', () async {
-      final storage = PairingStorage(_FakeSecureStorage());
-      const r = PeerRecord(
-        remoteEpk: 'epk1',
-        sessionName: 'sess',
-        relayUrl: 'ws://x',
-        pairedAt: '2026-01-01T00:00:00Z',
-      );
-      await storage.savePeer(r);
-
-      final loaded = await storage.loadPeer('epk1');
-      expect(loaded?.sessionName, 'sess');
-
-      final all = await storage.listPeers();
-      expect(all, hasLength(1));
-
-      await storage.deletePeer('epk1');
-      expect(await storage.listPeers(), isEmpty);
+      final restored = PersistedRoom.fromJson(room.toJson());
+      expect(restored.roomId, room.roomId);
+      expect(restored.name, room.name);
+      expect(restored.cwd, room.cwd);
+      expect(restored.startedAt, room.startedAt);
+      expect(restored.localName, room.localName);
+      expect(restored.model, room.model);
     });
   });
 
-  group('PairingStorage.wipeAll (plan 23 sync-reset)', () {
-    test('clears every peer + every persisted rooms entry', () async {
-      final fake = _FakeSecureStorage();
-      final storage = PairingStorage(fake);
-      const a = PeerRecord(
-        remoteEpk: 'epk-a',
-        sessionName: 'A',
-        relayUrl: 'ws://x',
-        pairedAt: '2026-01-01T00:00:00Z',
+  group('secure-storage legacy import', () {
+    test('imports indexed peers and rooms once without deleting old keys', () async {
+      final database = AppDatabase.memory();
+      addTearDown(database.dispose);
+      final legacy = _FakeSecureStorage(
+        failReadAll: true,
+        values: <String, String>{
+          'dev.remotepi.peers_index': jsonEncode(<String>[_peer.remoteEpk]),
+          'dev.remotepi.peers:${_peer.remoteEpk}': jsonEncode(_peer.toJson()),
+          'dev.remotepi.rooms:${_peer.remoteEpk}': jsonEncode(<Object?>[
+            const PersistedRoom(
+              roomId: 'main',
+              startedAt: 7,
+              model: 'anthropic:claude-sonnet-4-5',
+            ).toJson(),
+          ]),
+        },
       );
-      const b = PeerRecord(
-        remoteEpk: 'epk-b',
-        sessionName: 'B',
-        relayUrl: 'ws://x',
-        pairedAt: '2026-01-01T00:00:00Z',
+
+      final storage = await _storage(database, legacyStore: legacy);
+      expect(await storage.listPeers(), <PeerRecord>[_peer]);
+      expect((await storage.loadRooms(_peer.remoteEpk)).single.model,
+          'anthropic:claude-sonnet-4-5');
+      expect(legacy.values['dev.remotepi.peers:${_peer.remoteEpk}'], isNotNull);
+      expect(legacy.values['dev.remotepi.rooms:${_peer.remoteEpk}'], isNotNull);
+
+      final imported = database.db.select(
+        "SELECT row_count FROM legacy_imports WHERE source = 'pairing.secure_storage'",
       );
-      await storage.savePeer(a);
-      await storage.savePeer(b);
-      await storage.saveRooms('epk-a', const [
-        PersistedRoom(roomId: 'main', startedAt: 1700000000000),
-      ]);
+      expect(imported.single['row_count'], 2);
 
-      expect(await storage.listPeers(), hasLength(2));
-      expect(await storage.loadRooms('epk-a'), hasLength(1));
-
-      await storage.wipeAll();
-
-      expect(await storage.listPeers(), isEmpty);
-      expect(await storage.loadRooms('epk-a'), isEmpty);
+      legacy.failAllReads = true;
+      final restarted = await _storage(database, legacyStore: legacy);
+      expect(await restarted.listPeers(), <PeerRecord>[_peer]);
     });
 
-    test('notifies listeners exactly once', () async {
-      final storage = PairingStorage(_FakeSecureStorage());
-      var notifications = 0;
-      storage.addListener(() => notifications++);
+    test('imports pre-index inventory when enumeration succeeds', () async {
+      final database = AppDatabase.memory();
+      addTearDown(database.dispose);
+      final legacy = _FakeSecureStorage(values: <String, String>{
+        'dev.remotepi.peers:${_peer.remoteEpk}': jsonEncode(_peer.toJson()),
+      });
 
-      await storage.wipeAll();
-
-      expect(notifications, 1);
+      final storage = await _storage(database, legacyStore: legacy);
+      expect(await storage.loadPeer(_peer.remoteEpk), _peer);
+      expect(legacy.values, contains('dev.remotepi.peers:${_peer.remoteEpk}'));
     });
-  });
 
-  group('PairingStorage — Android readAll resilience & durable index', () {
-    test('savePeer then listPeers survives when readAll returns empty map', () async {
-      final fake = _EmptyReadAllFakeSecureStorage();
-      final storage = PairingStorage(fake);
-      const r = PeerRecord(
-        remoteEpk: 'epk-test',
-        sessionName: 'Mac',
-        relayUrl: 'ws://relay',
-        pairedAt: '2026-09-29T00:00:00Z',
+    test('ignores orphaned pre-index room cache while preserving its source',
+        () async {
+      const peer = PeerRecord(
+        remoteEpk: 'retained-peer',
+        sessionName: 'Retained',
+        relayUrl: 'https://relay.example.test',
+        pairedAt: '2026-08-01T00:00:00Z',
       );
-      await storage.savePeer(r);
+      final legacy = _FakeSecureStorage(values: <String, String>{
+        '$legacyPeersService:${peer.remoteEpk}': jsonEncode(peer.toJson()),
+        '$legacyRoomsService:${peer.remoteEpk}': jsonEncode(<Object?>[
+          const PersistedRoom(roomId: 'main', startedAt: 1).toJson(),
+        ]),
+        '$legacyRoomsService:already-revoked': jsonEncode(<Object?>[
+          const PersistedRoom(roomId: 'stale', startedAt: 2).toJson(),
+        ]),
+      });
+      final database = AppDatabase.memory();
+      addTearDown(database.dispose);
 
-      final all = await storage.listPeers();
-      expect(all, hasLength(1));
-      expect(all.first.remoteEpk, 'epk-test');
-    });
+      final storage = await _storage(database, legacyStore: legacy);
 
-    test('cold-start listPeers loads peers via durable index when readAll returns empty map', () async {
-      final fake = _EmptyReadAllFakeSecureStorage();
-      final storage1 = PairingStorage(fake);
-      const r = PeerRecord(
-        remoteEpk: 'epk-test',
-        sessionName: 'Mac',
-        relayUrl: 'ws://relay',
-        pairedAt: '2026-09-29T00:00:00Z',
+      expect(await storage.listPeers(), <PeerRecord>[peer]);
+      expect(await storage.loadRooms(peer.remoteEpk), hasLength(1));
+      expect(
+        legacy.values,
+        contains('$legacyRoomsService:already-revoked'),
+        reason: 'migration never mutates supported legacy source data',
       );
-      await storage1.savePeer(r);
-
-      // Simulate app restart: brand-new PairingStorage instance on same underlying store
-      final storage2 = PairingStorage(fake);
-      final all = await storage2.listPeers();
-      expect(all, hasLength(1));
-      expect(all.first.remoteEpk, 'epk-test');
     });
 
-    test('migrates existing legacy keys into durable index when readAll succeeds', () async {
-      final fake = _FakeSecureStorage();
-      fake._store['dev.remotepi.peers:epk-legacy'] = jsonEncode(const PeerRecord(
-        remoteEpk: 'epk-legacy',
+    test('imports legacy peer URL into the selected relay namespace', () async {
+      const legacyPeer = PeerRecord(
+        remoteEpk: 'legacy-endpoint-peer',
+        sessionName: 'Legacy endpoint',
+        relayUrl: 'http://relay.example.test',
+        pairedAt: '2026-08-01T00:00:00Z',
+      );
+      final database = AppDatabase.memory();
+      addTearDown(database.dispose);
+      final legacy = _FakeSecureStorage(values: <String, String>{
+        'dev.remotepi.peers_index':
+            jsonEncode(<String>[legacyPeer.remoteEpk]),
+        'dev.remotepi.peers:${legacyPeer.remoteEpk}':
+            jsonEncode(legacyPeer.toJson()),
+      });
+
+      final storage = await _storage(
+        database,
+        legacyStore: legacy,
+        relayUrl: 'http://relay.example.test:3000',
+      );
+
+      expect(await storage.listPeers(), <PeerRecord>[legacyPeer]);
+      expect(
+        (await storage.listPeers()).single.relayUrl,
+        'http://relay.example.test',
+        reason: 'legacy payload is preserved but never used as scope routing',
+      );
+    });
+
+    test('canonicalizes legacy standard-base64 identity without data loss',
+        () async {
+      const standard =
+          'Bz02uLiwrmQZ0S8qiwtFJAt0KzUvrgepYO/oMQ6yyQE=';
+      const urlSafe =
+          'Bz02uLiwrmQZ0S8qiwtFJAt0KzUvrgepYO_oMQ6yyQE';
+      const legacyPeer = PeerRecord(
+        remoteEpk: standard,
         sessionName: 'Legacy PC',
-        relayUrl: 'ws://relay',
-        pairedAt: '2026-09-29T00:00:00Z',
-      ).toJson());
-      expect(fake._store.containsKey('dev.remotepi.peers_index'), isFalse);
-
-      final storage = PairingStorage(fake);
-      final all = await storage.listPeers();
-      expect(all, hasLength(1));
-      expect(all.first.remoteEpk, 'epk-legacy');
-      expect(fake._store.containsKey('dev.remotepi.peers_index'), isTrue);
-    });
-
-    test('deletePeer updates durable index even if readAll returns empty', () async {
-      final fake = _EmptyReadAllFakeSecureStorage();
-      final storage = PairingStorage(fake);
-      const r1 = PeerRecord(
-        remoteEpk: 'epk-1',
-        sessionName: 'PC 1',
-        relayUrl: 'ws://relay',
-        pairedAt: '2026-09-29T00:00:00Z',
+        relayUrl: 'https://relay.example.test',
+        pairedAt: '2026-08-01T00:00:00Z',
       );
-      const r2 = PeerRecord(
-        remoteEpk: 'epk-2',
-        sessionName: 'PC 2',
-        relayUrl: 'ws://relay',
-        pairedAt: '2026-09-29T00:00:00Z',
+      final database = AppDatabase.memory();
+      addTearDown(database.dispose);
+      final legacy = _FakeSecureStorage(values: <String, String>{
+        'dev.remotepi.peers_index': jsonEncode(<String>[standard]),
+        'dev.remotepi.peers:$standard': jsonEncode(legacyPeer.toJson()),
+        'dev.remotepi.rooms:$standard': jsonEncode(<Object?>[
+          const PersistedRoom(roomId: 'main', startedAt: 1).toJson(),
+        ]),
+      });
+
+      final storage = await _storage(database, legacyStore: legacy);
+      expect((await storage.listPeers()).single.remoteEpk, urlSafe);
+      expect(await storage.loadRooms(standard), hasLength(1));
+      expect(legacy.values, contains('dev.remotepi.peers:$standard'));
+    });
+
+    test('known unreadable record rolls back import and leaves no marker', () async {
+      final database = AppDatabase.memory();
+      addTearDown(database.dispose);
+      final legacy = _FakeSecureStorage(
+        values: <String, String>{
+          'dev.remotepi.peers_index': jsonEncode(<String>['epk-good', 'epk-bad']),
+          'dev.remotepi.peers:epk-good': jsonEncode(const PeerRecord(
+            remoteEpk: 'epk-good',
+            sessionName: 'good',
+            relayUrl: 'https://relay.example.test',
+            pairedAt: '2026-09-01T00:00:00Z',
+          ).toJson()),
+          'dev.remotepi.peers:epk-bad': jsonEncode(const PeerRecord(
+            remoteEpk: 'epk-bad',
+            sessionName: 'bad',
+            relayUrl: 'https://relay.example.test',
+            pairedAt: '2026-09-01T00:00:00Z',
+          ).toJson()),
+        },
+        unreadableKeys: <String>{'dev.remotepi.peers:epk-bad'},
       );
-      await storage.savePeer(r1);
-      await storage.savePeer(r2);
-      expect(await storage.listPeers(), hasLength(2));
+      final storage = PairingStorage(database, legacyStore: legacy);
 
-      await storage.deletePeer('epk-1');
-      expect(await storage.listPeers(), hasLength(1));
-
-      final restarted = PairingStorage(fake);
-      final list = await restarted.listPeers();
-      expect(list, hasLength(1));
-      expect(list.first.remoteEpk, 'epk-2');
-    });
-
-    test('cold-start savePeer hydrates existing peers before persisting index (old + new preserved)', () async {
-      final fake = _EmptyReadAllFakeSecureStorage();
-      final s1 = PairingStorage(fake);
-      await s1.savePeer(const PeerRecord(
-        remoteEpk: 'epk-old',
-        sessionName: 'Old Mac',
-        relayUrl: 'ws://relay',
-        pairedAt: '2026-09-20T00:00:00Z',
-      ));
-
-      // Cold start: brand-new instance, immediately call savePeer WITHOUT calling listPeers first
-      final s2 = PairingStorage(fake);
-      await s2.savePeer(const PeerRecord(
-        remoteEpk: 'epk-new',
-        sessionName: 'New Mac',
-        relayUrl: 'ws://relay',
-        pairedAt: '2026-09-29T00:00:00Z',
-      ));
-
-      final peers = await s2.listPeers();
-      final epks = peers.map((p) => p.remoteEpk).toSet();
-      expect(epks, contains('epk-old'));
-      expect(epks, contains('epk-new'));
-      expect(peers, hasLength(2));
-    });
-
-    test('cold-start deletePeer hydrates existing peers before rewriting index', () async {
-      final fake = _EmptyReadAllFakeSecureStorage();
-      final s1 = PairingStorage(fake);
-      await s1.savePeer(const PeerRecord(
-        remoteEpk: 'epk-1',
-        sessionName: 'Mac 1',
-        relayUrl: 'ws://relay',
-        pairedAt: '2026-09-20T00:00:00Z',
-      ));
-      await s1.savePeer(const PeerRecord(
-        remoteEpk: 'epk-2',
-        sessionName: 'Mac 2',
-        relayUrl: 'ws://relay',
-        pairedAt: '2026-09-20T00:00:00Z',
-      ));
-
-      // Cold start: immediately call deletePeer WITHOUT listPeers first
-      final s2 = PairingStorage(fake);
-      await s2.deletePeer('epk-1');
-
-      final peers = await s2.listPeers();
-      expect(peers, hasLength(1));
-      expect(peers.first.remoteEpk, 'epk-2');
-    });
-
-    test('failed storage write does not leave phantom record in cache', () async {
-      final fake = _FailingWriteSecureStorage();
-      final storage = PairingStorage(fake);
-
-      fake.failNextWrite = true;
+      await expectLater(
+        storage.initialize(ownerPk: _ownerA, relayUrl: 'https://relay.example.test'),
+        throwsA(isA<PairingMigrationException>()),
+      );
+      expect(database.db.select('SELECT * FROM pairing_peers'), isEmpty);
       expect(
-        () => storage.savePeer(const PeerRecord(
-          remoteEpk: 'epk-fail',
-          sessionName: 'Fail',
-          relayUrl: 'ws://relay',
-          pairedAt: '2026-09-29T00:00:00Z',
-        )),
-        throwsA(isA<Exception>()),
+        database.db.select(
+          "SELECT * FROM legacy_imports WHERE source = 'pairing.secure_storage'",
+        ),
+        isEmpty,
       );
-
-      final peers = await storage.listPeers();
-      expect(peers.where((p) => p.remoteEpk == 'epk-fail'), isEmpty);
+      expect(legacy.values, contains('dev.remotepi.peers:epk-good'));
+      expect(legacy.values, contains('dev.remotepi.peers:epk-bad'));
     });
 
-    test('wipeAll deletes individual indexed keys even if readAll returns empty', () async {
-      final fake = _EmptyReadAllFakeSecureStorage();
-      final storage = PairingStorage(fake);
-      await storage.savePeer(const PeerRecord(
-        remoteEpk: 'epk-target',
-        sessionName: 'Target',
-        relayUrl: 'ws://relay',
-        pairedAt: '2026-09-29T00:00:00Z',
-      ));
-      await storage.saveRooms('epk-target', const [
-        PersistedRoom(roomId: 'main', startedAt: 1700000000000),
+    test('unreadable inventory fails closed instead of becoming empty', () async {
+      final database = AppDatabase.memory();
+      addTearDown(database.dispose);
+      final storage = PairingStorage(
+        database,
+        legacyStore: _FakeSecureStorage(failAllReads: true),
+      );
+
+      await expectLater(
+        storage.initialize(ownerPk: _ownerA, relayUrl: 'https://relay.example.test'),
+        throwsA(isA<PairingMigrationException>()),
+      );
+      expect(database.db.select('SELECT * FROM pairing_peers'), isEmpty);
+    });
+  });
+
+  group('SQLite durability and scope', () {
+    test('database close/reopen retains peers, rooms, and pending intent',
+        () async {
+      final directory =
+          await Directory.systemTemp.createTemp('remote_pi_pairing_test_');
+      addTearDown(() => directory.delete(recursive: true));
+      final path = '${directory.path}/app.sqlite';
+
+      final firstDatabase = AppDatabase.openForTest(path);
+      addTearDown(firstDatabase.dispose);
+      final first = await _storage(
+        firstDatabase,
+        legacyStore: _FakeSecureStorage(),
+      );
+      await first.savePeer(_peer, intent: PeerSaveIntent.enroll);
+      await first.saveRooms(_peer.remoteEpk, const <PersistedRoom>[
+        PersistedRoom(roomId: 'main', startedAt: 99, model: 'openai:gpt-5'),
       ]);
+      firstDatabase.dispose();
 
-      expect(await fake.read(key: 'dev.remotepi.peers:epk-target'), isNotNull);
-      expect(await fake.read(key: 'dev.remotepi.rooms:epk-target'), isNotNull);
+      final secondDatabase = AppDatabase.openForTest(path);
+      addTearDown(secondDatabase.dispose);
+      final second = await _storage(
+        secondDatabase,
+        legacyStore: _FakeSecureStorage(failAllReads: true),
+      );
+      expect(await second.loadPeer(_peer.remoteEpk), _peer);
+      expect((await second.loadRooms(_peer.remoteEpk)).single.startedAt, 99);
+      expect(second.pendingMembershipOperationCount, 1);
+    });
 
-      await storage.wipeAll();
+    test('membership intent keeps legacy peer URL inside active scope',
+        () async {
+      final database = AppDatabase.memory();
+      addTearDown(database.dispose);
+      final storage = await _storage(
+        database,
+        legacyStore: _FakeSecureStorage(),
+        relayUrl: 'http://relay.example.test:3000',
+      );
+      const peer = PeerRecord(
+        remoteEpk: 'legacy-payload-peer',
+        sessionName: 'PC',
+        relayUrl: 'http://relay.example.test',
+        pairedAt: '2026-09-01T00:00:00Z',
+      );
 
-      expect(await fake.read(key: 'dev.remotepi.peers:epk-target'), isNull);
-      expect(await fake.read(key: 'dev.remotepi.rooms:epk-target'), isNull);
+      await storage.savePeer(peer, intent: PeerSaveIntent.enroll);
+
+      expect(await storage.listPeers(), <PeerRecord>[peer]);
+      expect(storage.pendingMembershipOperationCount, 1);
+    });
+
+    test('late initialization cannot overwrite a newer relay scope', () async {
+      const peer = PeerRecord(
+        remoteEpk: 'race-peer',
+        sessionName: 'PC',
+        relayUrl: 'http://legacy.example.test',
+        pairedAt: '2026-09-01T00:00:00Z',
+      );
+      final legacy = _BlockingFirstIndexReadStorage(values: <String, String>{
+        legacyPeersIndexKey: jsonEncode(<String>[peer.remoteEpk]),
+        '$legacyPeersService:${peer.remoteEpk}': jsonEncode(peer.toJson()),
+      });
+      final database = AppDatabase.memory();
+      addTearDown(database.dispose);
+      final storage = PairingStorage(database, legacyStore: legacy);
+
+      final staleInitialization = storage.initialize(
+        ownerPk: _ownerA,
+        relayUrl: 'http://old-scope.example.test',
+      );
+      await legacy.firstReadStarted.future;
+      await storage.initialize(
+        ownerPk: _ownerA,
+        relayUrl: 'http://new-scope.example.test',
+      );
+      legacy.releaseFirstRead.complete();
+      await staleInitialization;
+
+      expect(
+        storage.membershipScope?.relayUrl,
+        'http://new-scope.example.test',
+      );
+      expect(await storage.listPeers(), <PeerRecord>[peer]);
+      await storage.initialize(
+        ownerPk: _ownerA,
+        relayUrl: 'http://old-scope.example.test',
+      );
       expect(await storage.listPeers(), isEmpty);
     });
 
-    test('transient per-key read failure preserves unresolved epk in index on save, and later recovery retains both', () async {
-      final fake = _EmptyReadAllFakeSecureStorage();
-      final s1 = PairingStorage(fake);
-      await s1.savePeer(const PeerRecord(
-        remoteEpk: 'epk-a',
-        sessionName: 'PC A',
-        relayUrl: 'ws://relay',
-        pairedAt: '2026-09-20T00:00:00Z',
-      ));
-      await s1.savePeer(const PeerRecord(
-        remoteEpk: 'epk-b',
-        sessionName: 'PC B',
-        relayUrl: 'ws://relay',
-        pairedAt: '2026-09-20T00:00:00Z',
-      ));
+    test('owner and normalized relay scopes never expose each other', () async {
+      final database = AppDatabase.memory();
+      addTearDown(database.dispose);
+      final storage = await _storage(database, legacyStore: _FakeSecureStorage());
+      await storage.savePeer(_peer, intent: PeerSaveIntent.enroll);
 
-      var failEpkB = true;
-      final interceptedFake = _InterceptingSecureStorage(fake, onRead: (key) {
-        if (failEpkB && key == 'dev.remotepi.peers:epk-b') {
-          throw Exception('Transient read failure');
-        }
-        return null;
-      });
-
-      final s2 = PairingStorage(interceptedFake);
-      await s2.savePeer(const PeerRecord(
-        remoteEpk: 'epk-c',
-        sessionName: 'PC C',
-        relayUrl: 'ws://relay',
-        pairedAt: '2026-09-29T00:00:00Z',
-      ));
-
-      final rawIndex = await fake.read(key: 'dev.remotepi.peers_index');
-      expect(rawIndex, isNotNull);
-      final indexedEpks = (jsonDecode(rawIndex!) as List<dynamic>).cast<String>();
-      expect(indexedEpks, contains('epk-a'));
-      expect(indexedEpks, contains('epk-c'));
-      expect(indexedEpks, contains('epk-b'));
-
-      failEpkB = false;
-      final all = await s2.listPeers();
-      final allEpks = all.map((p) => p.remoteEpk).toSet();
-      expect(allEpks, contains('epk-a'));
-      expect(allEpks, contains('epk-b'));
-      expect(allEpks, contains('epk-c'));
-      expect(all, hasLength(3));
-    });
-
-    test('fails closed for mutations when index key is unreadable', () async {
-      final fake = _EmptyReadAllFakeSecureStorage();
-      final intercepted = _InterceptingSecureStorage(fake, onRead: (key) {
-        if (key == 'dev.remotepi.peers_index') {
-          throw Exception('Keystore locked or corrupted index');
-        }
-        return null;
-      });
-
-      final storage = PairingStorage(intercepted);
-      expect(
-        () => storage.savePeer(const PeerRecord(
-          remoteEpk: 'epk-new',
-          sessionName: 'New',
-          relayUrl: 'ws://relay',
-          pairedAt: '2026-09-29T00:00:00Z',
-        )),
-        throwsA(isA<StateError>()),
+      await storage.initialize(
+        ownerPk: _ownerA,
+        relayUrl: 'https://other.example.test/',
       );
+      expect(await storage.listPeers(), isEmpty);
+
+      await storage.initialize(
+        ownerPk: _ownerB,
+        relayUrl: 'HTTPS://RELAY.EXAMPLE.TEST/',
+      );
+      expect(await storage.listPeers(), isEmpty);
+
+      await storage.initialize(
+        ownerPk: _ownerA,
+        relayUrl: 'wss://relay.example.test',
+      );
+      expect(await storage.listPeers(), <PeerRecord>[_peer]);
     });
 
-    test('failed index write propagates exception and does not emit successful save', () async {
-      final fake = _FailingWriteSecureStorage();
-      final storage = PairingStorage(fake);
+    test('local metadata never creates intent or resurrects a revoked peer', () async {
+      final database = AppDatabase.memory();
+      addTearDown(database.dispose);
+      final storage = await _storage(database, legacyStore: _FakeSecureStorage());
+      await storage.savePeer(_peer, intent: PeerSaveIntent.enroll);
+      await storage.savePeer(
+        _peer.copyWith(roomId: 'room-2'),
+        intent: PeerSaveIntent.localMetadata,
+      );
+      expect(storage.pendingMembershipOperationCount, 1);
+      expect((await storage.loadPeer(_peer.remoteEpk))?.roomId, 'room-2');
+
+      await storage.deletePeer(_peer.remoteEpk);
+      await storage.savePeer(
+        _peer.copyWith(roomId: 'stale-room'),
+        intent: PeerSaveIntent.localMetadata,
+      );
+      expect(await storage.loadPeer(_peer.remoteEpk), isNull);
+      expect(storage.pendingMembershipOperationCount, 2);
+    });
+
+    test('nickname intent is durable and not confused with local metadata', () async {
+      final database = AppDatabase.memory();
+      addTearDown(database.dispose);
+      final storage = await _storage(database, legacyStore: _FakeSecureStorage());
+      await storage.savePeer(_peer, intent: PeerSaveIntent.enroll);
+      await storage.savePeer(
+        _peer.copyWith(nickname: 'Renamed'),
+        intent: PeerSaveIntent.nickname,
+      );
+
+      final restarted = await _storage(database);
+      expect((await restarted.loadPeer(_peer.remoteEpk))?.nickname, 'Renamed');
+      expect(restarted.pendingMembershipOperationCount, 2);
+    });
+
+    test('wipeAll atomically removes projection, rooms, journal, and snapshots', () async {
+      final database = AppDatabase.memory();
+      addTearDown(database.dispose);
+      final storage = await _storage(database, legacyStore: _FakeSecureStorage());
+      await storage.savePeer(_peer, intent: PeerSaveIntent.enroll);
+      await storage.saveRooms(_peer.remoteEpk, const <PersistedRoom>[
+        PersistedRoom(roomId: 'main', startedAt: 1),
+      ]);
+
       var notifications = 0;
       storage.addListener(() => notifications++);
+      await storage.wipeAll();
 
-      fake.failIndexWrite = true;
+      expect(storage.isInitialized, isFalse);
+      expect(database.db.select('SELECT * FROM pairing_peers'), isEmpty);
+      expect(database.db.select('SELECT * FROM pairing_rooms'), isEmpty);
       expect(
-        () => storage.savePeer(const PeerRecord(
-          remoteEpk: 'epk-fail-idx',
-          sessionName: 'FailIdx',
-          relayUrl: 'ws://relay',
-          pairedAt: '2026-09-29T00:00:00Z',
-        )),
-        throwsA(isA<Exception>()),
+        database.db.select('SELECT * FROM legacy_membership_recovery'),
+        isEmpty,
       );
+      expect(database.db.select('SELECT * FROM membership_operations'), isEmpty);
+      expect(database.db.select('SELECT * FROM mesh_sync_state'), isEmpty);
+      expect(notifications, 1);
 
-      expect(notifications, 0);
-      final peers = await storage.listPeers();
-      expect(peers.where((p) => p.remoteEpk == 'epk-fail-idx'), isEmpty);
+      await storage.initialize(
+        ownerPk: _ownerA,
+        relayUrl: 'https://relay.example.test',
+      );
+      expect(await storage.listPeers(), isEmpty);
+      expect(await storage.loadRooms(_peer.remoteEpk), isEmpty);
     });
   });
 }
