@@ -388,6 +388,9 @@ class HomePage extends StatelessWidget {
           room: it.room,
           onOpen: () => _open(context, vm, it.peer, it.room),
           onLongPress: () => _showSessionMenu(context, vm, it),
+          onRestart: (isLive || isWorking)
+              ? () => _confirmRestart(context, vm, it)
+              : null,
           onDelete: () => _confirmDelete(context, vm, it),
         ),
         Divider(color: colors.border, height: 1),
@@ -413,6 +416,19 @@ class HomePage extends StatelessWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
+              if (vm.isRoomLive(it.peer.remoteEpk, it.room.roomId) ||
+                  vm.isRoomWorking(it.peer.remoteEpk, it.room.roomId))
+                ListTile(
+                  leading: Icon(LucideIcons.rotateCw, color: colors.accent),
+                  title: Text(
+                    'Restart session',
+                    style: TextStyle(color: colors.text),
+                  ),
+                  onTap: () {
+                    Navigator.of(sheetCtx).pop();
+                    _confirmRestart(context, vm, it);
+                  },
+                ),
               ListTile(
                 leading: Icon(LucideIcons.pencil, color: colors.accent),
                 title: Text(
@@ -492,6 +508,52 @@ class HomePage extends StatelessWidget {
     );
     if (result == null) return;
     await vm.renameRoom(it.peer.remoteEpk, it.room.roomId, result);
+  }
+
+  Future<void> _confirmRestart(
+    BuildContext context,
+    HomeViewModel vm,
+    HomeItem it,
+  ) async {
+    final live =
+        vm.isRoomLive(it.peer.remoteEpk, it.room.roomId) ||
+        vm.isRoomWorking(it.peer.remoteEpk, it.room.roomId);
+    if (!live) return;
+    final working = vm.isRoomWorking(it.peer.remoteEpk, it.room.roomId);
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (dCtx) {
+        final colors = dCtx.colors;
+        return AlertDialog(
+          backgroundColor: colors.bg,
+          title: Text(
+            'Restart session?',
+            style: TextStyle(color: colors.text),
+          ),
+          content: Text(
+            'Sends /restart to this agent on your Mac — omp restarts with '
+            'the same launch flags, resuming this session.'
+            '${working ? ' A turn is running and will be interrupted.' : ''}',
+            style: TextStyle(color: colors.muted, fontSize: 12),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dCtx).pop(false),
+              child: Text('Cancel', style: TextStyle(color: colors.muted)),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(dCtx).pop(true),
+              child: Text(
+                'Restart',
+                style: TextStyle(color: colors.accent),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+    if (ok != true) return;
+    await vm.restartSession(it.peer.remoteEpk, it.room.roomId);
   }
 
   Future<void> _confirmDelete(

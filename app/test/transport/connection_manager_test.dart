@@ -1222,6 +1222,51 @@ void _registerRoomsTests() {
       },
     );
 
+    test(
+      'restartRoom sends /restart to the target room and restores the active room',
+      () async {
+        final ch = _ControllableChannel();
+        final cm = ConnectionManager(
+          factory: (_, _) async => ch,
+          storage: _FakeStorage([]),
+          emitDebounce: Duration.zero,
+        );
+        await cm.connectTo(_fakePeer());
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+
+        ch.pushControl(const RoomAnnounced(
+          peer: 'epkA',
+          roomId: 'r1',
+          name: 'one',
+          cwd: '/a',
+          startedAt: 1000,
+        ));
+        ch.pushControl(const RoomAnnounced(
+          peer: 'epkA',
+          roomId: 'r2',
+          name: 'two',
+          cwd: '/b',
+          startedAt: 2000,
+        ));
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+        cm.switchRoom('r1');
+
+        final sent = cm.restartRoom('epkA', 'r2');
+        expect(sent, isTrue);
+        expect(ch.sent, hasLength(1));
+        final msg = ch.sent.single as UserMessage;
+        expect(msg.text, '/restart');
+        // Envelope targeting restored — the user's open chat is unaffected.
+        expect(ch.activeRoom, 'r1');
+
+        // Not-live room: nothing sent.
+        expect(cm.restartRoom('epkA', 'rX'), isFalse);
+        expect(ch.sent, hasLength(1));
+
+        cm.dispose();
+      },
+    );
+
     test('reconnect drops cached rooms so Home shows the new relay', () async {
       final ch1 = _ControllableChannel();
       final ch2 = _ControllableChannel();

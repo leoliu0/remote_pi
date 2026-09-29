@@ -334,6 +334,56 @@ describe("handleModelSet", () => {
     expect(sender.sent[0]).toMatchObject({ type: "action_ok", action: "model_set" });
     expect(persisted).toEqual([{ provider: "openai-codex", modelId: "gpt-5.6-sol" }]);
   });
+
+  test("exact requested provider is prioritized over alias (e.g. openai-codex -> selects openai-codex, not openai)", async () => {
+    const codexModel: SdkModelLike = {
+      id: "gpt-6-astra",
+      name: "GPT-6 Astra",
+      provider: "openai-codex",
+      reasoning: true,
+      contextWindow: 272000,
+    };
+    const apiModel: SdkModelLike = {
+      id: "gpt-6-astra",
+      name: "GPT-6 Astra",
+      provider: "openai",
+      reasoning: true,
+      contextWindow: 272000,
+    };
+    const reg = {
+      refresh: vi.fn(),
+      find: vi.fn((provider: string, id: string) => {
+        if (provider === "openai-codex" && id === "gpt-6-astra") return codexModel;
+        if (provider === "openai" && id === "gpt-6-astra") return apiModel;
+        return undefined;
+      }),
+      getAll: () => [apiModel, codexModel],
+      getAvailable: () => [apiModel, codexModel],
+    } as unknown as ActionModelRegistry;
+
+    const setModelCalls: SdkModelLike[] = [];
+    const pi = fakePi({
+      setModel: async (m) => {
+        setModelCalls.push(m);
+        return true;
+      },
+    });
+
+    const sender = makeSender();
+    const persisted: Array<{ provider: string; modelId: string }> = [];
+    await handleModelSet(
+      pi,
+      null,
+      reg,
+      sender,
+      { type: "model_set", id: "r_exact", provider: "openai-codex", model_id: "gpt-6-astra" },
+      (p, m) => persisted.push({ provider: p, modelId: m }),
+    );
+
+    expect(sender.sent[0]).toMatchObject({ type: "action_ok", action: "model_set" });
+    expect(persisted).toEqual([{ provider: "openai-codex", modelId: "gpt-6-astra" }]);
+    expect(setModelCalls[0].provider).toBe("openai-codex");
+  });
 });
 
 // ── list_models ────────────────────────────────────────────────────────────

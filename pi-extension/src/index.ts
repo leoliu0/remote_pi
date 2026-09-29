@@ -103,7 +103,7 @@ import { acquireCwdLock, type AcquiredLock } from "./session/cwd_lock.js";
 import { addDaemon, listDaemons, removeDaemon } from "./daemon/registry.js";
 import { callSupervisor, supervisorOnline, SupervisorOfflineError } from "./daemon/client.js";
 import type { ControlRequest, DaemonInfo } from "./daemon/control_protocol.js";
-import { EXIT_DAEMON_FRESH_SESSION } from "./daemon/rpc_child.js";
+import { EXIT_DAEMON_FRESH_SESSION, EXIT_DAEMON_RESTART } from "./daemon/rpc_child.js";
 import { installService, uninstallService, linkCliBinaries, unlinkCliBinaries, LAUNCHD_LABEL, SYSTEMD_UNIT, WINDOWS_TASK_NAME } from "./daemon/install.js";
 import {
   defaultAgentName,
@@ -1656,6 +1656,62 @@ function _isCurrentRootLifecycle(generation: number): boolean {
   return !_disposed && generation === _rootLifecycleGeneration;
 }
 
+// ── Auto-start/rearm retry (silent-relay-loss fix, live incident 2026-09-21) ──
+// `void _cmdRoot(...)` fired from session_start used to die as an UNHANDLED
+// REJECTION on any transient failure (e.g. a config read on a Dropbox-synced
+// cwd erroring mid-sync, a keyring hiccup): one bad moment after a session
+// replacement and the relay never came back — zero reconnect attempts, nothing
+// logged. Mirrors the relay-WS reconnect ladder: the rejection is captured,
+// surfaced as a warning notify, and retried with the same bounded backoff.
+// Canceled by stop/shutdown via the root lifecycle generation, exactly like a
+// pending reconnect timer.
+let _rootRetryTimer: ReturnType<typeof setTimeout> | null = null;
+let _rootRetryAttempt = 0;
+
+/** Fire-and-forget `_cmdRoot` with rejection capture + backoff retry. Use in
+ *  place of bare `void _cmdRoot(...)` anywhere the caller cannot await. */
+function _launchRoot(
+  ctx: Pick<ExtensionContext, "ui" | "cwd">,
+  restartAuthority?: RootRestartAuthority,
+): void {
+  _cmdRoot(ctx, restartAuthority).catch((err: unknown) => {
+    const generation =
+      restartAuthority?.rootLifecycleGeneration ?? _rootLifecycleGeneration;
+    try {
+      ctx.ui?.notify?.(
+        `[remote-pi] Auto-start failed (${String(err)}) — retrying…`,
+        "warning",
+      );
+    } catch {
+      // Best-effort: a throwing notify must never crash the host process.
+    }
+    if (!_isCurrentRootLifecycle(generation)) return; // deliberate stop/shutdown won
+    _scheduleRootRetry(generation, ctx, restartAuthority);
+  });
+}
+
+function _scheduleRootRetry(
+  lifecycleGeneration: number,
+  ctx: Pick<ExtensionContext, "ui" | "cwd">,
+  restartAuthority?: RootRestartAuthority,
+): void {
+  if (_rootRetryTimer !== null) return; // already scheduled
+  if (!_isCurrentRootLifecycle(lifecycleGeneration)) return;
+  const idx = Math.min(_rootRetryAttempt, RECONNECT_BACKOFFS_MS.length - 1);
+  const delay = RECONNECT_BACKOFFS_MS[idx]!;
+  _rootRetryAttempt += 1;
+  _rootRetryTimer = setTimeout(() => {
+    _rootRetryTimer = null;
+    if (!_isCurrentRootLifecycle(lifecycleGeneration)) return;
+    _launchRoot(ctx, restartAuthority);
+  }, delay);
+}
+
+/** Test-only: true while an auto-start retry timer is pending. */
+export function _hasPendingRootRetryForTest(): boolean {
+  return _rootRetryTimer !== null;
+}
+
 /** Test-only: exposes pending reconnect timer state. */
 export function _hasPendingReconnect(): boolean {
   return _reconnectTimer !== null;
@@ -1893,6 +1949,14 @@ function _goIdle(byeReason?: import("./protocol/types.js").ByeReason): void {
     _reconnectTimer = null;
   }
   _reconnectAttempt = 0;
+  // Cancel any pending auto-start retry. Same rationale as the reconnect
+  // timer above: a deliberate stop/off must win over a scheduled retry.
+  if (_rootRetryTimer !== null) {
+    clearTimeout(_rootRetryTimer);
+    _rootRetryTimer = null;
+  }
+  _rootRetryAttempt = 0;
+
 
   _stopAutoListener?.();
   _stopAutoListener = null;
@@ -3025,6 +3089,23 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   // New session. Fires on startup/new/fork/reload/resume; the ctx is always
   // bound to the current session.
   pi.on("session_start", (_event, ctx) => {
+    // Post-shutdown rearm MUST run BEFORE the subagent early-return. A
+    // module-reuse host can deliver the replacement MAIN session with a
+    // subagent-looking ctx (hasUI:false custom hosts, session-file parent dirs
+    // that merely contain "_"), and gating the rearm on that detection
+    // permanently killed the relay after session_shutdown with zero reconnect
+    // attempts (live incident 2026-09-21). By SDK semantics a session_start
+    // that follows `_disposed` is the replacement main session — subagent
+    // starts never fire on a disposed module because they live INSIDE a main
+    // session, not after one.
+    if (_disposed) {
+      _disposed = false;
+      _rootRetryAttempt = 0;
+      const restartAuthority: RootRestartAuthority = {
+        rootLifecycleGeneration: _rootLifecycleGeneration,
+      };
+      _launchRoot(ctx, restartAuthority);
+    }
     if (_isSubagentSession(ctx)) return;
     _lastEventCtx = ctx;
     _pollModelAndThinkingChanges();
@@ -3036,21 +3117,11 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     if (!_extensionUiBridge) {
       _extensionUiBridge = createExtensionUiBridge(pi, _broadcastToActive, _makeExtensionUiBridgeOptions());
     }
-    // Rearm a reused-but-disposed instance. The session_shutdown teardown (below)
-    // sets _disposed=true assuming the host re-evaluates THIS module fresh for the
-    // replacement session, yielding a new instance with _disposed=false. Some hosts
-    // instead REUSE the same module instance across ctx.newSession(). Rearm that
-    // instance, but retain the shutdown generations as replacement authority:
-    // `_cmdRoot` waits for any canceled outgoing root to drain, then starts exactly
-    // one fresh lifecycle only if no later stop/shutdown superseded this session.
-    // No-op when a fresh instance IS created and at first boot.
-    if (_disposed) {
-      _disposed = false;
-      const restartAuthority: RootRestartAuthority = {
-        rootLifecycleGeneration: _rootLifecycleGeneration,
-      };
-      void _cmdRoot(ctx, restartAuthority);
-    }
+    // The rearm above (moved before the subagent gate) carries the replacement
+    // authority: `_cmdRoot` waits for any canceled outgoing root to drain, then
+    // starts exactly one fresh lifecycle only if no later stop/shutdown
+    // superseded this session. No-op when a fresh instance IS created and at
+    // first boot.
     // Auto-start remote-pi on a fresh boot when the cwd's local config has
     // auto_start_relay enabled (default true). Covers BOTH interactive
     // sessions (previously required typing /remote-pi each session) AND
@@ -3093,7 +3164,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
         const initCtx = isDaemon
           ? ({ ui: _headlessUi(), cwd: process.cwd() } as Pick<ExtensionContext, "ui" | "cwd">)
           : ctx;
-        void _cmdRoot(initCtx);
+        _launchRoot(initCtx);
       }
     }
   });
@@ -3186,7 +3257,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
         return _shortidCompletions(shortPrefix, "revoke ");
       }
       return [
-        "setup", "status", "stop",
+        "setup", "status", "stop", "restart",
         "pair", "devices", "revoke",
         "rename",
         "set-relay",
@@ -3212,6 +3283,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
       else if (sub === "setup")                  { await _cmdSetup(ctx); }
       else if (sub === "status")                 { _cmdStatus(ctx); }
       else if (sub === "stop")                   { await _cmdStop(ctx); }
+      else if (sub === "restart")                { restartSession(); }
       else if (sub === "pair" || sub.startsWith("pair ")) { await _cmdPair(ctx, sub.slice("pair".length).trim()); }
       else if (sub === "devices")                { await _cmdList(ctx); }
       else if (sub.startsWith("revoke"))         { await _cmdRevoke(sub.slice("revoke".length).trim(), ctx); }
@@ -3244,7 +3316,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
         return _shortidCompletions(shortPrefix, "revoke ");
       }
       return [
-        "setup", "status", "stop",
+        "setup", "status", "stop", "restart",
         "pair", "devices", "revoke",
         "rename",
         "set-relay",
@@ -3268,6 +3340,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
       else if (sub === "setup")                  { await _cmdSetup(ctx); }
       else if (sub === "status")                 { _cmdStatus(ctx); }
       else if (sub === "stop")                   { await _cmdStop(ctx); }
+      else if (sub === "restart")                { restartSession(); }
       else if (sub === "pair" || sub.startsWith("pair ")) { await _cmdPair(ctx, sub.slice("pair".length).trim()); }
       else if (sub === "devices")                { await _cmdList(ctx); }
       else if (sub.startsWith("revoke"))         { await _cmdRevoke(sub.slice("revoke".length).trim(), ctx); }
@@ -3299,6 +3372,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   pi.registerCommand("remote-pi setup",    { description: "Run the setup wizard and update local config", handler: async (_, ctx) => { _lastCtx = ctx; await _cmdSetup(ctx); } });
   pi.registerCommand("remote-pi status",   { description: "Show local mesh + relay status", handler: async (_, ctx) => { _lastCtx = ctx; _cmdStatus(ctx); } });
   pi.registerCommand("remote-pi stop",     { description: "Stop everything (leave local mesh + disconnect relay)", handler: async (_, ctx) => { _lastCtx = ctx; await _cmdStop(ctx); } });
+  pi.registerCommand("remote-pi restart", { description: "Restart omp with the same launch flags, resuming this session", handler: async (_, ctx) => { _lastCtx = ctx; restartSession(); } });
   pi.registerCommand("remote-pi pair",     { description: "Show a QR code to pair a new mobile device (optional: --ttl <seconds>)", handler: async (args, ctx) => { _lastCtx = ctx; await _cmdPair(ctx, args.trim()); } });
   pi.registerCommand("remote-pi devices",  { description: "List paired mobile devices", handler: async (_, ctx) => { _lastCtx = ctx; await _cmdList(ctx); } });
   pi.registerCommand("remote-pi rename",  { description: "Rename this agent in the current session (updates mesh + relay room)", handler: async (args, ctx) => { _lastCtx = ctx; await _renameAgent(args.trim()); } });
@@ -3315,6 +3389,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   pi.registerCommand("rc setup",    { description: "Run the setup wizard and update local config", handler: async (_, ctx) => { _lastCtx = ctx; await _cmdSetup(ctx); } });
   pi.registerCommand("rc status",   { description: "Show local mesh + relay status", handler: async (_, ctx) => { _lastCtx = ctx; _cmdStatus(ctx); } });
   pi.registerCommand("rc stop",     { description: "Stop everything (leave local mesh + disconnect relay)", handler: async (_, ctx) => { _lastCtx = ctx; await _cmdStop(ctx); } });
+  pi.registerCommand("rc restart",        { description: "Restart omp with the same launch flags, resuming this session", handler: async (_, ctx) => { _lastCtx = ctx; restartSession(); } });
   pi.registerCommand("rc pair",     { description: "Show a QR code to pair a new mobile device (optional: --ttl <seconds>)", handler: async (args, ctx) => { _lastCtx = ctx; await _cmdPair(ctx, args.trim()); } });
   pi.registerCommand("rc devices",  { description: "List paired mobile devices", handler: async (_, ctx) => { _lastCtx = ctx; await _cmdList(ctx); } });
   pi.registerCommand("rc rename",   { description: "Rename this agent in the current session (updates mesh + relay room)", handler: async (args, ctx) => { _lastCtx = ctx; await _renameAgent(args.trim()); } });
@@ -5194,6 +5269,23 @@ export function _tryExecuteTerminalSlashCommand(text: string): boolean {
   return _tryExecuteTerminalInput(text);
 }
 
+/**
+ * Restart the current session, mirroring the terminal `/restart` command.
+ * In an interactive terminal session (TUI), this executes `/restart` through
+ * the terminal input pipeline. In daemon mode (supervised RPC child), it signals
+ * the supervisor with EXIT_DAEMON_RESTART to relaunch with `--continue`.
+ */
+export function restartSession(): boolean {
+  if (_tryExecuteTerminalInput("/restart")) {
+    return true;
+  }
+  if (process.env["REMOTE_PI_DAEMON"] === "1") {
+    setTimeout(() => process.exit(EXIT_DAEMON_RESTART), 100);
+    return true;
+  }
+  return false;
+}
+
 
 /**
  * Hand a mobile prompt to the SDK once. Idle sends omit the delivery mode so
@@ -5629,6 +5721,16 @@ export function _routeClientMessageFrom(
           }, 300);
         }
         _echoUserMessage(msg, shouldSteer);
+        break;
+      }
+      if (trimmedText === "/restart" && process.env["REMOTE_PI_DAEMON"] === "1") {
+        _echoUserMessage(msg, shouldSteer);
+        setTimeout(() => process.exit(EXIT_DAEMON_RESTART), 100);
+        break;
+      }
+      if (trimmedText === "/exit" && process.env["REMOTE_PI_DAEMON"] === "1") {
+        _echoUserMessage(msg, shouldSteer);
+        setTimeout(() => process.exit(0), 100);
         break;
       }
       void (async () => {
