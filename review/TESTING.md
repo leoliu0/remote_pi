@@ -475,7 +475,7 @@ Existing stored duplicates are not purged by this fix.
 - `site`: Tested session list and relay connection handling. Test suite passes 11 tests.
 - Real terminal verification: Verified live on PC screen that user message sent from Android phone (`let's see if it's fixed`) appeared in the `remote-pi` terminal window (`0x03a00004`) and initiated an interactive user turn.
 
-### 2026-09-29 — USB pairing disappears after Save (verification incomplete)
+### 2026-09-29 — USB pairing disappears after Save
 
 - Device: Samsung SM-S948B, installed app `1.2.38+2049`; USB ADB authorized.
 - App relay: `http://178.157.59.181:3000`. Port 80 and port 3000 returned the same owner mesh version 877 and four members; both `/health` endpoints returned 200.
@@ -483,4 +483,5 @@ Existing stored duplicates are not purged by this fix.
 - Changes: durable secure-storage peer index and in-memory inventory; mesh conflict preservation, queued publishes, and peer-key spelling reconciliation. Native Android enumeration failure remains a hypothesis, not directly measured.
 - Verification: merged app suite **670 passed**; final focused pairing/mesh suite **41 passed**; analysis of the four changed Dart source/test files reported no issues.
 - Signed release `app-v1.2.40` (`1.2.40+2051`) built successfully in [Actions run 36554757867](https://github.com/leoliu0/remote_pi/actions/runs/36554757867), including signing-certificate verification. Downloaded APK passed its published SHA256 check.
-- **Blocked:** USB phone disconnected during build. `adb install -r` returned “no devices/emulators found”; `lsusb` no longer listed Samsung. No fixed-build phone success or cold-start persistence claim yet. Reconnect phone, install without clearing app data, verify existing peers, fresh pairing + Save, and force-stop/relaunch; capture screenshots.
+- Phone reconnected: `adb install -r` succeeded without clearing data; package manager confirmed `1.2.40+2051`. Previously missing saved sessions recovered automatically: Home displayed **Relay Connected / Online 6**, including `NFP_CEO`, `AI-examiner`, and `ratex`. [After upgrade](screens/2026-09-29-fixed-home.png).
+- Force-stopped and relaunched the app: **Online 6** remained visible without re-pairing. [Cold restart](screens/2026-09-29-fixed-restart.png). Fresh QR enrollment was not repeated after upgrade because the existing pairing recovered; the verified surface is recovery and cold-start persistence.
