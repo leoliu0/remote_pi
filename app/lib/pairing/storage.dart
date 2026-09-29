@@ -1,11 +1,13 @@
 import 'dart:convert';
 
+import 'package:app/data/transport/epk_encoding.dart';
 import 'package:app/protocol/protocol.dart' show PiHarness;
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 const _kPeersService = 'dev.remotepi.peers';
 const _kRoomsService = 'dev.remotepi.rooms';
+const _kPeersIndexKey = 'dev.remotepi.peers_index';
 
 /// Plan-17 follow-up — persisted snapshot of every room we have ever
 /// learned about for a peer (relay-announced via `room_announced` /
@@ -200,7 +202,10 @@ class PeerRecord {
 /// screens. Read methods do not notify.
 class PairingStorage extends ChangeNotifier {
   final FlutterSecureStorage _store;
-
+  final Map<String, PeerRecord> _peerCache = {};
+  final Set<String> _unresolvedEpks = {};
+  bool _cacheHydrated = false;
+  bool _indexReadFailed = false;
   /// Plan 24 — optional fire-and-forget hook that runs after every
   /// peer mutation (`savePeer` / `deletePeer`). The `MeshSyncService`
   /// registers this so changes propagate to the relay's
@@ -221,7 +226,6 @@ class PairingStorage extends ChangeNotifier {
   void attachPeerMutationHook(void Function()? hook) {
     _onPeersMutated = hook;
   }
-
   // ---- Peer records --------------------------------------------------------
 
   String _peerKey(String remoteEpk) => '$_kPeersService:$remoteEpk';
@@ -239,9 +243,17 @@ class PairingStorage extends ChangeNotifier {
   Future<void> savePeerSilent(PeerRecord record) => _writePeer(record);
 
   Future<PeerRecord?> loadPeer(String remoteEpk) async {
-    final raw = await _store.read(key: _peerKey(remoteEpk));
+    final appEpk = toAppEpk(remoteEpk);
+    if (_cacheHydrated) {
+      if (_peerCache.containsKey(appEpk)) return _peerCache[appEpk];
+      if (_peerCache.containsKey(remoteEpk)) return _peerCache[remoteEpk];
+    }
+    final raw = (await _store.read(key: _peerKey(remoteEpk))) ??
+        (appEpk != remoteEpk ? await _store.read(key: _peerKey(appEpk)) : null);
     if (raw == null) return null;
-    return PeerRecord.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+    final record = PeerRecord.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+    _peerCache[toAppEpk(record.remoteEpk)] = record;
+    return record;
   }
 
   Future<void> deletePeer(String remoteEpk) async {
@@ -252,36 +264,180 @@ class PairingStorage extends ChangeNotifier {
   /// Same as [deletePeer] but skips the mutation hook — see
   /// [savePeerSilent] for the rationale.
   Future<void> deletePeerSilent(String remoteEpk) => _erasePeer(remoteEpk);
+  /// Delete ONLY the exact storage key for [exactEpk] without removing
+  /// the canonical peer from in-memory cache or durable index.
+  /// Used by MeshSyncService to clean up legacy non-canonical keys (e.g. standard b64)
+  /// without destroying the newly-written canonical key.
+  Future<void> pruneLegacyKeySilent(String exactEpk) async {
+    try {
+      await _store.delete(key: _peerKey(exactEpk));
+    } catch (_) {}
+  }
+  Future<void> _persistIndex() async {
+    final epks = {
+      ..._peerCache.values.map((p) => p.remoteEpk),
+      ..._unresolvedEpks,
+    }.toSet().toList();
+    await _store.write(
+      key: _kPeersIndexKey,
+      value: jsonEncode(epks),
+    );
+  }
 
   Future<void> _writePeer(PeerRecord record) async {
+    if (!_cacheHydrated) {
+      await _hydrateCache();
+    }
+    if (_indexReadFailed) {
+      throw StateError('Cannot mutate peers: storage index is unreadable');
+    }
     await _store.write(
       key: _peerKey(record.remoteEpk),
       value: jsonEncode(record.toJson()),
     );
+    final appEpk = toAppEpk(record.remoteEpk);
+    final epks = {
+      ..._peerCache.values.map((p) => p.remoteEpk),
+      ..._unresolvedEpks,
+      record.remoteEpk,
+    }.toSet().toList();
+    await _store.write(
+      key: _kPeersIndexKey,
+      value: jsonEncode(epks),
+    );
+    _unresolvedEpks.remove(record.remoteEpk);
+    _unresolvedEpks.remove(appEpk);
+    _peerCache[appEpk] = record;
     notifyListeners();
   }
 
   Future<void> _erasePeer(String remoteEpk) async {
+    if (!_cacheHydrated) {
+      await _hydrateCache();
+    }
+    if (_indexReadFailed) {
+      throw StateError('Cannot mutate peers: storage index is unreadable');
+    }
     await _store.delete(key: _peerKey(remoteEpk));
+    final appEpk = toAppEpk(remoteEpk);
+    if (appEpk != remoteEpk) {
+      try {
+        await _store.delete(key: _peerKey(appEpk));
+      } catch (_) {}
+    }
+    final updatedEpks = _peerCache.values
+        .where((p) => p.remoteEpk != remoteEpk && toAppEpk(p.remoteEpk) != appEpk)
+        .map((p) => p.remoteEpk)
+        .toSet()
+        .union(_unresolvedEpks.difference({remoteEpk, appEpk}))
+        .toList();
+    await _store.write(
+      key: _kPeersIndexKey,
+      value: jsonEncode(updatedEpks),
+    );
+    _unresolvedEpks.remove(remoteEpk);
+    _unresolvedEpks.remove(appEpk);
+    _peerCache.remove(appEpk);
+    _peerCache.remove(remoteEpk);
     notifyListeners();
   }
 
-  Future<List<PeerRecord>> listPeers() async {
+  Future<void> _hydrateCache() async {
+    _indexReadFailed = false;
+    String? rawIndex;
+    try {
+      rawIndex = await _store.read(key: _kPeersIndexKey).timeout(
+        const Duration(seconds: 2),
+      );
+    } catch (_) {
+      // The index key read itself threw (e.g. storage error, hardware keystore lock).
+      // Mark as failed so mutations fail closed instead of overwriting existing peers.
+      _indexReadFailed = true;
+      return;
+    }
+
+    if (rawIndex != null && rawIndex.isNotEmpty) {
+      final epks = (jsonDecode(rawIndex) as List<dynamic>).whereType<String>().toSet().toList();
+      final Map<String, PeerRecord> loaded = {};
+      final failedEpks = <String>{};
+      for (final epk in epks) {
+        try {
+          final raw = await _store.read(key: _peerKey(epk)).timeout(
+            const Duration(seconds: 2),
+          );
+          if (raw != null) {
+            final record = PeerRecord.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+            loaded[toAppEpk(record.remoteEpk)] = record;
+          } else {
+            failedEpks.add(epk);
+          }
+        } catch (_) {
+          failedEpks.add(epk);
+        }
+      }
+
+      _peerCache.addAll(loaded);
+      _unresolvedEpks.addAll(failedEpks);
+
+      if (failedEpks.isEmpty) {
+        _cacheHydrated = true;
+      }
+      return;
+    }
+
+    // 2. Fallback: enumeration via readAll() (cold migration from legacy versions without index).
     try {
       final all = await _store.readAll().timeout(
         const Duration(seconds: 4),
         onTimeout: () => <String, String>{},
       );
       final prefix = '$_kPeersService:';
-      return all.entries
-          .where((e) => e.key.startsWith(prefix))
-          .map((e) => PeerRecord.fromJson(
+      final Map<String, PeerRecord> loaded = {};
+      for (final e in all.entries) {
+        if (!e.key.startsWith(prefix)) continue;
+        try {
+          final record = PeerRecord.fromJson(
             jsonDecode(e.value) as Map<String, dynamic>,
-          ))
-          .toList();
-    } catch (_) {
-      return [];
+          );
+          loaded[toAppEpk(record.remoteEpk)] = record;
+        } catch (_) {}
+      }
+      if (loaded.isNotEmpty) {
+        _peerCache.addAll(loaded);
+        _cacheHydrated = true;
+        // Migrate durable index so subsequent boots don't rely on readAll()
+        try {
+          await _persistIndex();
+        } catch (_) {}
+        return;
+      }
+    } catch (_) {}
+  }
+
+  Future<List<PeerRecord>> listPeers() async {
+    if (!_cacheHydrated) {
+      await _hydrateCache();
     }
+    if (_unresolvedEpks.isNotEmpty) {
+      final toRetry = _unresolvedEpks.toList();
+      for (final epk in toRetry) {
+        try {
+          final raw = await _store.read(key: _peerKey(epk)).timeout(
+            const Duration(seconds: 2),
+          );
+          if (raw != null) {
+            final record = PeerRecord.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+            _peerCache[toAppEpk(record.remoteEpk)] = record;
+            _unresolvedEpks.remove(epk);
+            _unresolvedEpks.remove(toAppEpk(epk));
+          }
+        } catch (_) {}
+      }
+      if (_unresolvedEpks.isEmpty && !_indexReadFailed) {
+        _cacheHydrated = true;
+      }
+    }
+    return _peerCache.values.toList();
   }
 
   /// Wipe every peer + every persisted room map. Used by the
@@ -290,15 +446,57 @@ class PairingStorage extends ChangeNotifier {
   /// the newly-synced identity, so we start clean rather than risk
   /// connecting against stale `remote_epk`s.
   Future<void> wipeAll() async {
-    final all = await _store.readAll();
-    final prefixes = ['$_kPeersService:', '$_kRoomsService:'];
-    for (final key in all.keys) {
-      if (prefixes.any(key.startsWith)) {
-        await _store.delete(key: key);
+    if (!_cacheHydrated) {
+      await _hydrateCache();
+    }
+    // Gather all known EPKs from index/cache and unresolved set so we delete them directly
+    final epksToDelete = {
+      ..._peerCache.values.map((p) => p.remoteEpk),
+      ..._unresolvedEpks,
+    }.toList();
+    for (final epk in epksToDelete) {
+      final appEpk = toAppEpk(epk);
+      try {
+        await _store.delete(key: _peerKey(epk));
+      } catch (_) {}
+      if (appEpk != epk) {
+        try {
+          await _store.delete(key: _peerKey(appEpk));
+        } catch (_) {}
+      }
+      try {
+        await _store.delete(key: _roomsKey(epk));
+      } catch (_) {}
+      if (appEpk != epk) {
+        try {
+          await _store.delete(key: _roomsKey(appEpk));
+        } catch (_) {}
       }
     }
+
+    try {
+      await _store.delete(key: _kPeersIndexKey);
+    } catch (_) {}
+
+    try {
+      final all = await _store.readAll();
+      final prefixes = ['$_kPeersService:', '$_kRoomsService:'];
+      for (final key in all.keys) {
+        if (prefixes.any(key.startsWith)) {
+          try {
+            await _store.delete(key: key);
+          } catch (_) {}
+        }
+      }
+    } catch (_) {}
+
+    _peerCache.clear();
+    _unresolvedEpks.clear();
+    _cacheHydrated = true;
+    _indexReadFailed = false;
     notifyListeners();
   }
+
 
   // ---- Rooms (plan 17 follow-up) -----------------------------------------
 

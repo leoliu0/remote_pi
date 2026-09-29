@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -14,6 +15,8 @@ import 'package:remote_pi_identity/remote_pi_identity.dart';
 
 class _FakeSecureStorage implements FlutterSecureStorage {
   final Map<String, String> _store = {};
+  final bool emptyReadAll;
+  _FakeSecureStorage({this.emptyReadAll = false});
   @override
   Future<String?> read({required String key, IOSOptions? iOptions, AndroidOptions? aOptions, LinuxOptions? lOptions, WebOptions? webOptions, MacOsOptions? mOptions, WindowsOptions? wOptions}) async => _store[key];
   @override
@@ -27,9 +30,10 @@ class _FakeSecureStorage implements FlutterSecureStorage {
   @override
   Future<void> delete({required String key, IOSOptions? iOptions, AndroidOptions? aOptions, LinuxOptions? lOptions, WebOptions? webOptions, MacOsOptions? mOptions, WindowsOptions? wOptions}) async => _store.remove(key);
   @override
-  Future<Map<String, String>> readAll({IOSOptions? iOptions, AndroidOptions? aOptions, LinuxOptions? lOptions, WebOptions? webOptions, MacOsOptions? mOptions, WindowsOptions? wOptions}) async => Map.of(_store);
+  Future<Map<String, String>> readAll({IOSOptions? iOptions, AndroidOptions? aOptions, LinuxOptions? lOptions, WebOptions? webOptions, MacOsOptions? mOptions, WindowsOptions? wOptions}) async =>
+      emptyReadAll ? <String, String>{} : Map.of(_store);
   @override
-  noSuchMethod(Invocation i) => super.noSuchMethod(i);
+  dynamic noSuchMethod(Invocation i) => super.noSuchMethod(i);
 }
 
 class _StubAdapter implements HttpClientAdapter {
@@ -38,6 +42,7 @@ class _StubAdapter implements HttpClientAdapter {
   String? lastBody;
   int postCount = 0;
   int getCount = 0;
+  void Function(RequestOptions options, String? body)? onFetch;
   void on(String method, String pathSuffix, _Reply reply) {
     replies['$method $pathSuffix'] = reply;
   }
@@ -56,6 +61,7 @@ class _StubAdapter implements HttpClientAdapter {
     } else {
       lastBody = null;
     }
+    onFetch?.call(options, lastBody);
     final key = '${options.method} ${options.uri.path}';
     final reply = replies[key];
     if (reply == null) {
@@ -636,6 +642,346 @@ void main() {
       await Future<void>.delayed(const Duration(milliseconds: 20));
       expect(hookCalls, 1);
       expect(s.adapter.postCount, greaterThanOrEqualTo(1));
+    });
+
+    test('409 conflict during publish preserves locally added peer across refetch', () async {
+      final owner = await _newOwner();
+      final storage = PairingStorage(_FakeSecureStorage());
+      final bridge = await _bootedBridge(storage, owner.keyPair, owner.ownerPk);
+      final hash = await MeshClient.ownerPkHash(owner.ownerPk);
+
+      // Local storage has newly added peer 'epk-fresh'
+      const freshPeer = PeerRecord(
+        remoteEpk: 'epk-fresh',
+        sessionName: 'fresh',
+        relayUrl: 'wss://r',
+        pairedAt: '2026-09-29T00:00:00Z',
+        nickname: 'USB-pair-test',
+      );
+      await storage.savePeer(freshPeer);
+
+      // Relay has a newer version (version 877) with different members
+      final relayBlob = MeshBlob(
+        version: 877,
+        issuedAt: 1000,
+        ownerPk: owner.ownerPk,
+        members: const [
+          MeshMember(
+            remoteEpk: 'epk-existing',
+            relayUrl: 'wss://r',
+            pairedAt: '2026-09-23T00:00:00Z',
+            nickname: 'Old PC',
+          ),
+        ],
+      );
+      final relayEnv = await relayBlob.signWith(owner.keyPair);
+
+      final s = _stubDio();
+      var postReplies = [
+        const _Reply(409, ''),
+        _Reply(200, jsonEncode({'version': 878, 'updated_at': 2000})),
+      ];
+      s.adapter.replies['POST /mesh/$hash'] = postReplies.first;
+      s.adapter.on('GET', '/mesh/$hash', _Reply(200, jsonEncode({
+        'blob': base64.encode(relayEnv.blob),
+        'sig': base64.encode(relayEnv.sig),
+        'version': 877,
+        'updated_at': 1000,
+      })));
+
+      final client = MeshClient(
+        baseUrlProvider: () => 'https://r',
+        dio: Dio(BaseOptions(
+          validateStatus: (_) => true,
+          responseType: ResponseType.plain,
+        ))
+          ..httpClientAdapter = _SequencingAdapter(
+            postPath: '/mesh/$hash',
+            postSequence: postReplies,
+            others: s.adapter.replies,
+          ),
+      );
+      final svc = MeshSyncService(client, bridge, storage);
+
+      final r = await svc.publish();
+      expect(r, isA<MeshPublishOk>());
+      expect((r as MeshPublishOk).version, 878);
+
+      final peers = await storage.listPeers();
+      final epks = peers.map((p) => p.remoteEpk).toSet();
+      expect(epks, contains('epk-fresh'));
+      expect(epks, contains('epk-existing'));
+      final fresh = peers.firstWhere((p) => p.remoteEpk == 'epk-fresh');
+      expect(fresh.nickname, 'USB-pair-test');
+    });
+
+    test('concurrent publish calls are coalesced and queued, not lost', () async {
+      final owner = await _newOwner();
+      final storage = PairingStorage(_FakeSecureStorage());
+      final bridge = await _bootedBridge(storage, owner.keyPair, owner.ownerPk);
+      final hash = await MeshClient.ownerPkHash(owner.ownerPk);
+      final secondPostBody = Completer<String>();
+      final s = _stubDio();
+      s.adapter.on('POST', '/mesh/$hash', _Reply(200, jsonEncode({
+        'version': 1,
+        'updated_at': 1,
+      })));
+      s.adapter.onFetch = (options, body) {
+        if (options.method == 'POST' && s.adapter.postCount == 2 && body != null) {
+          secondPostBody.complete(body);
+        }
+      };
+      final client = MeshClient(baseUrlProvider: () => 'https://r', dio: s.dio);
+      final svc = MeshSyncService(client, bridge, storage);
+
+      await storage.savePeer(const PeerRecord(
+        remoteEpk: 'epk-1',
+        sessionName: 'PC1',
+        relayUrl: 'wss://r',
+        pairedAt: '2026-09-29T00:00:00Z',
+      ));
+
+      final fut1 = svc.publish();
+      await storage.savePeerSilent(const PeerRecord(
+        remoteEpk: 'epk-2',
+        sessionName: 'PC2',
+        relayUrl: 'wss://r',
+        pairedAt: '2026-09-29T00:00:00Z',
+      ));
+      final fut2 = svc.publish();
+
+      final res2 = await fut2;
+      expect(res2, isA<MeshPublishFailure>());
+      expect((res2 as MeshPublishFailure).reason, contains('already in flight'));
+
+      final res1 = await fut1;
+      expect(res1, isA<MeshPublishOk>());
+
+      final body = await secondPostBody.future.timeout(const Duration(seconds: 2));
+      final decoded = jsonDecode(body) as Map<String, dynamic>;
+      final blob = MeshBlob.fromCanonicalBytes(base64.decode(decoded['blob'] as String));
+      expect(blob.members.map((m) => m.remoteEpk).toSet(), containsAll({'epk-1', 'epk-2'}));
+      expect(blob.version, 2);
+    });
+
+    test('queued revoke preserves allowEmpty: true across in-flight publish', () async {
+      final owner = await _newOwner();
+      final storage = PairingStorage(_FakeSecureStorage());
+      final bridge = await _bootedBridge(storage, owner.keyPair, owner.ownerPk);
+      final hash = await MeshClient.ownerPkHash(owner.ownerPk);
+
+      final secondPostBody = Completer<String>();
+      final s = _stubDio();
+      s.adapter.on('POST', '/mesh/$hash', _Reply(200, jsonEncode({
+        'version': 1,
+        'updated_at': 1,
+      })));
+      s.adapter.onFetch = (options, body) {
+        if (options.method == 'POST' && s.adapter.postCount == 3 && body != null) {
+          secondPostBody.complete(body);
+        }
+      };
+      final client = MeshClient(baseUrlProvider: () => 'https://r', dio: s.dio);
+      final svc = MeshSyncService(client, bridge, storage);
+
+      await storage.savePeer(const PeerRecord(
+        remoteEpk: 'epk-revoke-test',
+        sessionName: 'PC',
+        relayUrl: 'wss://r',
+        pairedAt: '2026-09-29T00:00:00Z',
+      ));
+      final init = await svc.publish();
+      expect(init, isA<MeshPublishOk>());
+      expect(svc.lastVersion, 1);
+
+      s.adapter.on('POST', '/mesh/$hash', _Reply(200, jsonEncode({
+        'version': 2,
+        'updated_at': 2,
+      })));
+
+      final fut1 = svc.publish(allowEmpty: false);
+      await storage.deletePeerSilent('epk-revoke-test');
+      final fut2 = svc.publish(allowEmpty: true);
+
+      final res2 = await fut2;
+      expect(res2, isA<MeshPublishFailure>());
+      expect((res2 as MeshPublishFailure).reason, contains('already in flight'));
+
+      final res1 = await fut1;
+      expect(res1, isA<MeshPublishOk>());
+
+      final body = await secondPostBody.future.timeout(const Duration(seconds: 2));
+      final decoded = jsonDecode(body) as Map<String, dynamic>;
+      final blob = MeshBlob.fromCanonicalBytes(base64.decode(decoded['blob'] as String));
+      expect(blob.members, isEmpty);
+      expect(blob.version, 3);
+    });
+
+    test('ordinary publish queued during in-flight revoke does NOT inherit allowEmpty: true', () async {
+      final owner = await _newOwner();
+      final storage = PairingStorage(_FakeSecureStorage());
+      final bridge = await _bootedBridge(storage, owner.keyPair, owner.ownerPk);
+      final hash = await MeshClient.ownerPkHash(owner.ownerPk);
+
+      final s = _stubDio();
+      s.adapter.on('POST', '/mesh/$hash', _Reply(200, jsonEncode({
+        'version': 1,
+        'updated_at': 1,
+      })));
+      final client = MeshClient(baseUrlProvider: () => 'https://r', dio: s.dio);
+      final svc = MeshSyncService(client, bridge, storage);
+
+      await storage.savePeer(const PeerRecord(
+        remoteEpk: 'epk-normal-test',
+        sessionName: 'PC',
+        relayUrl: 'wss://r',
+        pairedAt: '2026-09-29T00:00:00Z',
+      ));
+      final init = await svc.publish();
+      expect(init, isA<MeshPublishOk>());
+      expect(svc.lastVersion, 1);
+
+      s.adapter.on('POST', '/mesh/$hash', _Reply(200, jsonEncode({
+        'version': 2,
+        'updated_at': 2,
+      })));
+
+      final fut1 = svc.publish(allowEmpty: true);
+      await storage.deletePeerSilent('epk-normal-test');
+      final fut2 = svc.publish(allowEmpty: false);
+
+      final res2 = await fut2;
+      expect(res2, isA<MeshPublishFailure>());
+      expect((res2 as MeshPublishFailure).reason, contains('already in flight'));
+
+      final res1 = await fut1;
+      expect(res1, isA<MeshPublishOk>());
+      final postCountAfterFut1 = s.adapter.postCount;
+
+      await pumpEventQueue();
+      expect(s.adapter.postCount, postCountAfterFut1);
+      expect(svc.lastVersion, 2);
+    });
+
+    test('existing QR peer (base64url) pulled as standard base64 leaves single canonical key and survives wipe without readAll', () async {
+      final owner = await _newOwner();
+      final fake = _FakeSecureStorage(emptyReadAll: true);
+      final storage = PairingStorage(fake);
+      final bridge = await _bootedBridge(storage, owner.keyPair, owner.ownerPk);
+      final hash = await MeshClient.ownerPkHash(owner.ownerPk);
+
+      const urlSafeEpk = 'Bz02uLiwrmQZ0S8qiwtFJAt0KzUvrgepYO_oMQ6yyQE';
+      const standardEpk = 'Bz02uLiwrmQZ0S8qiwtFJAt0KzUvrgepYO/oMQ6yyQE=';
+
+      await storage.savePeer(const PeerRecord(
+        remoteEpk: urlSafeEpk,
+        sessionName: 'QR Mac',
+        relayUrl: 'wss://r',
+        pairedAt: '2026-09-29T00:00:00Z',
+        nickname: 'My Mac',
+      ));
+
+      final relayBlob = MeshBlob(
+        version: 1,
+        issuedAt: 1000,
+        ownerPk: owner.ownerPk,
+        members: const [
+          MeshMember(
+            remoteEpk: standardEpk,
+            relayUrl: 'wss://r',
+            pairedAt: '2026-09-29T00:00:00Z',
+            nickname: 'My Mac',
+          ),
+        ],
+      );
+      final relayEnv = await relayBlob.signWith(owner.keyPair);
+
+      final s = _stubDio();
+      s.adapter.on('GET', '/mesh/$hash', _Reply(200, jsonEncode({
+        'blob': base64.encode(relayEnv.blob),
+        'sig': base64.encode(relayEnv.sig),
+        'version': 1,
+        'updated_at': 1000,
+      })));
+
+      final client = MeshClient(baseUrlProvider: () => 'https://r', dio: s.dio);
+      final svc = MeshSyncService(client, bridge, storage);
+
+      final pulled = await svc.pullOnDemand();
+      expect(pulled, isTrue);
+
+      final peers = await storage.listPeers();
+      expect(peers, hasLength(1));
+      expect(peers.single.remoteEpk, urlSafeEpk);
+
+      expect(fake._store.containsKey('dev.remotepi.peers:$standardEpk'), isFalse);
+      expect(fake._store.containsKey('dev.remotepi.peers:$urlSafeEpk'), isTrue);
+
+      await storage.wipeAll();
+      expect(await fake.read(key: 'dev.remotepi.peers:$urlSafeEpk'), isNull);
+      expect(await fake.read(key: 'dev.remotepi.peers:$standardEpk'), isNull);
+      expect(await storage.listPeers(), isEmpty);
+    });
+
+    test('legacy standard base64 peer in storage pulled as standard base64 migrates to canonical key without wiping canonical', () async {
+      final owner = await _newOwner();
+      final fake = _FakeSecureStorage(emptyReadAll: true);
+      const urlSafeEpk = 'Bz02uLiwrmQZ0S8qiwtFJAt0KzUvrgepYO_oMQ6yyQE';
+      const standardEpk = 'Bz02uLiwrmQZ0S8qiwtFJAt0KzUvrgepYO/oMQ6yyQE=';
+
+      // Seed legacy record stored with standardEpk as remoteEpk AND key in store
+      fake._store['dev.remotepi.peers:$standardEpk'] = jsonEncode(const PeerRecord(
+        remoteEpk: standardEpk,
+        sessionName: 'Legacy Mac',
+        relayUrl: 'wss://r',
+        pairedAt: '2026-09-20T00:00:00Z',
+        nickname: 'My Legacy Mac',
+      ).toJson());
+      fake._store['dev.remotepi.peers_index'] = jsonEncode([standardEpk]);
+
+      final storage = PairingStorage(fake);
+      final bridge = await _bootedBridge(storage, owner.keyPair, owner.ownerPk);
+      final hash = await MeshClient.ownerPkHash(owner.ownerPk);
+
+      final relayBlob = MeshBlob(
+        version: 1,
+        issuedAt: 1000,
+        ownerPk: owner.ownerPk,
+        members: const [
+          MeshMember(
+            remoteEpk: standardEpk,
+            relayUrl: 'wss://r',
+            pairedAt: '2026-09-20T00:00:00Z',
+            nickname: 'My Legacy Mac',
+          ),
+        ],
+      );
+      final relayEnv = await relayBlob.signWith(owner.keyPair);
+
+      final s = _stubDio();
+      s.adapter.on('GET', '/mesh/$hash', _Reply(200, jsonEncode({
+        'blob': base64.encode(relayEnv.blob),
+        'sig': base64.encode(relayEnv.sig),
+        'version': 1,
+        'updated_at': 1000,
+      })));
+
+      final client = MeshClient(baseUrlProvider: () => 'https://r', dio: s.dio);
+      final svc = MeshSyncService(client, bridge, storage);
+
+      final pulled = await svc.pullOnDemand();
+      expect(pulled, isTrue);
+
+      final peers = await storage.listPeers();
+      expect(peers, hasLength(1));
+      expect(peers.single.remoteEpk, urlSafeEpk);
+
+      expect(fake._store.containsKey('dev.remotepi.peers:$urlSafeEpk'), isTrue);
+      expect(fake._store.containsKey('dev.remotepi.peers:$standardEpk'), isFalse);
+
+      await storage.wipeAll();
+      expect(await fake.read(key: 'dev.remotepi.peers:$urlSafeEpk'), isNull);
+      expect(await storage.listPeers(), isEmpty);
     });
   });
 }

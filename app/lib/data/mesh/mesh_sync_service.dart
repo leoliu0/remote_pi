@@ -32,10 +32,13 @@ class MeshSyncService extends ChangeNotifier {
   int _lastVersion = 0;
 
   /// True while a publish is in flight. Used by mutation paths to
-  /// avoid stampeding the relay; the queued change is picked up by
-  /// the next fetch loop instead.
+  /// avoid stampeding the relay.
   bool _publishing = false;
 
+  /// Queued publish triggered while [_publishing] was true (e.g. applyNickname
+  /// called immediately after savePeer). Drained in the finally block.
+  bool _publishPending = false;
+  bool _pendingAllowEmpty = false;
   Timer? _pollTimer;
   bool _disposed = false;
 
@@ -55,7 +58,7 @@ class MeshSyncService extends ChangeNotifier {
   /// links. Returns `true` if the local cache now reflects a
   /// successfully-verified relay version (including 304 "we're up to
   /// date" and 404 "relay never had data"); `false` on failure.
-  Future<bool> pullOnDemand() async {
+  Future<bool> pullOnDemand({Set<String>? preserveEpks}) async {
     final pk = _ownerBridge.currentOwnerPk;
     if (pk == null) {
       return false;
@@ -67,7 +70,11 @@ class MeshSyncService extends ChangeNotifier {
     );
     switch (result) {
       case MeshFetchOk(envelope: final env, version: final v, updatedAt: final u):
-        final applied = await _applyVerified(env, expectedOwnerPk: pk);
+        final applied = await _applyVerified(
+          env,
+          expectedOwnerPk: pk,
+          preserveEpks: preserveEpks,
+        );
         if (applied) {
           _lastVersion = v;
           lastUpdatedAt = u;
@@ -91,6 +98,7 @@ class MeshSyncService extends ChangeNotifier {
   Future<bool> _applyVerified(
     MeshEnvelope env, {
     required Uint8List expectedOwnerPk,
+    Set<String>? preserveEpks,
   }) async {
     final ok = await MeshBlob.verifyEnvelope(env);
     if (!ok) {
@@ -100,7 +108,7 @@ class MeshSyncService extends ChangeNotifier {
     if (!_bytesEqual(blob.ownerPk, expectedOwnerPk)) {
       return false;
     }
-    await _replaceLocalCacheWith(blob);
+    await _replaceLocalCacheWith(blob, preserveEpks: preserveEpks);
     return true;
   }
 
@@ -117,30 +125,49 @@ class MeshSyncService extends ChangeNotifier {
   /// `publish()` could observe an empty PairingStorage and ship
   /// members=[] — the bug reproduced by the user, where pi-extension
   /// self-revoked after the app silently published v2 empty.
-  Future<void> _replaceLocalCacheWith(MeshBlob blob) async {
+  Future<void> _replaceLocalCacheWith(
+    MeshBlob blob, {
+    Set<String>? preserveEpks,
+  }) async {
+    final existingList = await _storage.listPeers();
     final existing = {
-      for (final p in await _storage.listPeers()) p.remoteEpk: p,
+      for (final p in existingList) p.remoteEpk: p,
     };
     final keep = <String>{};
     for (final m in blob.members) {
-      keep.add(m.remoteEpk);
-      final prev = existing[m.remoteEpk];
+      final appEpk = toAppEpk(m.remoteEpk);
+      keep.add(appEpk);
+      final prev = existing[appEpk] ??
+          existing[m.remoteEpk] ??
+          existing[toStandardB64(m.remoteEpk)];
       final next = PeerRecord(
-        remoteEpk: m.remoteEpk,
+        remoteEpk: appEpk,
         sessionName: prev?.sessionName ?? m.nickname ?? 'remote_pi',
         relayUrl: m.relayUrl,
         pairedAt: m.pairedAt,
-        nickname: m.nickname,
+        nickname: prev?.nickname ?? m.nickname,
         roomId: prev?.roomId,
+        harness: prev?.harness,
       );
-      if (prev == null || !_peerEqualsForMesh(prev, next)) {
+      if (prev == null || prev.remoteEpk != appEpk || !_peerEqualsForMesh(prev, next)) {
         await _storage.savePeerSilent(next);
       }
     }
+    final normalizedPreserve = preserveEpks != null
+        ? {
+            for (final epk in preserveEpks) toAppEpk(epk),
+          }
+        : const <String>{};
     for (final p in existing.values) {
-      if (!keep.contains(p.remoteEpk)) {
+      final pAppEpk = toAppEpk(p.remoteEpk);
+      final shouldKeep = keep.contains(pAppEpk) ||
+          normalizedPreserve.contains(pAppEpk);
+      if (!shouldKeep) {
         await _storage.deletePeerSilent(p.remoteEpk);
         await _storage.deleteRooms(p.remoteEpk);
+      } else if (p.remoteEpk != pAppEpk) {
+        // Clean up legacy/non-canonical exact key without deleting canonical peer
+        await _storage.pruneLegacyKeySilent(p.remoteEpk);
       }
     }
   }
@@ -149,7 +176,7 @@ class MeshSyncService extends ChangeNotifier {
   /// `roomId` stay client-local and don't trigger a re-save when the
   /// relay version arrives unchanged.
   bool _peerEqualsForMesh(PeerRecord a, PeerRecord b) =>
-      a.remoteEpk == b.remoteEpk &&
+      toAppEpk(a.remoteEpk) == toAppEpk(b.remoteEpk) &&
       a.relayUrl == b.relayUrl &&
       a.pairedAt == b.pairedAt &&
       a.nickname == b.nickname;
@@ -170,6 +197,10 @@ class MeshSyncService extends ChangeNotifier {
   /// default `false` so the safety net still protects against races.
   Future<MeshPublishResult> publish({bool allowEmpty = false}) async {
     if (_publishing) {
+      _publishPending = true;
+      if (allowEmpty) {
+        _pendingAllowEmpty = true;
+      }
       return const MeshPublishFailure('already in flight');
     }
     final pk = _ownerBridge.currentOwnerPk;
@@ -185,9 +216,14 @@ class MeshSyncService extends ChangeNotifier {
       );
     } finally {
       _publishing = false;
+      if (_publishPending) {
+        _publishPending = false;
+        final nextAllowEmpty = _pendingAllowEmpty;
+        _pendingAllowEmpty = false;
+        unawaited(publish(allowEmpty: nextAllowEmpty));
+      }
     }
   }
-
   Future<MeshPublishResult> _publishOnce(
     Uint8List pk, {
     required bool refetchOnConflict,
@@ -240,7 +276,8 @@ class MeshSyncService extends ChangeNotifier {
         return result;
       case MeshPublishConflict():
         if (!refetchOnConflict) return result;
-        await pullOnDemand();
+        final localEpks = peers.map((p) => p.remoteEpk).toSet();
+        await pullOnDemand(preserveEpks: localEpks);
         return _publishOnce(
           pk,
           refetchOnConflict: false,
