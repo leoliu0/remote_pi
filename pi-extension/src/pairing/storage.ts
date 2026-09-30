@@ -9,12 +9,11 @@ import { canonicalizeEd25519PublicKey } from "../mesh/encoding.js";
  * Pi-secret storage (plan/27 Wave E1).
  *
  * The Ed25519 long-term identity of this Pi lives in the platform keyring
- * via `@napi-rs/keyring` (Keychain on macOS, libsecret on Linux desktop,
- * Credential Manager on Windows — DPAPI-backed). When the keyring is
- * unavailable (headless Linux without a D-Bus session, Docker containers,
- * VPS without GNOME Keyring/KWallet running) we fall back to a
- * file-backed store at `~/.pi/remote/identity.json` with `0o600`
- * permissions and the parent dir at `0o700`.
+ * via `@napi-rs/keyring` (Keychain on macOS, Credential Manager on Windows —
+ * DPAPI-backed). Off macOS/Windows the durable store is a file at
+ * `~/.pi/remote/identity.json` (`0o600`, parent dir `0o700`): either the
+ * keyring is unavailable (headless Linux, Docker, VPS) or it is kernel
+ * keyutils, which is wiped on reboot, so any keyring identity is pinned there.
  *
  * **Migration**: previous builds used `keytar` against service
  * `dev.remotepi.mac`. This module reads from the old service if the new
@@ -218,11 +217,14 @@ export function _setKeyStoreBackendForTest(backend: KeyStoreBackend | null): voi
 }
 
 /**
- * Is the platform keyring a CORE OS service we should expect to be present?
+ * Is the platform keyring a CORE, DURABLE OS service?
  * macOS (Keychain) and Windows (Credential Manager) always have one, so a read
  * that throws there is transient/locked, NOT "headless" — we must not mint a
  * new identity. On Linux/other the secret service may be genuinely absent
- * (headless, no D-Bus), so the documented file fallback applies. Overridable
+ * (headless, no D-Bus), so the documented file fallback applies — and when it
+ * is absent `@napi-rs/keyring` silently uses kernel keyutils, which lives in
+ * RAM and is empty after every reboot. Keyring identities there are therefore
+ * pinned to `identity.json` (see `getOrCreateEd25519Keypair`). Overridable
  * for tests via `_setKeyringExpectedForTest`. */
 let _keyringExpectedOverride: boolean | null = null;
 function _keyringExpectedAvailable(): boolean {
@@ -300,8 +302,9 @@ async function _writeKeypairToFile(kp: Ed25519Keypair): Promise<void> {
  * Returns the Pi-secret Ed25519 keypair, generating + persisting one on
  * first call. Resolution order:
  *   1. Existing file `~/.pi/remote/identity.json`, if present — it WINS over
- *      the keyring. A file identity is only ever written by the headless/
- *      degraded fallback (step 4) or an explicit `REMOTE_PI_ALLOW_FILE_IDENTITY`
+ *      the keyring. A file identity is written by the headless/degraded
+ *      fallback (step 4), by pinning a keyring identity on a non-durable
+ *      keyring (Linux, steps 2-4), or by an explicit `REMOTE_PI_ALLOW_FILE_IDENTITY`
  *      opt-in, so its mere presence means this machine established its identity
  *      as a file and the mobile device paired against THAT pubkey. If the
  *      platform keyring later becomes readable (D-Bus/libsecret installed, a
@@ -321,6 +324,9 @@ async function _writeKeypairToFile(kp: Ed25519Keypair): Promise<void> {
  *      there silently breaks existing pairing (the "lost pairing after idle"
  *      bug). `REMOTE_PI_ALLOW_FILE_IDENTITY=1` opts back into a file identity
  *      for headless macOS/Windows hosts.
+ *   Off macOS/Windows every keyring-resolved identity (steps 2-4) is also
+ *   written to `identity.json`: without a Secret Service the keyring is kernel
+ *   keyutils, emptied by every reboot.
  *
  * Idempotent: subsequent calls return the same identity. The migration
  * runs at most once per machine (the old entry is deleted after copy).
@@ -350,7 +356,7 @@ export async function getOrCreateEd25519Keypair(): Promise<Ed25519Keypair> {
   for (let attempt = 0; attempt < _keyringReadAttempts; attempt++) {
     try {
       const existing = await backend.read(NEW_SERVICE, ACCOUNT);
-      if (existing) return _deserialize(existing);
+      if (existing) return _pinIfKeyringVolatile(_deserialize(existing));
 
       const legacy = await backend.read(OLD_SERVICE, ACCOUNT);
       if (legacy) {
@@ -362,14 +368,14 @@ export async function getOrCreateEd25519Keypair(): Promise<Ed25519Keypair> {
         // output bleeds outside the TUI. The presence of an entry under
         // NEW_SERVICE is itself the audit signal — re-running migration
         // is idempotent and harmless.
-        return kp;
+        return _pinIfKeyringVolatile(kp);
       }
 
       // Both reads SUCCEEDED and returned nothing → genuine first run on a
       // working keyring. Generate and save to the new service.
       const fresh = generateEd25519Keypair();
       await backend.write(NEW_SERVICE, ACCOUNT, _serialize(fresh));
-      return fresh;
+      return _pinIfKeyringVolatile(fresh);
     } catch (err) {
       keyringError = err;
       if (attempt < _keyringReadAttempts - 1) {
@@ -438,6 +444,17 @@ export async function getOrCreateEd25519Keypair(): Promise<Ed25519Keypair> {
   const fresh = generateEd25519Keypair();
   await _writeKeypairToFile(fresh);
   return fresh;
+}
+
+/**
+ * Off macOS/Windows the keyring may be kernel keyutils (no Secret Service on
+ * D-Bus), which does not survive a reboot. Losing the key mints a new identity
+ * on next boot and SelfRevoke then wipes every pairing, so persist the key to
+ * `identity.json` — Path 0 returns it on every later call.
+ */
+async function _pinIfKeyringVolatile(kp: Ed25519Keypair): Promise<Ed25519Keypair> {
+  if (!_keyringExpectedAvailable()) await _writeKeypairToFile(kp);
+  return kp;
 }
 
 // ── peers.json ────────────────────────────────────────────────────────────────

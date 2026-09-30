@@ -154,6 +154,44 @@ describe("getOrCreateEd25519Keypair — keyring path", () => {
   });
 });
 
+// Linux `@napi-rs/keyring` without a Secret Service falls back to kernel
+// keyutils (session/_persistent keyrings) — RAM only, gone after reboot. The
+// next boot then found an empty keyring, minted a fresh identity, and
+// SelfRevoke wiped peers.json because the new key wasn't in any Owner blob.
+describe("getOrCreateEd25519Keypair — non-durable keyring (Linux)", () => {
+  test("keyring identity survives a reboot that empties the keyring", async () => {
+    const beforeReboot = new InMemoryBackend();
+    _setKeyStoreBackendForTest(beforeReboot);
+    _setKeyringExpectedForTest(false);
+    const paired = await getOrCreateEd25519Keypair();
+
+    // Reboot: kernel keyrings are wiped, the file system is not.
+    _setKeyStoreBackendForTest(new InMemoryBackend());
+    const afterReboot = await getOrCreateEd25519Keypair();
+
+    expect(Buffer.from(afterReboot.publicKey).toString("base64"))
+      .toBe(Buffer.from(paired.publicKey).toString("base64"));
+  });
+
+  test("pre-existing keyring entry is pinned to identity.json before a reboot", async () => {
+    const existing = JSON.stringify({
+      pk: Buffer.from(new Uint8Array(32).fill(9)).toString("base64"),
+      sk: Buffer.from(new Uint8Array(64).fill(8)).toString("base64"),
+    });
+    const beforeReboot = new InMemoryBackend();
+    beforeReboot.store.set(`${NEW_SERVICE}|${ACCOUNT}`, existing);
+    _setKeyStoreBackendForTest(beforeReboot);
+    _setKeyringExpectedForTest(false);
+    await getOrCreateEd25519Keypair();
+
+    _setKeyStoreBackendForTest(new InMemoryBackend());
+    const afterReboot = await getOrCreateEd25519Keypair();
+
+    expect(Buffer.from(afterReboot.publicKey).toString("base64"))
+      .toBe(Buffer.from(new Uint8Array(32).fill(9)).toString("base64"));
+  });
+});
+
 // ── Migration path (legacy keytar service) ──────────────────────────────────
 
 describe("getOrCreateEd25519Keypair — keytar migration (plan/27 E1)", () => {
