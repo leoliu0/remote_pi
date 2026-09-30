@@ -47,10 +47,11 @@ function makeEnvelope(
   owner: Ed25519Keypair,
   version: number,
   members: readonly TestMember[],
+  issuedAt = 1_700_000_000_000,
 ): MeshEnvelope {
   const blob = canonicalBytes({
     version,
-    issued_at: 1_700_000_000_000,
+    issued_at: issuedAt,
     owner_pk: standardKey(owner),
     members: members.map((member, index) => ({
       remote_epk: member.remoteEpk,
@@ -176,6 +177,43 @@ describe("SelfRevoke canonical Owner state", () => {
     }
     const snapshot = onTopologyChanged.mock.calls[0]![0] as MeshTopologySnapshot;
     expect(snapshot.siblings).toEqual([]);
+  });
+
+  test("a blob issued before the local pairing cannot revoke it; a later one can", async () => {
+    // Live incident 2026-10-01: pairing triggers an immediate fresh check,
+    // which fetched the Owner's PREVIOUS blob (the phone publishes the new
+    // member list ~2 s after pair_ok) and wiped the just-added pairing.
+    const owner = generateEd25519Keypair();
+    const self = generateEd25519Keypair();
+    const other = generateEd25519Keypair();
+    const pairedAtMs = 1_800_000_000_000;
+    const get = vi.fn().mockResolvedValue(
+      makeEnvelope(owner, 2, [{ remoteEpk: standardKey(other) }], pairedAtMs - 60_000),
+    );
+    const removed: string[] = [];
+    const revoker = new SelfRevoke({
+      client: client(get),
+      storage: {
+        snapshotOwnerPubkeys: async () => [
+          { rawOwnerPubkey: standardKey(owner), token: "t", pairedAtMs },
+        ],
+        conditionalRemovePeer: async (remoteEpk) => {
+          removed.push(remoteEpk);
+          return { outcome: "removed", nextToken: "t2" };
+        },
+      },
+      myPubkey: self.publicKey,
+      log: defaultLog(),
+    });
+
+    await revoker.checkOnce();
+    expect(removed).toEqual([]);
+
+    get.mockResolvedValue(
+      makeEnvelope(owner, 3, [{ remoteEpk: standardKey(other) }], pairedAtMs + 60_000),
+    );
+    await revoker.checkOnce();
+    expect(removed).toEqual([standardKey(owner)]);
   });
 
   test("authoritative not_found detaches canonical Owner once", async () => {

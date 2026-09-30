@@ -514,6 +514,8 @@ export type OwnerStorageToken = {
 export interface OwnerStorageSnapshotRecord {
   readonly rawOwnerPubkey: unknown;
   readonly token: OwnerStorageToken;
+  /** Latest parseable `paired_at` (ms epoch) among records with this handle. */
+  readonly pairedAtMs?: number;
 }
 
 export type ConditionalPeerRemoval =
@@ -604,17 +606,25 @@ export async function listOwnerPubkeys(): Promise<unknown[]> {
 export function snapshotOwnerPubkeys(): Promise<readonly OwnerStorageSnapshotRecord[]> {
   return _serializePeerMutation(async () => {
     const peers = await _readPeerContainerStrict();
-    const rawOwners = new Set<unknown>();
+    // Map keeps first-seen order; value is the latest parseable paired_at.
+    const rawOwners = new Map<unknown, number | undefined>();
     for (const peer of peers) {
       if (!peer || typeof peer !== "object") {
-        rawOwners.add(peer);
-      } else {
-        rawOwners.add((peer as { remote_epk?: unknown }).remote_epk);
+        if (!rawOwners.has(peer)) rawOwners.set(peer, undefined);
+        continue;
       }
+      const record = peer as { remote_epk?: unknown; paired_at?: unknown };
+      const parsed = typeof record.paired_at === "string" ? Date.parse(record.paired_at) : NaN;
+      const prior = rawOwners.get(record.remote_epk);
+      rawOwners.set(
+        record.remote_epk,
+        Number.isFinite(parsed) ? Math.max(parsed, prior ?? parsed) : prior,
+      );
     }
-    return [...rawOwners].map((rawOwnerPubkey) => ({
+    return [...rawOwners].map(([rawOwnerPubkey, pairedAtMs]) => ({
       rawOwnerPubkey,
       token: _tokenForSlot(_ownerSlotKey(rawOwnerPubkey)),
+      ...(pairedAtMs !== undefined ? { pairedAtMs } : {}),
     }));
   });
 }

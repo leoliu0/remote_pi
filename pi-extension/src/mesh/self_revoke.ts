@@ -21,6 +21,8 @@ export interface SelfRevokeStorageSnapshotRecord {
   readonly rawOwnerPubkey: unknown;
   /** Storage-issued opaque provenance for this canonical Owner slot. */
   readonly token: unknown;
+  /** Local pairing time (ms epoch) of this raw handle, when known. */
+  readonly pairedAtMs?: number;
 }
 
 export type SelfRevokeRemovalResult =
@@ -68,6 +70,8 @@ interface OwnerSlot {
   }[];
   readonly ownerPk: Uint8Array;
   readonly fingerprint: string;
+  /** Latest local pairing time across the slot's raw handles. */
+  readonly pairedAtMs: number | undefined;
 }
 
 interface PendingRevocation {
@@ -247,6 +251,7 @@ export class SelfRevoke {
   ): OwnerSlot[] {
     const rawHandlesByCanonical = new Map<string, Map<string, unknown>>();
     const bytesByCanonical = new Map<string, Uint8Array>();
+    const pairedAtByCanonical = new Map<string, number>();
     for (const record of snapshot) {
       const rawOwner = record.rawOwnerPubkey;
       if (typeof rawOwner !== "string") {
@@ -260,6 +265,13 @@ export class SelfRevoke {
         handles.set(rawOwner, record.token);
         rawHandlesByCanonical.set(canonical, handles);
         if (!bytesByCanonical.has(canonical)) bytesByCanonical.set(canonical, ownerPk);
+        const pairedAt = record.pairedAtMs;
+        if (pairedAt !== undefined && Number.isFinite(pairedAt)) {
+          pairedAtByCanonical.set(
+            canonical,
+            Math.max(pairedAt, pairedAtByCanonical.get(canonical) ?? pairedAt),
+          );
+        }
       } catch {
         this.log.warn(`[mesh] event=invalid_owner_record owner_fp=${rawOwnerFingerprint(rawOwner)}`);
       }
@@ -275,6 +287,7 @@ export class SelfRevoke {
             .map(([rawOwnerPubkey, token]) => ({ rawOwnerPubkey, token })),
           ownerPk,
           fingerprint: publicKeyFingerprint(ownerPk),
+          pairedAtMs: pairedAtByCanonical.get(canonicalOwnerPubkey),
         };
       });
   }
@@ -375,6 +388,17 @@ export class SelfRevoke {
       this.pendingRevocations.delete(slot.canonicalOwnerPubkey);
       this.lastSeenVersion.set(slot.canonicalOwnerPubkey, header.version);
       this.membershipByOwner.set(slot.canonicalOwnerPubkey, membership);
+      return false;
+    }
+
+    // The Owner publishes the new member list only after pair_ok, so right
+    // after pairing the relay still serves the previous blob. A blob issued
+    // before this pairing cannot express its revocation; wait for a newer one.
+    if (slot.pairedAtMs !== undefined && header.issuedAt < slot.pairedAtMs) {
+      this.membershipByOwner.delete(slot.canonicalOwnerPubkey);
+      this.log.info(
+        `[mesh] event=owner_blob_predates_pairing owner_fp=${slot.fingerprint} received_version=${header.version}`,
+      );
       return false;
     }
 
