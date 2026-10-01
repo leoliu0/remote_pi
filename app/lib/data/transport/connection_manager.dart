@@ -126,6 +126,18 @@ class ConnectionManager extends Service {
   // Plan 17 — active room on the destination Pi. 'main' is the implicit
   // default and matches the per-cwd room a Pi opens.
   String _activeRoomId = 'main';
+  // The one channel (WebSocket) this manager holds open. Kept separately from
+  // `_status` because a lost channel leaves `StatusOnline` for
+  // `StatusRetrying` while its socket may still be open on the relay; every
+  // reconnect/adopt/teardown must close it or frames arrive once per leaked
+  // socket.
+  IChannel? _ownedChannel;
+
+  void _releaseOwnedChannel() {
+    final old = _ownedChannel;
+    _ownedChannel = null;
+    if (old != null) unawaited(old.close().catchError((Object _) {}));
+  }
 
   Timer? _retryTimer;
   Timer? _pingTimer;
@@ -522,9 +534,8 @@ class ConnectionManager extends Service {
     _channelSub = null;
     _controlSub?.cancel();
     _controlSub = null;
-    if (_status case StatusOnline(channel: final oldChannel)) {
-      unawaited(oldChannel.close().catchError((Object _) {}));
-    }
+    _releaseOwnedChannel();
+    _ownedChannel = channel;
     _retryAttempt = 0;
     _missedPings = 0;
     _activePeer = peer;
@@ -559,8 +570,8 @@ class ConnectionManager extends Service {
     _channelSub = null;
     _controlSub?.cancel();
     _controlSub = null;
-    final activeChannel =
-        _status is StatusOnline ? (_status as StatusOnline).channel : null;
+    final activeChannel = _ownedChannel;
+    _ownedChannel = null;
     if (activeChannel != null) {
       try {
         await activeChannel.close();
@@ -577,8 +588,8 @@ class ConnectionManager extends Service {
 
   @override
   void dispose() {
-    final activeChannel =
-        _status is StatusOnline ? (_status as StatusOnline).channel : null;
+    final activeChannel = _ownedChannel;
+    _ownedChannel = null;
     _claimOwnership();
     _cancelRetry();
     _cancelPing();
@@ -617,6 +628,7 @@ class ConnectionManager extends Service {
     _channelSub = null;
     _controlSub?.cancel();
     _controlSub = null;
+    _releaseOwnedChannel();
 
     final token = CancelToken();
     _connectCancel = token;
@@ -640,6 +652,7 @@ class ConnectionManager extends Service {
         return;
       }
       _missedPings = 0;
+      _ownedChannel = ch;
       _propagateActiveRoom(_activeRoomId, ch);
       _emit(StatusOnline(ch));
       _startPing(peer, ch, generation);

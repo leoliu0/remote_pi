@@ -445,6 +445,48 @@ void main() {
       },
     );
 
+    // Live incident 2026-10-01: four app WebSockets stayed open at once, so
+    // every Pi frame (incl. 466 KB session syncs) arrived 4x and switching
+    // sessions took a minute. A reconnect must release the old socket.
+    test('connectTo while online closes the previous channel', () async {
+      final chA = _ControllableChannel();
+      final chB = _ControllableChannel();
+      var idx = 0;
+      final cm = ConnectionManager(
+        factory: (_, _) async => [chA, chB][idx++],
+        storage: _FakeStorage([_fakePeer()]),
+        emitDebounce: Duration.zero,
+      );
+
+      await cm.connectTo(_fakePeer());
+      await cm.connectTo(_fakePeer());
+
+      expect(cm.channel, same(chB));
+      expect(chA.closed, isTrue, reason: 'replaced channel leaked');
+      expect(chB.closed, isFalse);
+      cm.dispose();
+    });
+
+    test('retry after a lost channel closes the lost channel', () async {
+      final chA = _ControllableChannel();
+      final chB = _ControllableChannel();
+      var idx = 0;
+      final cm = ConnectionManager(
+        factory: (_, _) async => [chA, chB][idx++],
+        storage: _FakeStorage([_fakePeer()]),
+        emitDebounce: Duration.zero,
+      );
+
+      await cm.connectTo(_fakePeer());
+      // Server stream ends but the socket object is still alive.
+      await chA.closeStream();
+      await Future<void>.delayed(const Duration(seconds: 2));
+
+      expect(cm.channel, same(chB));
+      expect(chA.closed, isTrue, reason: 'lost channel leaked');
+      cm.dispose();
+    });
+
     test(
       'disconnect invalidates a reconnect that is still reading storage',
       () async {
@@ -1175,8 +1217,11 @@ class _ControllableChannel implements IChannel, IControlLink {
   @override
   Future<void> send(ClientMessage msg) async => sent.add(msg);
 
+  bool closed = false;
+
   @override
   Future<void> close() async {
+    closed = true;
     if (!_ctrl.isClosed) await _ctrl.close();
     if (!_controlCtrl.isClosed) await _controlCtrl.close();
   }
