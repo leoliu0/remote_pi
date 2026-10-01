@@ -239,18 +239,15 @@ Future<IChannel> _productionConnectionFactory(
   // `peer.relayUrl` is kept on PeerRecord for legacy QR payloads but is
   // no longer consulted when opening a connection.
   final relayUrl = resolveRelayUrl(_injector.get<Preferences>());
-  final transport =
-      await WsTransport.connect(
-        relayUrl: relayUrl,
-        peerPubkey: peer.remoteEpk,
-        ed25519Key: ownerKey,
-      ).timeout(
-        wsConnectTimeout,
-        onTimeout: () => throw TimeoutException(
-          'WS connect to $relayUrl timed out after '
-          '${wsConnectTimeout.inSeconds}s',
-        ),
-      );
+  final transport = await connectWithin(
+    WsTransport.connect(
+      relayUrl: relayUrl,
+      peerPubkey: peer.remoteEpk,
+      ed25519Key: ownerKey,
+    ),
+    wsConnectTimeout,
+    (orphan) => orphan.close(),
+  );
 
   if (cancel.isCancelled) {
     await transport.close();

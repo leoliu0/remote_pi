@@ -33,6 +33,25 @@ class WsTransportError implements Exception {
   String toString() => 'WsTransportError: $message';
 }
 
+/// Awaits [pending] for at most [timeout]. `Future.timeout` does not stop
+/// the underlying connect: it would still authenticate a socket nobody owns,
+/// receiving every relay frame until the app dies. On timeout, whatever
+/// [pending] eventually yields is passed to [close].
+Future<T> connectWithin<T>(
+  Future<T> pending,
+  Duration timeout,
+  Future<void> Function(T value) close,
+) async {
+  try {
+    return await pending.timeout(timeout);
+  } on TimeoutException {
+    unawaited(
+      pending.then((value) => close(value), onError: (Object _) {}),
+    );
+    rethrow;
+  }
+}
+
 class WsTransport implements PeerTransport, IControlLink {
   final WebSocketChannel _ws;
   final _queue = _MsgQueue();
