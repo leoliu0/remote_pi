@@ -1059,6 +1059,79 @@ void main() {
     },
   );
 
+  // Live repro 2026-10-05 (USB Samsung, 1.2.43): network cut while a 30 s
+  // bash tool ran; the agent finished on the PC and history synced "DONE",
+  // but the tool_result never arrived, so the chat showed "Sleeping 30
+  // seconds" + Stop indefinitely while the Home tile was already idle.
+  test(
+    'relay idle clears a tool whose result was lost while offline',
+    () async {
+      final s = await setup();
+      s.ch.pushControl(
+        RoomAnnounced(peer: s.epk, roomId: 'main', startedAt: 1),
+      );
+      s.ch.pushControl(
+        RoomMetaUpdated(
+          peer: s.epk,
+          roomId: 'main',
+          working: true,
+          hasModel: false,
+          hasThinking: false,
+        ),
+      );
+      s.ch.push(UserInput(id: 'u1', text: 'sleep 30'));
+      s.ch.push(
+        ToolRequest(toolCallId: 't1', tool: 'bash', args: {'command': 'sleep 30'}),
+      );
+      await _settle();
+      expect(s.sync.isWorking, isTrue);
+
+      // tool_result / agent_done were lost; the relay reports the room idle.
+      s.ch.pushControl(
+        RoomMetaUpdated(
+          peer: s.epk,
+          roomId: 'main',
+          working: false,
+          hasModel: false,
+          hasThinking: false,
+        ),
+      );
+      await _settle();
+
+      expect(s.conn.isRoomWorking(s.epk, 'main'), isFalse);
+      expect(s.sync.isWorking, isFalse, reason: 'orphan tool kept chat working');
+      expect(s.sync.streaming, isNull);
+      expect(index(s.epk)?.status, SessionActivity.idle);
+      s.conn.dispose();
+      s.sync.dispose();
+    },
+  );
+
+  test(
+    'open tool stays working when the room is not in the relay live set',
+    () async {
+      final s = await setup();
+      s.ch.push(UserInput(id: 'u1', text: 'run'));
+      s.ch.push(ToolRequest(toolCallId: 't1', tool: 'bash', args: {}));
+      await _settle();
+      expect(s.sync.isWorking, isTrue);
+
+      // A rooms emission that does not list this room: "not working" here
+      // is absence of signal, not an idle report.
+      s.ch.pushControl(
+        RoomsSnapshot(
+          peer: s.epk,
+          rooms: const [RoomInfo(roomId: 'other', startedAt: 1)],
+        ),
+      );
+      await _settle();
+
+      expect(s.sync.isWorking, isTrue, reason: 'no idle report for this room');
+      s.conn.dispose();
+      s.sync.dispose();
+    },
+  );
+
   // Plan/32 safety net — a sent message whose echo never comes back must not
   // spin forever; the optimistic bubble is removed SILENTLY after the timeout.
   group('no-echo send timeout', () {

@@ -1024,8 +1024,15 @@ class SyncService extends Service {
       _setWorking(true);
       return;
     }
+    // An open tool outranks "not working" while we have no authoritative
+    // signal (offline, room not in the relay's live set). A live room the
+    // relay reports idle has finished its turn: the tool_result/agent_done
+    // were lost (e.g. phone offline mid-tool), so keeping the tool open
+    // would pin the chat on "working" forever.
     if (_openToolIds.isNotEmpty) {
-      return;
+      if (!_conn.isRoomLive(epk, _activeRoomId)) return;
+      _openToolIds.clear();
+      _turnEnded = true;
     }
     if (_sawRemoteWorking || _working) {
       _workingOffDebounce?.cancel();
