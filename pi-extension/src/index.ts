@@ -1013,6 +1013,26 @@ export function _findMostRecentSessionFile(cwd: string): string | null {
 }
 
 /**
+ * History view of a persisted `custom_message` entry.
+ *
+ * Custom messages are harness/extension injections (background-job notices,
+ * IRC traffic, todo nudges, plan/goal context, daemon exits, remote-pi
+ * telemetry), never user input, so history replays none of them as user
+ * bubbles. The one exception is a skill invocation: omp stores `/skill:x args`
+ * as a `skill-prompt` whose content is the whole skill body; the phone shows
+ * only the command the user typed, matching the live `user_input` echo.
+ */
+function _skillInvocationFromCustomEntry(e: Record<string, unknown>, ts: number): BufferMsg | null {
+  if (e.customType !== "skill-prompt") return null;
+  const details = e.details;
+  if (!details || typeof details !== "object") return null;
+  const prompt = "prompt" in details && typeof details.prompt === "string" ? details.prompt : "";
+  const name = "name" in details && typeof details.name === "string" ? details.name : "";
+  const text = prompt || (name ? `/skill:${name}` : "");
+  return text ? { role: "user", content: text, timestamp: ts } : null;
+}
+
+/**
  * Parses messages from a .jsonl session file into BufferMsg[] format,
  * handling omp/pi/claude session formats, compaction events, and custom messages.
  */
@@ -1044,14 +1064,9 @@ export function _loadMessagesFromJsonlFile(filePath: string): BufferMsg[] {
             timestamp: ts,
             tokensBefore: typeof e.tokensBefore === "number" ? e.tokensBefore : 0,
           });
-        } else if (e.type === "custom_message" && e.content) {
-          if (e.display !== false && !String(e.customType ?? "").startsWith("remote-pi:")) {
-            msgs.push({
-              role: "user",
-              content: e.content as any,
-              timestamp: ts,
-            });
-          }
+        } else if (e.type === "custom_message") {
+          const skill = _skillInvocationFromCustomEntry(e, ts);
+          if (skill) msgs.push(skill);
         } else if (e.role === "user" || e.role === "assistant" || e.role === "toolResult") {
           msgs.push({
             ...e as unknown as BufferMsg,
@@ -1160,14 +1175,9 @@ export function _hydrateMessageBufferFromSession(sessionManager?: unknown, fallb
               timestamp: ts,
               tokensBefore: typeof e.tokensBefore === "number" ? e.tokensBefore : 0,
             });
-          } else if (e.type === "custom_message" && e.content) {
-            if (e.display !== false && !String(e.customType ?? "").startsWith("remote-pi:")) {
-              msgs.push({
-                role: "user",
-                content: e.content,
-                timestamp: ts,
-              });
-            }
+          } else if (e.type === "custom_message") {
+            const skill = _skillInvocationFromCustomEntry(e, ts);
+            if (skill) msgs.push(skill);
           } else if (e.role === "user" || e.role === "assistant" || e.role === "toolResult") {
             msgs.push({
               ...e as unknown as BufferMsg,

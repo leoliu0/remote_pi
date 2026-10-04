@@ -6604,6 +6604,40 @@ describe("session history hydration from disk", () => {
       rmSync(ompSessionDir, { recursive: true, force: true });
     }
   });
+
+  // Live report 2026-10-05: synced history was crowded with system notices,
+  // IRC traffic, todo nudges and whole skill bodies rendered as user bubbles.
+  // custom_message entries are harness/extension injections, never user
+  // input; a skill invocation keeps only the command the user typed.
+  test("custom_message injections never become user bubbles; skills show the typed command", () => {
+    const dir = mkdtempSync(join(tmpdir(), "pi-noise-"));
+    const file = join(dir, "s.jsonl");
+    const custom = (customType: string, content: string, extra: Record<string, unknown> = {}) =>
+      JSON.stringify({ type: "custom_message", customType, content, timestamp: "2026-10-05T00:00:01.000Z", ...extra });
+    writeFileSync(file, [
+      JSON.stringify({ type: "message", id: "u1", message: { role: "user", content: [{ type: "text", text: "real question" }], timestamp: 1000 } }),
+      custom("async-result", "<system-notice> Background job X has completed.</system-notice>", { display: true }),
+      custom("irc:incoming", "<irc> Incoming IRC message from agent `Run`: ok", { display: true }),
+      custom("launch-completion", "Supervised process p exited with exit code 0.", { display: true }),
+      custom("mid-run-todo-nudge", "<system-reminder> 13 todo items still open.</system-reminder>"),
+      custom("plan-mode-context", "Plan mode active"),
+      custom("skill-prompt", "[IMPORTANT: User invoked the \"audit-paper\" skill] # Audit Paper ...", {
+        display: true,
+        details: { name: "audit-paper", args: "run an audit", prompt: "/skill:audit-paper run an audit" },
+      }),
+      custom("skill-prompt", "[IMPORTANT: ...] # Format Tables ...", { display: true, details: { name: "format-tables" } }),
+      JSON.stringify({ type: "message", id: "a1", message: { role: "assistant", content: [{ type: "text", text: "answer" }], timestamp: 3000 } }),
+    ].join("\n") + "\n");
+
+    try {
+      const events = _mapAgentMessagesToEvents(_loadMessagesFromJsonlFile(file));
+      const users = events.flatMap((e) => (e.type === "user_input" && "text" in e ? [e.text] : []));
+      expect(users).toEqual(["real question", "/skill:audit-paper run an audit", "/skill:format-tables"]);
+      expect(events.filter((e) => e.type === "agent_message")).toHaveLength(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("markdown image resolution and extraction", () => {
