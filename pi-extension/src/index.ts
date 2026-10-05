@@ -1092,33 +1092,43 @@ export function _loadMessagesFromJsonlFile(filePath: string): BufferMsg[] {
  */
 export function _isSubagentSession(ctx?: unknown): boolean {
   if (!ctx || typeof ctx !== "object") return false;
-  const c = ctx as Record<string, unknown>;
-  // Check explicit hasUI flag (ExtensionContext in runner.ts sets hasUI: false for subagents)
-  if (c["hasUI"] === false) return true;
-  const sm = c["sessionManager"] as {
-    getSessionFile?: () => string | undefined;
-    getEntries?: () => Array<{ type?: string; task?: unknown }>;
-  } | undefined;
-  if (sm) {
-    const file = sm.getSessionFile?.();
-    if (file) {
-      const normalized = file.replace(/\\/g, "/");
-      // Subagent session files are nested: `<parent-session-dir>/<subagent-id>.jsonl`
-      // where `<parent-session-dir>` is `<timestamp>_<parent-id>` without `.jsonl`.
-      const parts = normalized.split("/");
-      if (parts.length >= 2) {
-        const parentDir = parts[parts.length - 2];
-        if (parentDir && parentDir.includes("_")) return true;
-      }
-    }
-    const entries = sm.getEntries?.();
-    if (Array.isArray(entries)) {
-      for (const e of entries) {
-        if (e && e.type === "session_init" && e.task !== undefined) return true;
+  // ExtensionContext in runner.ts sets hasUI: false for subagents on some hosts.
+  if ("hasUI" in ctx && ctx.hasUI === false) return true;
+  const sm = "sessionManager" in ctx ? ctx.sessionManager : undefined;
+  if (!sm || typeof sm !== "object") return false;
+  const file = "getSessionFile" in sm && typeof sm.getSessionFile === "function"
+    ? sm.getSessionFile()
+    : undefined;
+  if (typeof file === "string" && file && _isInParentSessionFolder(file, sm)) return true;
+  const entries = "getEntries" in sm && typeof sm.getEntries === "function" ? sm.getEntries() : undefined;
+  if (Array.isArray(entries)) {
+    for (const e of entries) {
+      if (e && typeof e === "object" && "type" in e && e.type === "session_init" && "task" in e && e.task !== undefined) {
+        return true;
       }
     }
   }
   return false;
+}
+
+/**
+ * A subagent's transcript lives in a folder named after its parent session
+ * file, at every nesting level: `<main>.jsonl` → `<main>/Outer.jsonl` →
+ * `<main>/Outer/Outer.Inner.jsonl`. A `/fork` or `/clone` also records a
+ * `parentSession` but sits beside its parent, and a main session's folder is
+ * the cwd-encoded dir, which may contain any character (`-home-leo-my_project`),
+ * so neither the header field nor the folder name alone identifies a subagent.
+ * The header names the parent before it is flushed to disk; the file covers
+ * hosts without `getHeader`.
+ */
+function _isInParentSessionFolder(file: string, sm: object): boolean {
+  const parentFile = `${dirname(resolve(file))}.jsonl`;
+  const header = "getHeader" in sm && typeof sm.getHeader === "function" ? sm.getHeader() : undefined;
+  const parentSession = header && typeof header === "object" && "parentSession" in header
+    && typeof header.parentSession === "string"
+    ? resolve(header.parentSession)
+    : undefined;
+  return parentSession === parentFile || existsSync(parentFile);
 }
 /**
  * Hydrate _messageBuffer from the active Pi sessionManager or from disk session files

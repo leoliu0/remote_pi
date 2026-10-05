@@ -4365,6 +4365,67 @@ describe("session_shutdown teardown", () => {
     expect(_isSubagentSession(makeMockCtx())).toBe(false);
   });
 
+  // Live incident 2026-10-06 (uts, ratex): the phone's ratex chat showed a
+  // nested subagent's transcript (`BiberExact2/BiberExact2.MapToolParity`,
+  // IRC traffic from its siblings) and its model. That subagent's
+  // session_start passed as the main session: its folder `BiberExact2` has no
+  // `_`, and the host gave it neither `hasUI:false` nor a session_init yet.
+  // Every subagent lives in a folder named after its parent session file.
+  // Cwd folder contains `_`, like a real `-home-leo-my_project` session dir.
+  function sessionTree(): { root: string; main: string; outer: string; inner: string; fork: string } {
+    const root = mkdtempSync(join(tmpdir(), "pi-subagent-"));
+    const cwdDir = join(root, "-home-u-my_project");
+    const main = join(cwdDir, "2026-10-05T00-00-00-000Z_01aaa.jsonl");
+    const outer = join(cwdDir, "2026-10-05T00-00-00-000Z_01aaa", "Outer.jsonl");
+    const inner = join(cwdDir, "2026-10-05T00-00-00-000Z_01aaa", "Outer", "Outer.Inner.jsonl");
+    const fork = join(cwdDir, "2026-10-05T01-00-00-000Z_01bbb.jsonl");
+    for (const f of [main, outer, inner, fork]) {
+      mkdirSync(dirname(f), { recursive: true });
+      writeFileSync(f, "{}\n");
+    }
+    return { root, main, outer, inner, fork };
+  }
+  const ctxFor = (file: string, parentSession?: string) => ({
+    hasUI: true,
+    sessionManager: {
+      getSessionFile: () => file,
+      getHeader: () => ({ type: "session", parentSession }),
+      getEntries: () => [],
+      getBranch: () => [{ type: "message", message: { role: "user", content: "NESTED-SUBAGENT-PROMPT", timestamp: 1 } }],
+    },
+    ui: { notify: vi.fn() },
+  });
+
+  test("session_start from a nested subagent keeps the main session's history", () => {
+    const t = sessionTree();
+    try {
+      _setMessageBufferForTest([{ role: "user", content: "main question", timestamp: 1 }]);
+      const sessionStart = captureEventHandler("session_start");
+      sessionStart({ type: "session_start" }, ctxFor(t.inner, t.outer) as unknown as Parameters<typeof sessionStart>[1]);
+      const texts = _mapAgentMessagesToEvents(_getMessageBufferForTest() as never[])
+        .flatMap((e) => ("text" in e ? [e.text] : []));
+      expect(texts).toEqual(["main question"]);
+    } finally {
+      rmSync(t.root, { recursive: true, force: true });
+    }
+  });
+
+  test("subagent detection: nested and first-level children yes; main, forked and `_`-path mains no", () => {
+    const t = sessionTree();
+    try {
+      expect(_isSubagentSession(ctxFor(t.outer, t.main))).toBe(true);
+      expect(_isSubagentSession(ctxFor(t.inner, t.outer))).toBe(true);
+      // Header unavailable (older hosts): the parent file on disk decides.
+      expect(_isSubagentSession(ctxFor(t.inner))).toBe(true);
+      // Main session whose cwd-encoded folder contains `_`.
+      expect(_isSubagentSession(ctxFor(t.main))).toBe(false);
+      // /fork records a parentSession but lives beside its parent, not inside it.
+      expect(_isSubagentSession(ctxFor(t.fork, t.main))).toBe(false);
+    } finally {
+      rmSync(t.root, { recursive: true, force: true });
+    }
+  });
+
 
   // Race guard: the daemon defers its connect (`setTimeout(_cmdRoot, 0)`), so a
   // shutdown can land while that connect is still in flight. The flag must make
