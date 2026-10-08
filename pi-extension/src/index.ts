@@ -2028,8 +2028,10 @@ function _goIdle(byeReason?: import("./protocol/types.js").ByeReason): void {
 /**
  * Called when the relay WS closes unexpectedly (network drop, relay restart,
  * etc.). Does a **partial** teardown — keeps `_sessionStartedAt`, `_messageBuffer`,
- * `_relayUrl`, `_cachedEd25519`, `_peerShort` so the session can resume on
- * reconnect — and schedules an `_attemptReconnect`.
+ * the queued mobile prompts, `_relayUrl`, `_cachedEd25519` so the session can
+ * resume on reconnect — and schedules an `_attemptReconnect`. Queued prompts
+ * still drain when the agent goes idle, and a reconnecting phone gets them back
+ * in the `queued_message_state` that answers its `session_sync`.
  *
  * Peer (app) reconnect after a successful relay reconnect is handled by the
  * existing auto-listener via `peers.json` lookup, so we don't need to track
@@ -2049,13 +2051,11 @@ function _onRelayClose(closedRelay: RelayClient): void {
   for (const ch of _activePeers.values()) {
     try { ch.detach(); } catch { /* best-effort */ }
   }
-  if (_queuedItems.length > 0) _resetQueuedItems({ broadcast: true });
   _activePeers.clear();
   _peerShort = "";
   _currentTurnId = null;
   _pendingSteers = [];
   _lastConsumedSteerText = null;
-  _resetQueuedItems();
 
   _relay = null;  // _relayUrl preserved for retry
 

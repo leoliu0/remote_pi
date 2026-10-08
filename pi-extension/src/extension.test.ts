@@ -1768,6 +1768,38 @@ describe("multi-channel broadcast (W2D)", () => {
     expect(statesB.at(-1)?.inner.items).toEqual([]);
   });
 
+  // Live report 2026-10-06: queued phone messages sometimes vanished. A relay
+  // drop (network blip, relay restart) ran `_onRelayClose`, which emptied the
+  // queue; the phone's next session_sync then received an empty
+  // queued_message_state and replaced its list, so the prompts never ran.
+  test("queued items survive a relay drop and still run when the turn ends", async () => {
+    await _pairForTest("ownerA__1234567890");
+    const harness = captureEventHarness();
+    const sdk = mobileSdkHarness();
+    _setPiForTest(sdk);
+
+    harness.handler("input")({ type: "input", text: "primary", source: "interactive" });
+    harness.handler("turn_start")({ type: "turn_start", turnIndex: 0, timestamp: 0 });
+    relayRef.current!.emit("message", JSON.stringify({
+      peer: "ownerA__1234567890",
+      ct: Buffer.from(JSON.stringify({ type: "queued_message_set", id: "q-drop", text: "after the drop" })).toString("base64"),
+    }));
+    await new Promise<void>((r) => setImmediate(r));
+    expect(sdk.started).toEqual([]);
+
+    vi.useFakeTimers();
+    try {
+      relayRef.current!.emit("close");
+      await vi.advanceTimersByTimeAsync(1_000); // reconnect
+    } finally {
+      vi.useRealTimers();
+    }
+
+    harness.handler("agent_end")({ type: "agent_end" });
+    harness.handler("turn_end")({ type: "turn_end", turnIndex: 0, timestamp: 0 });
+    expect(sdk.started).toEqual(["after the drop"]);
+  });
+
   test("queued drain restores item on synchronous sendUserMessage rejection", async () => {
     await _pairForTest("ownerA__1234567890");
     _setPiForTest({
