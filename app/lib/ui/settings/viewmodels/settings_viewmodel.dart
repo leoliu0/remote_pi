@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'package:app/data/mesh/mesh_sync_service.dart';
 import 'package:app/data/preferences/preferences.dart';
-import 'package:app/data/site/web_sign_in_link.dart';
+import 'package:app/data/site/web_login.dart';
 import 'package:app/data/transport/connection_manager.dart';
 import 'package:app/data/transport/relay_config.dart';
 import 'package:app/pairing/storage.dart';
@@ -20,6 +20,7 @@ class SettingsViewModel extends ViewModel<SettingsState> {
 
   final MeshSyncService? _meshSync;
   final OwnerIdentityBridge? _ownerBridge;
+  final WebLoginClient _webLogin;
   bool _disposed = false;
 
   SettingsViewModel(
@@ -28,7 +29,9 @@ class SettingsViewModel extends ViewModel<SettingsState> {
     this._conn, [
     this._meshSync,
     this._ownerBridge,
-  ]) : super(const SettingsLoading()) {
+    WebLoginClient? webLogin,
+  ])  : _webLogin = webLogin ?? WebLoginClient(),
+        super(const SettingsLoading()) {
     _load();
   }
 
@@ -68,16 +71,17 @@ class SettingsViewModel extends ViewModel<SettingsState> {
   /// default endpoint [kDefaultRelayUrl].
   String get relayUrlOverride => _prefs.relayUrl ?? kDefaultRelayUrl;
 
-  /// Sign-in link for the web client (`<site>/web#k=…&r=…`), carrying the
-  /// Owner seed and the current relay. `null` until the Owner identity has
-  /// booted. Secret: callers must never log or persist it.
-  String? get webSignInLink {
+  /// Signs in the browser that showed [request]: encrypts the Owner seed and
+  /// the current relay URL to the browser's key and delivers them.
+  Future<WebLoginResult> approveWebLogin(WebLoginRequest request) async {
     final identity = _ownerBridge?.currentIdentity;
-    if (identity == null) return null;
-    return buildWebSignInLink(
+    if (identity == null) return const WebLoginNoIdentity();
+    final envelope = await buildWebLoginEnvelope(
+      request: request,
       ownerSeed: identity.ownerSk,
       relayUrl: resolveRelayUrl(_prefs),
     );
+    return _webLogin.deliver(request, envelope);
   }
 
   Future<String?> saveRelayUrl(

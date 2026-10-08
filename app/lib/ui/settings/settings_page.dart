@@ -5,6 +5,7 @@ import 'package:app/pairing/storage.dart';
 import 'package:app/ui/core/themes/themes.dart';
 import 'package:app/ui/settings/states/settings_state.dart';
 import 'package:app/ui/settings/viewmodels/settings_viewmodel.dart';
+import 'package:app/ui/settings/web_login_scan_page.dart';
 import 'package:app/ui/settings/widgets/widgets.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
@@ -18,7 +19,14 @@ class SettingsPage extends StatelessWidget {
   /// for a close (X), since the sheet is dismissed, not popped to a parent.
   final bool embedded;
 
-  const SettingsPage({super.key, this.embedded = false});
+  /// Scanner used by "Sign in on web"; tests inject a camera-free one.
+  final WebLoginScannerBuilder webLoginScanner;
+
+  const SettingsPage({
+    super.key,
+    this.embedded = false,
+    this.webLoginScanner = cameraWebLoginScanner,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -54,7 +62,7 @@ class SettingsPage extends StatelessWidget {
           Divider(color: colors.border, height: 1),
           const _RelaySection(),
           Divider(color: colors.border, height: 1),
-          const _WebSection(),
+          _WebSection(scannerBuilder: webLoginScanner),
           Divider(color: colors.border, height: 1),
           const _SectionHeader('Pairings'),
           switch (state) {
@@ -112,27 +120,30 @@ class _AddPairingButton extends StatelessWidget {
   }
 }
 
-/// Entry point for signing the web client in with this phone's Owner key.
-/// Warns first, then reveals the link as a QR code + copy action.
+/// Entry point for signing the web client in with this phone's Owner key:
+/// scans the QR code shown on the website, which receives the key
+/// end-to-end encrypted.
 class _WebSection extends StatelessWidget {
-  const _WebSection();
+  final WebLoginScannerBuilder scannerBuilder;
+
+  const _WebSection({required this.scannerBuilder});
 
   Future<void> _open(BuildContext context) async {
     final vm = context.read<SettingsViewModel>();
-    if (!await showWebSignInConfirmDialog(context)) return;
-    if (!context.mounted) return;
-    final link = vm.webSignInLink;
-    if (link == null) {
-      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-        const SnackBar(
-          content: Text(
-            'Owner identity is unavailable. Retry after reopening the app.',
-          ),
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    final signedIn = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (_) => WebLoginScanPage(
+          onApprove: vm.approveWebLogin,
+          scannerBuilder: scannerBuilder,
         ),
+      ),
+    );
+    if (signedIn == true) {
+      messenger?.showSnackBar(
+        const SnackBar(content: Text('Browser signed in')),
       );
-      return;
     }
-    await showWebSignInSheet(context, link: link);
   }
 
   @override

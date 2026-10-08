@@ -6,6 +6,7 @@ import 'package:app/data/local/app_database.dart';
 import 'package:app/data/mesh/mesh_client.dart';
 import 'package:app/data/mesh/mesh_sync_service.dart';
 import 'package:app/data/preferences/preferences.dart';
+import 'package:app/data/site/web_login.dart';
 import 'package:app/data/transport/connection_manager.dart';
 import 'package:app/data/transport/peer_channel.dart';
 import 'package:app/data/transport/relay_config.dart';
@@ -14,8 +15,34 @@ import 'package:app/pairing/pair_request_flow.dart';
 import 'package:app/pairing/storage.dart';
 import 'package:app/ui/settings/states/settings_state.dart';
 import 'package:app/ui/settings/viewmodels/settings_viewmodel.dart';
+import 'package:cryptography/cryptography.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:remote_pi_identity/remote_pi_identity.dart';
+
+class _RecordingWebLoginClient extends WebLoginClient {
+  final List<(WebLoginRequest, WebLoginEnvelope)> delivered = [];
+
+  @override
+  Future<WebLoginResult> deliver(
+    WebLoginRequest request,
+    WebLoginEnvelope envelope,
+  ) async {
+    delivered.add((request, envelope));
+    return const WebLoginDelivered();
+  }
+}
+
+Future<(SimpleKeyPair, WebLoginRequest)> _webLoginCode() async {
+  final keyPair = await X25519().newKeyPair();
+  final pk = await keyPair.extractPublicKey();
+  final b64 = base64Url.encode(pk.bytes).replaceAll('=', '');
+  return (
+    keyPair,
+    parseWebLoginCode(
+      'remotepi://web-login?h=$webLoginHost&id=EBESExQVFhcYGRobHB0eHw&pk=$b64',
+    ),
+  );
+}
 
 class _NoopTransport implements PeerTransport {
   @override Future<void> send(Uint8List data) async {}
@@ -420,31 +447,77 @@ void main() {
     });
   });
 
-  group('SettingsViewModel — web sign-in link', () {
-    test('is null without a booted Owner identity', () {
+  group('SettingsViewModel — web sign-in', () {
+    test('reports a missing Owner identity and sends nothing', () async {
       final storage = _FakeStorage([]);
-      final vm = SettingsViewModel(storage, _preferences(), _conn());
-      expect(vm.webSignInLink, isNull);
+      final client = _RecordingWebLoginClient();
+      final vm = SettingsViewModel(
+        storage,
+        _preferences(),
+        _conn(),
+        null,
+        null,
+        client,
+      );
+      final (_, request) = await _webLoginCode();
+      expect(await vm.approveWebLogin(request), isA<WebLoginNoIdentity>());
+      expect(client.delivered, isEmpty);
       vm.dispose();
     });
 
-    test('carries the Owner seed and the current relay URL', () async {
+    test('delivers the Owner seed and current relay, encrypted to the browser',
+        () async {
       final storage = _FakeStorage([]);
       final prefs = _preferences();
       await prefs.setRelayUrl('https://custom.example');
       final identityStore = InMemoryOwnerIdentityStore();
       final bridge = OwnerIdentityBridge(identityStore, storage);
       await bridge.boot();
-      final vm = SettingsViewModel(storage, prefs, _conn(), null, bridge);
+      final client = _RecordingWebLoginClient();
+      final vm = SettingsViewModel(
+        storage,
+        prefs,
+        _conn(),
+        null,
+        bridge,
+        client,
+      );
+      final (browserKeyPair, request) = await _webLoginCode();
 
-      final link = vm.webSignInLink!;
-      final params = Uri.splitQueryString(Uri.parse(link).fragment);
-      expect(link, contains('/web#k='));
+      expect(await vm.approveWebLogin(request), isA<WebLoginDelivered>());
+      expect(client.delivered, hasLength(1));
+      final (sentRequest, envelope) = client.delivered.single;
+      expect(sentRequest, same(request));
+
+      Uint8List unb64u(String s) => base64Url.decode(base64Url.normalize(s));
+      final shared = await X25519().sharedSecretKey(
+        keyPair: browserKeyPair,
+        remotePublicKey: SimplePublicKey(
+          unb64u(envelope.epk),
+          type: KeyPairType.x25519,
+        ),
+      );
+      final key = await Hkdf(hmac: Hmac.sha256(), outputLength: 32).deriveKey(
+        secretKey: shared,
+        info: utf8.encode('remote-pi web-login v1'),
+      );
+      final sealed = unb64u(envelope.ct);
+      final plain = await AesGcm.with256bits().decrypt(
+        SecretBox(
+          sealed.sublist(0, sealed.length - 16),
+          nonce: unb64u(envelope.nonce),
+          mac: Mac(sealed.sublist(sealed.length - 16)),
+        ),
+        secretKey: key,
+        aad: utf8.encode(request.id),
+      );
+      final json = jsonDecode(utf8.decode(plain)) as Map<String, Object?>;
+      expect(json['v'], 1);
       expect(
-        base64Url.decode('${params['k']}='),
+        unb64u(json['seed']! as String),
         bridge.currentIdentity!.ownerSk,
       );
-      expect(params['r'], 'https://custom.example');
+      expect(json['relay'], resolveRelayUrl(prefs));
 
       vm.dispose();
       bridge.dispose();

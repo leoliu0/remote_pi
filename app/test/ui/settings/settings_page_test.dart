@@ -1,11 +1,15 @@
 // Regression guards for the Settings page:
 // - the Display section's five-segment Text size control must fit on a phone
 //   (~360 logical px wide) and tapping a segment must persist AppFontScale;
-// - "Sign in on web" must warn before revealing the owner-key link.
+// - "Sign in on web" opens the website-QR scanner, rejects foreign codes while
+//   scanning, confirms, then delivers the encrypted Owner seed.
 import 'dart:async';
+import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:app/data/local/app_database.dart';
 import 'package:app/data/preferences/preferences.dart';
+import 'package:app/data/site/web_login.dart';
 import 'package:app/data/transport/connection_manager.dart';
 import 'package:app/data/transport/peer_channel.dart';
 import 'package:app/pairing/owner_identity_bridge.dart';
@@ -14,11 +18,11 @@ import 'package:app/pairing/storage.dart';
 import 'package:app/ui/core/themes/themes.dart';
 import 'package:app/ui/settings/settings_page.dart';
 import 'package:app/ui/settings/viewmodels/settings_viewmodel.dart';
+import 'package:app/ui/settings/web_login_scan_page.dart';
+import 'package:cryptography/cryptography.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
-import 'package:qr_flutter/qr_flutter.dart';
 import 'package:remote_pi_identity/remote_pi_identity.dart';
 
 class _NoopTransport implements PeerTransport {
@@ -178,41 +182,48 @@ void main() {
     },
   );
 
-  testWidgets(
-    'Sign in on web warns first, then shows the link as QR + copy',
-    (tester) async {
+  group('Sign in on web', () {
+    late Preferences prefs;
+    late _FakeStorage storage;
+    late InMemoryOwnerIdentityStore identityStore;
+    late OwnerIdentityBridge bridge;
+    late ConnectionManager conn;
+    late _StubWebLoginClient client;
+    late SettingsViewModel vm;
+    late String webCode;
+    ValueChanged<String>? feed;
+
+    Widget fakeScanner(BuildContext context, ValueChanged<String> onCode) {
+      feed = onCode;
+      return const ColoredBox(key: Key('fake-scanner'), color: Colors.black);
+    }
+
+    Future<void> openScanner(WidgetTester tester, WebLoginResult reply) async {
       tester.view.physicalSize = const Size(400, 2400);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
 
-      final copied = <String>[];
-      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
-        SystemChannels.platform,
-        (call) async {
-          if (call.method == 'Clipboard.setData') {
-            copied.add((call.arguments as Map)['text'] as String);
-          }
-          return null;
-        },
-      );
-      addTearDown(
-        () => tester.binding.defaultBinaryMessenger
-            .setMockMethodCallHandler(SystemChannels.platform, null),
-      );
-
-      final prefs = _preferences();
+      prefs = _preferences();
       await prefs.load();
-      final storage = _FakeStorage();
-      final identityStore = InMemoryOwnerIdentityStore();
-      final bridge = OwnerIdentityBridge(identityStore, storage);
+      storage = _FakeStorage();
+      identityStore = InMemoryOwnerIdentityStore();
+      bridge = OwnerIdentityBridge(identityStore, storage);
       await tester.runAsync(bridge.boot);
-      final conn = ConnectionManager(
+      conn = ConnectionManager(
         factory: (_, _) async =>
             PlainPeerChannel(transport: _NoopTransport()),
         storage: storage,
       );
-      final vm = SettingsViewModel(storage, prefs, conn, null, bridge);
-      final expected = vm.webSignInLink!;
+      client = _StubWebLoginClient(reply);
+      vm = SettingsViewModel(storage, prefs, conn, null, bridge, client);
+      final browser = await tester.runAsync(() async {
+        final keyPair = await X25519().newKeyPair();
+        return keyPair.extractPublicKey();
+      });
+      final pk = base64Url.encode(browser!.bytes).replaceAll('=', '');
+      webCode =
+          'remotepi://web-login?h=$webLoginHost&id=EBESExQVFhcYGRobHB0eHw'
+          '&pk=$pk';
 
       await tester.pumpWidget(
         MultiProvider(
@@ -222,48 +233,154 @@ void main() {
           ],
           child: MaterialApp(
             theme: buildDarkTheme(),
-            home: const SettingsPage(),
+            home: SettingsPage(webLoginScanner: fakeScanner),
           ),
         ),
       );
       await tester.pump();
 
       await tester.tap(find.text('Sign in on web'));
-      await tester.pump(const Duration(milliseconds: 300));
-      expect(
-        find.text(
-          'This link gives full control of your PCs. '
-          'Only open it on your own browser.',
-        ),
-        findsOneWidget,
-      );
+      await tester.pumpAndSettle();
+    }
 
-      // Cancel reveals nothing.
-      await tester.tap(find.text('Cancel'));
-      await tester.pump(const Duration(milliseconds: 300));
-      expect(find.byType(QrImageView), findsNothing);
-
-      await tester.tap(find.text('Sign in on web'));
-      await tester.pump(const Duration(milliseconds: 300));
-      await tester.tap(find.text('Continue'));
-      // The sheet route starts once the dialog's future resolves; let its
-      // entrance animation finish before tapping inside it.
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 600));
-
-      expect(find.byType(QrImageView), findsOneWidget);
-      expect(find.text(expected), findsNothing); // never printed on screen
-
-      await tester.tap(find.text('Copy link'));
-      await tester.pump();
-      expect(copied, [expected]);
-      expect(find.text('Link copied'), findsOneWidget);
-
+    void dispose() {
       vm.dispose();
       conn.dispose();
       bridge.dispose();
       identityStore.dispose();
       prefs.dispose();
-    },
-  );
+    }
+
+    Future<void> scan(WidgetTester tester, String raw) async {
+      feed!(raw);
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets(
+      'row opens the scanner; foreign codes are rejected while scanning; '
+      'confirmed code signs the browser in',
+      (tester) async {
+        await openScanner(tester, const WebLoginDelivered());
+
+        expect(find.byType(WebLoginScanPage), findsOneWidget);
+        expect(find.text('Scan the code on the website'), findsOneWidget);
+        expect(find.byKey(const Key('fake-scanner')), findsOneWidget);
+
+        // A pairing QR is refused with a clear error; scanning continues.
+        await scan(tester, 'remotepi://pair?t=AAAA&epk=BBBB&n=mac');
+        expect(find.textContaining('PC pairing code'), findsOneWidget);
+        expect(find.byKey(const Key('fake-scanner')), findsOneWidget);
+
+        // A web-login code for another host is refused too.
+        await scan(
+          tester,
+          webCode.replaceFirst('h=$webLoginHost', 'h=evil.example'),
+        );
+        expect(find.textContaining('Unknown website'), findsOneWidget);
+        expect(find.byKey(const Key('fake-scanner')), findsOneWidget);
+        expect(client.delivered, isEmpty);
+
+        await scan(tester, webCode);
+        expect(
+          find.text(
+            'Sign in the browser at $webLoginHost? '
+            'It gets full control of your PCs.',
+          ),
+          findsOneWidget,
+        );
+        expect(find.byKey(const Key('fake-scanner')), findsNothing);
+
+        await tester.runAsync(() async {
+          await tester.tap(find.text('Sign in'));
+          // Let the real X25519/HKDF/AES-GCM work finish.
+          for (var i = 0; i < 50 && client.delivered.isEmpty; i++) {
+            await Future<void>.delayed(const Duration(milliseconds: 10));
+          }
+        });
+        await tester.pumpAndSettle();
+
+        expect(client.delivered, hasLength(1));
+        expect(client.delivered.single.id, 'EBESExQVFhcYGRobHB0eHw');
+        expect(find.byType(WebLoginScanPage), findsNothing);
+        expect(find.text('Browser signed in'), findsOneWidget);
+
+        dispose();
+      },
+    );
+
+    testWidgets('expired code tells the user to refresh the website', (
+      tester,
+    ) async {
+      await openScanner(tester, const WebLoginExpired());
+
+      await scan(tester, webCode);
+      await tester.runAsync(() async {
+        await tester.tap(find.text('Sign in'));
+        for (var i = 0; i < 50 && client.delivered.isEmpty; i++) {
+          await Future<void>.delayed(const Duration(milliseconds: 10));
+        }
+      });
+      await tester.pumpAndSettle();
+
+      expect(
+        find.text('Code expired, refresh the website and scan again'),
+        findsOneWidget,
+      );
+      await tester.tap(find.text('Scan again'));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('fake-scanner')), findsOneWidget);
+
+      dispose();
+    });
+
+    testWidgets('network failure is reported', (tester) async {
+      await openScanner(tester, const WebLoginNetworkError());
+
+      await scan(tester, webCode);
+      await tester.runAsync(() async {
+        await tester.tap(find.text('Sign in'));
+        for (var i = 0; i < 50 && client.delivered.isEmpty; i++) {
+          await Future<void>.delayed(const Duration(milliseconds: 10));
+        }
+      });
+      await tester.pumpAndSettle();
+
+      expect(
+        find.text('Network error. Check your connection and try again.'),
+        findsOneWidget,
+      );
+
+      dispose();
+    });
+
+    testWidgets('Cancel sends nothing and leaves the scanner', (tester) async {
+      await openScanner(tester, const WebLoginDelivered());
+
+      await scan(tester, webCode);
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
+
+      expect(client.delivered, isEmpty);
+      expect(find.byType(WebLoginScanPage), findsNothing);
+      expect(find.text('Sign in on web'), findsOneWidget);
+
+      dispose();
+    });
+  });
+}
+
+class _StubWebLoginClient extends WebLoginClient {
+  final WebLoginResult reply;
+  final List<WebLoginRequest> delivered = [];
+
+  _StubWebLoginClient(this.reply);
+
+  @override
+  Future<WebLoginResult> deliver(
+    WebLoginRequest request,
+    WebLoginEnvelope envelope,
+  ) async {
+    delivered.add(request);
+    return reply;
+  }
 }
