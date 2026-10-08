@@ -566,3 +566,10 @@ Existing stored duplicates are not purged by this fix.
 | 6 | Settings → Paired PCs (read-only) + Account → Sign out | localStorage emptied, back to sign-in screen — [07](screens/2026-10-06-web-07-settings-paired-pcs-sign-out.png) |
 
 - Not shown: a populated session list and opening a chat. That needs a real owner key from the phone link (sibling app work) and a PC with live rooms. Unit tests cover the list logic.
+
+### 2026-10-09 — Web client hosted on the VPS with HTTPS; app "Sign in on web"
+
+- Site deployed to `https://178-157-59-181.sslip.io` (free sslip.io name, A record only → 178.157.59.181). Caddy got a Let's Encrypt cert via TLS-ALPN-01 on 443; port 80 stays nftables-redirected to the relay (relay `/health` still 200). Same-origin `wss://` relay upgrade returns 101. Next.js standalone runs as `remotepi-site` on 127.0.0.1:3100 (`site/scripts/install-vps.sh`).
+- `/api/relay-tunnel` and `/api/relay-mesh` are restricted by `RELAY_PROXY_HOSTS`; a tunnel to `ws://127.0.0.1:22` returns 400. Site tests 46 passed.
+- App `1.2.45+2056` (CI signed, checksum OK): Settings → Sign in on web → warning → QR + Copy. The link targets `kWebClientBaseUrl` (this VPS), never the upstream site; a test pins that. App suite 707 passed. Lockfile kept on CI's Flutter 3.44.4 pins (only `qr`/`qr_flutter` added).
+- Not verified: install on the phone and a real sign-in showing real sessions — the phone was not connected over USB.
