@@ -6,7 +6,6 @@ import {
   bytesToBase64,
   identityFromSeed,
   ownerPkHash,
-  parseSignInFragment,
   verifyMeshEnvelope,
   type MeshEnvelope,
 } from "./mesh.ts";
@@ -42,21 +41,7 @@ const member = (epk: string, nickname?: string) => ({
   remote_epk: epk,
 });
 
-describe("parseSignInFragment", () => {
-  it("decodes the base64url seed and the encoded relay", () => {
-    const link = parseSignInFragment(`#k=${b64url(seed)}&r=${encodeURIComponent("http://178.157.59.181")}`);
-    assert.ok(link && link.ok);
-    assert.deepEqual(link.seed, seed);
-    assert.equal(link.relayUrl, "http://178.157.59.181");
-  });
-
-  it("ignores fragments without k and rejects seeds that are not 32 bytes", () => {
-    assert.equal(parseSignInFragment("#section-2"), null);
-    assert.equal(parseSignInFragment(""), null);
-    const short = parseSignInFragment(`#k=${b64url(new Uint8Array(16))}`);
-    assert.ok(short && !short.ok);
-  });
-
+describe("identityFromSeed", () => {
   it("derives the same Ed25519 public key as the app's newKeyPairFromSeed", () => {
     assert.deepEqual(owner.publicKeyBytes, ed.getPublicKey(seed));
     assert.equal(base64ToBytes(owner.publicKey).length, 32);

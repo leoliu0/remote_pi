@@ -15,7 +15,8 @@ import {
   syncMesh,
   type RoomCommand,
 } from "@/components/web/web-client";
-import { parseSignInFragment, type OwnerIdentity } from "@/components/web/mesh";
+import type { OwnerIdentity } from "@/components/web/mesh";
+import type { WebLoginPayload } from "@/components/web/web-login-crypto";
 import { RelayConnection, type RelayStatus } from "@/components/web/relay-connection";
 import { isValidRelayUrl, normalizeRelayUrl, resolveRelayUrl, saveRelayUrl } from "@/components/web/relay-config";
 import {
@@ -47,28 +48,9 @@ type View = "boot" | "signin" | "home" | "chat";
 /** Same cadence as the app's MeshSyncService.startPolling. */
 const MESH_POLL_MS = 60_000;
 
-/**
- * Consumes a phone-generated sign-in link (`#k=<seed>&r=<relay>`): stores the
- * owner seed + relay and strips the fragment before anything else runs.
- * Returns an error message for a damaged link, else null.
- */
-function consumeSignInFragment(): string | null {
-  const link = parseSignInFragment(window.location.hash);
-  if (!link) return null;
-  window.history.replaceState(null, document.title, window.location.pathname + window.location.search);
-  if (!link.ok) return link.error;
-  // A different owner must not inherit the previous owner's cached PCs/rooms.
-  const current = loadOwnerIdentity();
-  if (current && !current.seed.every((b, i) => b === link.seed[i])) signOut();
-  saveOwnerSeed(link.seed);
-  if (link.relayUrl && isValidRelayUrl(link.relayUrl)) saveRelayUrl(normalizeRelayUrl(link.relayUrl));
-  return null;
-}
-
 export default function WebPage() {
   const [view, setView] = useState<View>("boot");
   const [identity, setIdentity] = useState<OwnerIdentity | null>(null);
-  const [signInError, setSignInError] = useState<string | null>(null);
   const [relayUrl, setRelayUrl] = useState<string | null>(null);
   const [relayStatus, setRelayStatus] = useState<RelayStatus>("offline");
   const [peers, setPeers] = useState<PeerRecord[]>([]);
@@ -96,16 +78,14 @@ export default function WebPage() {
     setPeersLoading(owner !== null && cached === null);
   }, []);
 
-  // Boot: a sign-in link wins; otherwise the stored owner key goes straight
-  // to Home, and a browser without one sees only the sign-in screen.
+  // Boot: the stored owner key goes straight to Home; a browser without one
+  // sees only the QR sign-in screen.
   const boot = useCallback(() => {
-    const error = consumeSignInFragment();
     const owner = loadOwnerIdentity();
     const relay = resolveRelayUrl();
     roomsRef.current = emptyRoomsState(owner ? loadCachedRooms() : {});
     setRooms(roomsRef.current);
     showCachedPeers(owner, relay);
-    setSignInError(error);
     setIdentity(owner);
     setRelayUrl(relay);
     setView(owner ? "home" : "signin");
@@ -113,12 +93,6 @@ export default function WebPage() {
 
   useEffect(() => {
     boot();
-    // A sign-in link pasted into an already-open tab only changes the hash.
-    const onHashChange = () => {
-      if (parseSignInFragment(window.location.hash)) boot();
-    };
-    window.addEventListener("hashchange", onHashChange);
-    return () => window.removeEventListener("hashchange", onHashChange);
   }, [boot]);
 
   // Paired PCs: the relay's current signed mesh blob, re-polled like the app.
@@ -188,6 +162,16 @@ export default function WebPage() {
     saveRelayUrl(url);
     showCachedPeers(identity, url);
     setRelayUrl(url);
+  };
+
+  const handleSignedIn = ({ seed, relayUrl: relay }: WebLoginPayload) => {
+    // A different owner (e.g. signed in from another tab meanwhile) must not
+    // inherit the previous owner's cached PCs/rooms.
+    const current = loadOwnerIdentity();
+    if (current && !current.seed.every((b, i) => b === seed[i])) signOut();
+    saveOwnerSeed(seed);
+    if (relay && isValidRelayUrl(relay)) saveRelayUrl(normalizeRelayUrl(relay));
+    boot();
   };
 
   const handleSignOut = () => {
@@ -267,7 +251,7 @@ export default function WebPage() {
   }
 
   if (view === "signin" || !identity) {
-    return <SignInScreen relayUrl={relayUrl} onRelayChange={handleRelayChange} error={signInError} />;
+    return <SignInScreen relayUrl={relayUrl} onRelayChange={handleRelayChange} onSignedIn={handleSignedIn} />;
   }
 
   const connected = relayStatus === "online";

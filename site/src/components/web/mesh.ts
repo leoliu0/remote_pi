@@ -1,7 +1,7 @@
 // Owner identity + signed mesh membership for the web client.
 //
-// The phone app hands the browser its owner key through a sign-in link
-// (`/web#k=<seed>&r=<relay>`). With that key the browser authenticates to the
+// The phone app hands the browser its owner key by scanning the web sign-in QR
+// (web-login-crypto.ts). With that key the browser authenticates to the
 // relay exactly like the app, and reads the owner's paired PCs from the
 // relay's signed mesh blob (`GET /mesh/<sha256(owner_pk) hex>`), verified the
 // way app/lib/data/mesh/mesh_sync_service.dart does.
@@ -49,31 +49,6 @@ export function identityFromSeed(seed: Uint8Array): OwnerIdentity {
 
 export function signWithOwner(identity: OwnerIdentity, message: Uint8Array): Uint8Array {
   return ed.sign(message, identity.seed);
-}
-
-export type SignInLink =
-  | { ok: true; seed: Uint8Array; relayUrl: string | null }
-  | { ok: false; error: string };
-
-/**
- * Parses the sign-in fragment `#k=<base64url seed>&r=<relay>`. Returns null
- * when the fragment carries no `k` (not a sign-in link).
- */
-export function parseSignInFragment(hash: string): SignInLink | null {
-  const params = new URLSearchParams(hash.replace(/^#/, ""));
-  const k = params.get("k");
-  if (k === null) return null;
-  let seed: Uint8Array;
-  try {
-    seed = base64ToBytes(k);
-  } catch {
-    return { ok: false, error: "This sign-in link is damaged. Generate a new one on your phone." };
-  }
-  if (seed.length !== 32) {
-    return { ok: false, error: "This sign-in link is damaged. Generate a new one on your phone." };
-  }
-  const r = params.get("r");
-  return { ok: true, seed, relayUrl: r && r.trim() ? r.trim() : null };
 }
 
 // ── mesh blob ────────────────────────────────────────────────────────────────
