@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:app/data/local/app_database.dart';
@@ -416,6 +417,38 @@ void main() {
       bridge.dispose();
       identityStore.dispose();
       conn.dispose();
+    });
+  });
+
+  group('SettingsViewModel — web sign-in link', () {
+    test('is null without a booted Owner identity', () {
+      final storage = _FakeStorage([]);
+      final vm = SettingsViewModel(storage, _preferences(), _conn());
+      expect(vm.webSignInLink, isNull);
+      vm.dispose();
+    });
+
+    test('carries the Owner seed and the current relay URL', () async {
+      final storage = _FakeStorage([]);
+      final prefs = _preferences();
+      await prefs.setRelayUrl('https://custom.example');
+      final identityStore = InMemoryOwnerIdentityStore();
+      final bridge = OwnerIdentityBridge(identityStore, storage);
+      await bridge.boot();
+      final vm = SettingsViewModel(storage, prefs, _conn(), null, bridge);
+
+      final link = vm.webSignInLink!;
+      final params = Uri.splitQueryString(Uri.parse(link).fragment);
+      expect(link, contains('/web#k='));
+      expect(
+        base64Url.decode('${params['k']}='),
+        bridge.currentIdentity!.ownerSk,
+      );
+      expect(params['r'], 'https://custom.example');
+
+      vm.dispose();
+      bridge.dispose();
+      identityStore.dispose();
     });
   });
 }

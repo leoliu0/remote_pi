@@ -1,21 +1,25 @@
-// Regression guard — the Display section's five-segment Text size control
-// must fit on a phone (~360 logical px wide) so every option stays tappable,
-// and tapping a segment must persist the new AppFontScale.
+// Regression guards for the Settings page:
+// - the Display section's five-segment Text size control must fit on a phone
+//   (~360 logical px wide) and tapping a segment must persist AppFontScale;
+// - "Sign in on web" must warn before revealing the owner-key link.
 import 'dart:async';
-import 'dart:typed_data';
 
 import 'package:app/data/local/app_database.dart';
 import 'package:app/data/preferences/preferences.dart';
 import 'package:app/data/transport/connection_manager.dart';
 import 'package:app/data/transport/peer_channel.dart';
+import 'package:app/pairing/owner_identity_bridge.dart';
 import 'package:app/pairing/pair_request_flow.dart';
 import 'package:app/pairing/storage.dart';
 import 'package:app/ui/core/themes/themes.dart';
 import 'package:app/ui/settings/settings_page.dart';
 import 'package:app/ui/settings/viewmodels/settings_viewmodel.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
+import 'package:qr_flutter/qr_flutter.dart';
+import 'package:remote_pi_identity/remote_pi_identity.dart';
 
 class _NoopTransport implements PeerTransport {
   @override
@@ -170,6 +174,95 @@ void main() {
 
       vm.dispose();
       conn.dispose();
+      prefs.dispose();
+    },
+  );
+
+  testWidgets(
+    'Sign in on web warns first, then shows the link as QR + copy',
+    (tester) async {
+      tester.view.physicalSize = const Size(400, 2400);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      final copied = <String>[];
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        (call) async {
+          if (call.method == 'Clipboard.setData') {
+            copied.add((call.arguments as Map)['text'] as String);
+          }
+          return null;
+        },
+      );
+      addTearDown(
+        () => tester.binding.defaultBinaryMessenger
+            .setMockMethodCallHandler(SystemChannels.platform, null),
+      );
+
+      final prefs = _preferences();
+      await prefs.load();
+      final storage = _FakeStorage();
+      final identityStore = InMemoryOwnerIdentityStore();
+      final bridge = OwnerIdentityBridge(identityStore, storage);
+      await tester.runAsync(bridge.boot);
+      final conn = ConnectionManager(
+        factory: (_, _) async =>
+            PlainPeerChannel(transport: _NoopTransport()),
+        storage: storage,
+      );
+      final vm = SettingsViewModel(storage, prefs, conn, null, bridge);
+      final expected = vm.webSignInLink!;
+
+      await tester.pumpWidget(
+        MultiProvider(
+          providers: [
+            ChangeNotifierProvider<Preferences>.value(value: prefs),
+            ChangeNotifierProvider<SettingsViewModel>.value(value: vm),
+          ],
+          child: MaterialApp(
+            theme: buildDarkTheme(),
+            home: const SettingsPage(),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      await tester.tap(find.text('Sign in on web'));
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(
+        find.text(
+          'This link gives full control of your PCs. '
+          'Only open it on your own browser.',
+        ),
+        findsOneWidget,
+      );
+
+      // Cancel reveals nothing.
+      await tester.tap(find.text('Cancel'));
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(find.byType(QrImageView), findsNothing);
+
+      await tester.tap(find.text('Sign in on web'));
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.tap(find.text('Continue'));
+      // The sheet route starts once the dialog's future resolves; let its
+      // entrance animation finish before tapping inside it.
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 600));
+
+      expect(find.byType(QrImageView), findsOneWidget);
+      expect(find.text(expected), findsNothing); // never printed on screen
+
+      await tester.tap(find.text('Copy link'));
+      await tester.pump();
+      expect(copied, [expected]);
+      expect(find.text('Link copied'), findsOneWidget);
+
+      vm.dispose();
+      conn.dispose();
+      bridge.dispose();
+      identityStore.dispose();
       prefs.dispose();
     },
   );

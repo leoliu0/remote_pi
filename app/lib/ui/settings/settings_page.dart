@@ -54,6 +54,8 @@ class SettingsPage extends StatelessWidget {
           Divider(color: colors.border, height: 1),
           const _RelaySection(),
           Divider(color: colors.border, height: 1),
+          const _WebSection(),
+          Divider(color: colors.border, height: 1),
           const _SectionHeader('Pairings'),
           switch (state) {
             SettingsLoading() => Padding(
@@ -106,6 +108,63 @@ class _AddPairingButton extends StatelessWidget {
           style: const TextStyle(fontFamily: kMonoFamily, fontSize: 13),
         ),
       ),
+    );
+  }
+}
+
+/// Entry point for signing the web client in with this phone's Owner key.
+/// Warns first, then reveals the link as a QR code + copy action.
+class _WebSection extends StatelessWidget {
+  const _WebSection();
+
+  Future<void> _open(BuildContext context) async {
+    final vm = context.read<SettingsViewModel>();
+    if (!await showWebSignInConfirmDialog(context)) return;
+    if (!context.mounted) return;
+    final link = vm.webSignInLink;
+    if (link == null) {
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Owner identity is unavailable. Retry after reopening the app.',
+          ),
+        ),
+      );
+      return;
+    }
+    await showWebSignInSheet(context, link: link);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const _SectionHeader('Web'),
+        ListTile(
+          contentPadding: const EdgeInsets.symmetric(horizontal: 18),
+          leading: Icon(LucideIcons.globe, size: 20, color: colors.accent),
+          title: Text(
+            'Sign in on web',
+            style: context.typo.sansBody.copyWith(color: colors.text),
+          ),
+          subtitle: Text(
+            'Use your PCs from a browser',
+            style: context.typo.sansBody.copyWith(
+              color: colors.muted,
+              fontSize: 12,
+            ),
+          ),
+          trailing: Icon(
+            LucideIcons.chevronRight,
+            size: 18,
+            color: colors.muted,
+          ),
+          onTap: () => _open(context),
+        ),
+        const SizedBox(height: 8),
+      ],
     );
   }
 }

@@ -1,3 +1,4 @@
+import 'package:app/data/site/site_config.dart';
 import 'package:app/domain/contracts/dismissed_update_store.dart';
 import 'package:app/domain/contracts/update_checker.dart';
 import 'package:app/domain/contracts/url_opener.dart';
@@ -40,8 +41,7 @@ class UpdateBannerViewModel extends ViewModel<UpdateBannerState> {
   /// Website download page fallback URL.
   final String fallbackUrl;
 
-  static const String _kFallbackUrl =
-      'https://remote-pi.jacobmoura.work/download';
+  static const String _kFallbackUrl = '$kSiteBaseUrl/download';
 
   bool _checked = false;
   bool _disposed = false;

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:app/data/mesh/mesh_sync_service.dart';
 import 'package:app/data/preferences/preferences.dart';
+import 'package:app/data/site/web_sign_in_link.dart';
 import 'package:app/data/transport/connection_manager.dart';
 import 'package:app/data/transport/relay_config.dart';
 import 'package:app/pairing/storage.dart';
@@ -66,6 +67,18 @@ class SettingsViewModel extends ViewModel<SettingsState> {
   /// User-set override for the relay URL. If `null`, the app is using the
   /// default endpoint [kDefaultRelayUrl].
   String get relayUrlOverride => _prefs.relayUrl ?? kDefaultRelayUrl;
+
+  /// Sign-in link for the web client (`<site>/web#k=…&r=…`), carrying the
+  /// Owner seed and the current relay. `null` until the Owner identity has
+  /// booted. Secret: callers must never log or persist it.
+  String? get webSignInLink {
+    final identity = _ownerBridge?.currentIdentity;
+    if (identity == null) return null;
+    return buildWebSignInLink(
+      ownerSeed: identity.ownerSk,
+      relayUrl: resolveRelayUrl(_prefs),
+    );
+  }
 
   Future<String?> saveRelayUrl(
     String? value, {
