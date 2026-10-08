@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import WebSocket from "ws";
+import { isRelayProxyTargetAllowed } from "@/components/web/relay-proxy-policy";
 
 // Byte pipe between a browser and a plain `ws://` relay for pages served over
 // https (browsers block mixed-content sockets). The browser still performs the
@@ -22,7 +23,10 @@ export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const id = searchParams.get("id");
   const url = searchParams.get("url");
-  if (!id || !url || !/^wss?:\/\/[^/\s]+/.test(url) || tunnels.has(id)) {
+  if (
+    !id || !url || !/^wss?:\/\/[^/\s]+/.test(url) || tunnels.has(id)
+    || !isRelayProxyTargetAllowed(url, process.env["RELAY_PROXY_HOSTS"])
+  ) {
     return NextResponse.json({ ok: false, error: "invalid tunnel request" }, { status: 400 });
   }
 

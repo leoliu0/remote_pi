@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { isRelayProxyTargetAllowed } from "@/components/web/relay-proxy-policy";
 
 // Read-only proxy for the relay's `GET /mesh/<owner_pk_hash>` (relays send no
 // CORS headers, and https pages cannot fetch http:// relays). The browser
@@ -12,7 +13,10 @@ export async function GET(req: NextRequest) {
   const relay = searchParams.get("relay") ?? "";
   const hash = searchParams.get("hash") ?? "";
   const since = searchParams.get("since");
-  if (!/^https?:\/\/\S+[^/]$/.test(relay) || !/^[0-9a-f]{64}$/.test(hash) || (since !== null && !/^\d+$/.test(since))) {
+  if (
+    !/^https?:\/\/\S+[^/]$/.test(relay) || !/^[0-9a-f]{64}$/.test(hash) || (since !== null && !/^\d+$/.test(since))
+    || !isRelayProxyTargetAllowed(relay, process.env["RELAY_PROXY_HOSTS"])
+  ) {
     return NextResponse.json({ ok: false, error: "invalid mesh request" }, { status: 400 });
   }
   try {
