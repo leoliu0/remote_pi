@@ -553,3 +553,16 @@ Existing stored duplicates are not purged by this fix.
 - Repro attempts on omp 18.6.1 (rosebery: first-level, nested, and IRC-to-running-subagent) did not leak with the old code; that host already reports these sessions as subagents.
 - Real-file check with the new build: rosebery scratch tree → main / EchoKid / Outer / Outer.Inner / Waiter classified correctly, and `-Documents-remote_pi` main → main (it was "subagent" before). uts ratex tree → main file main; `BiberExact2`, `BiberExact2.MapToolParity`, `BiberExact2.CollationParity`, `LuaLib2` → subagent.
 - Not verified on the phone: the running ratex process still holds the old extension in memory; restart ratex to load `a517c970`.
+
+## 2026-10-09 — Web client: phone sign-in link, relay picker, live Home (site/, dev server :3123, headless Chromium)
+
+| # | Step | Result |
+|---|---|---|
+| 1 | Fresh profile → `/web` | Sign-in screen only: "Open Remote Pi on your phone → Settings → Sign in on web" + relay field — [01](screens/2026-10-06-web-01-signed-out.png), relay field editing — [02](screens/2026-10-06-web-02-signed-out-relay-field.png) |
+| 2 | Open `/web#k=<throwaway 32-byte seed>&r=http%3A%2F%2F178.157.59.181` | Fragment stripped (URL `/web`), seed stored, relay auth OK (`Relay · Connected`), `/api/relay-mesh` → 404 (throwaway owner has no mesh) → "No pairings yet" — [03](screens/2026-10-06-web-03-home-after-link.png) |
+| 3 | Reload | Lands on Home directly, still connected — [04](screens/2026-10-06-web-04-home-after-reload.png); fresh document load of a link also lands on Home — [08](screens/2026-10-06-web-08-home-fresh-load-link.png) |
+| 4 | Relay picker → `ws://178.157.59.181:3000` → Save | Stored as `http://178.157.59.181:3000`, status Connecting → Connected, mesh re-fetched for the new relay — [05](screens/2026-10-06-web-05-home-relay-switched.png); "Use default" clears the override |
+| 5 | Test harness: browser-routed mesh blob signed by the throwaway key listing x3d + uts | Signature verified, PCs accepted, relay subscribed; both PCs offline with 0 rooms on the relay at test time (confirmed by a direct relay probe) → "Nothing here…" — [06](screens/2026-10-06-web-06-home-harness-mesh-pcs-offline.png) |
+| 6 | Settings → Paired PCs (read-only) + Account → Sign out | localStorage emptied, back to sign-in screen — [07](screens/2026-10-06-web-07-settings-paired-pcs-sign-out.png) |
+
+- Not shown: a populated session list and opening a chat. That needs a real owner key from the phone link (sibling app work) and a PC with live rooms. Unit tests cover the list logic.

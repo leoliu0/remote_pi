@@ -1,22 +1,28 @@
-import * as ed from "@noble/ed25519";
-import { sha512 } from "@noble/hashes/sha2.js";
+import {
+  bytesToBase64,
+  base64ToBytes,
+  identityFromSeed,
+  ownerPkHash,
+  verifyMeshEnvelope,
+  type OwnerIdentity,
+  type VerifiedMesh,
+} from "./mesh";
+import type { InnerFrame, RelayConnection, RelayStatus } from "./relay-connection";
+import { normalizeRelayUrl } from "./relay-config";
+import { toStandardB64, type PeerRecord, type RoomInfo } from "./session-list";
 
-// Wire SHA-512 into @noble/ed25519
-ed.hashes.sha512 = (...messages: Uint8Array[]) => sha512(ed.etc.concatBytes(...messages));
-
+/** The room a chat is bound to — built from a Home tile when it is opened. */
 export interface PairedSession {
   id: string;
   name: string;
   device: string;
   remoteEpk: string;
-  token?: string;
   relayUrl: string;
   roomId: string;
   cwd?: string;
   model?: string;
   thinking?: string;
   pairedAt: string;
-  lastConnectedAt?: string;
   status?: "working" | "online" | "offline";
   isLive?: boolean;
 }
@@ -56,261 +62,246 @@ export interface WebChatMessage {
   tokensAfter?: number;
 }
 
-export type ConnectionState = "disconnected" | "connecting" | "authenticating" | "pairing" | "connected" | "reconnecting" | "error";
 export type PeerPresence = "online" | "working" | "reconnecting" | "offline" | "unknown";
 
-// Base64 helpers (Standard RFC 4648 with padding)
-export function bytesToBase64(bytes: Uint8Array): string {
-  let binary = "";
-  const len = bytes.byteLength;
-  for (let i = 0; i < len; i++) {
-    binary += String.fromCharCode(bytes[i]);
-  }
-  return btoa(binary);
-}
+// ── local persistence ────────────────────────────────────────────────────────
 
-export function base64ToBytes(base64: string): Uint8Array {
-  let std = base64.replace(/-/g, "+").replace(/_/g, "/");
-  while (std.length % 4 !== 0) {
-    std += "=";
-  }
-  const binary = atob(std);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-  return bytes;
-}
+const STORAGE_KEY_OWNER_SEED = "remotepi_web_owner_seed_v1";
+const STORAGE_KEY_ROOMS = "remotepi_web_rooms_v1";
+const STORAGE_PREFIX_MESH = "remotepi_web_mesh_v1:";
+// Keys written by earlier web builds (self-minted key, server-bridge sessions).
+const LEGACY_KEYS = ["remotepi_web_client_key_v1", "remotepi_web_sessions_v1", "remotepi_web_active_id_v1"];
 
-export function toStandardB64(s: string): string {
-  let std = s.replace(/-/g, "+").replace(/_/g, "/");
-  while (std.length % 4 !== 0) {
-    std += "=";
-  }
-  return std;
-}
-
-const STORAGE_KEY_CLIENT_KEY = "remotepi_web_client_key_v1";
-
-export async function getOrCreateClientKeypair(): Promise<{ publicKey: string; privateKey: Uint8Array }> {
-  if (typeof window !== "undefined") {
-    try {
-      const stored = localStorage.getItem(STORAGE_KEY_CLIENT_KEY);
-      if (stored) {
-        const privBytes = base64ToBytes(stored);
-        const pubBytes = ed.getPublicKey(privBytes);
-        return {
-          publicKey: bytesToBase64(pubBytes),
-          privateKey: privBytes,
-        };
-      }
-    } catch (e) {
-      console.warn("Failed to load stored client key", e);
-    }
-  }
-
-  const privBytes = ed.utils.randomSecretKey();
-  const pubBytes = ed.getPublicKey(privBytes);
-  const pubB64 = bytesToBase64(pubBytes);
-
-  if (typeof window !== "undefined") {
-    try {
-      localStorage.setItem(STORAGE_KEY_CLIENT_KEY, bytesToBase64(privBytes));
-    } catch {}
-  }
-
-  return {
-    publicKey: pubB64,
-    privateKey: privBytes,
-  };
-}
-
-export function parsePairUri(uri: string): Partial<PairedSession> | null {
+function readJson(key: string): unknown {
   try {
-    const trimmed = uri.trim();
-    let url: URL;
-    if (trimmed.startsWith("remotepi://")) {
-      url = new URL(trimmed.replace("remotepi://", "https://dummy.host/"));
-    } else if (trimmed.startsWith("http://") || trimmed.startsWith("https://") || trimmed.startsWith("wss://") || trimmed.startsWith("ws://")) {
-      url = new URL(trimmed);
-    } else {
-      url = new URL(`https://dummy.host/pair?${trimmed}`);
-    }
-
-    const epk = url.searchParams.get("epk") || url.searchParams.get("k");
-    const token = url.searchParams.get("t") || url.searchParams.get("token");
-    const relay = url.searchParams.get("r") || url.searchParams.get("relay") || "ws://178.157.59.181:3000";
-    const room = url.searchParams.get("rm") || url.searchParams.get("room") || "main";
-    const name = url.searchParams.get("n") || url.searchParams.get("name") || (room === "main" ? "Remote Pi" : room);
-    const cwd = url.searchParams.get("cwd") || undefined;
-
-    if (!epk && !token) return null;
-
-    const stdEpk = epk ? toStandardB64(epk) : "";
-
-    return {
-      remoteEpk: stdEpk,
-      token: token || undefined,
-      relayUrl: relay,
-      roomId: room,
-      name,
-      cwd,
-      device: name || `Device (${stdEpk.substring(0, 8)})`,
-    };
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : null;
   } catch {
     return null;
   }
 }
 
-const STORAGE_KEY_SESSIONS = "remotepi_web_sessions_v1";
-const STORAGE_KEY_ACTIVE = "remotepi_web_active_id_v1";
-
-export function getSavedSessions(): PairedSession[] {
-  if (typeof window === "undefined") return [];
+/** The owner identity the phone handed over, or null when signed out. */
+export function loadOwnerIdentity(): OwnerIdentity | null {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY_SESSIONS);
-    if (!raw) return [];
-    const list: PairedSession[] = JSON.parse(raw);
-    const cleaned = list.filter(
-      (s) =>
-        s.id !== "demo_session_1" &&
-        !s.id?.startsWith("demo_") &&
-        !s.name?.toLowerCase().includes("demo") &&
-        !s.device?.toLowerCase().includes("simulated")
-    );
-    if (cleaned.length !== list.length) {
-      localStorage.setItem(STORAGE_KEY_SESSIONS, JSON.stringify(cleaned));
-    }
-    return cleaned;
+    const stored = localStorage.getItem(STORAGE_KEY_OWNER_SEED);
+    if (!stored) return null;
+    const seed = base64ToBytes(stored);
+    return seed.length === 32 ? identityFromSeed(seed) : null;
   } catch {
-    return [];
+    return null;
   }
 }
 
-export function saveSession(session: PairedSession): void {
-  if (typeof window === "undefined") return;
+export function saveOwnerSeed(seed: Uint8Array): OwnerIdentity {
+  localStorage.setItem(STORAGE_KEY_OWNER_SEED, bytesToBase64(seed));
+  return identityFromSeed(seed);
+}
+
+/** Wipes the owner key and everything learned with it. Keeps the relay choice. */
+export function signOut(): void {
+  const keys: string[] = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (key?.startsWith(STORAGE_PREFIX_MESH)) keys.push(key);
+  }
+  for (const key of [...keys, STORAGE_KEY_OWNER_SEED, STORAGE_KEY_ROOMS, ...LEGACY_KEYS]) {
+    localStorage.removeItem(key);
+  }
+}
+
+/** Cached rooms per PC so Home shows last-seen tiles before the relay answers. */
+export function loadCachedRooms(): Record<string, RoomInfo[]> {
+  const rooms = readJson(STORAGE_KEY_ROOMS);
+  return rooms && typeof rooms === "object" && !Array.isArray(rooms) ? (rooms as Record<string, RoomInfo[]>) : {};
+}
+
+export function saveCachedRooms(roomsByPeer: Record<string, RoomInfo[]>): void {
   try {
-    const list = getSavedSessions();
-    const idx = list.findIndex((s) => s.id === session.id || (s.remoteEpk === session.remoteEpk && s.roomId === session.roomId));
-    if (idx >= 0) {
-      list[idx] = { ...list[idx], ...session };
-    } else {
-      list.unshift(session);
-    }
-    localStorage.setItem(STORAGE_KEY_SESSIONS, JSON.stringify(list));
-    localStorage.setItem(STORAGE_KEY_ACTIVE, session.id);
-  } catch (err) {
-    console.error("Failed to save session", err);
-  }
+    localStorage.setItem(STORAGE_KEY_ROOMS, JSON.stringify(roomsByPeer));
+  } catch {}
 }
 
-export function deleteSession(id: string): void {
-  if (typeof window === "undefined") return;
+// ── paired PCs from the signed mesh blob (mesh_sync_service.dart) ───────────
+
+interface StoredMesh {
+  blob: string;
+  sig: string;
+  version: number;
+}
+
+function meshStorageKey(identity: OwnerIdentity, relayUrl: string): string {
+  return `${STORAGE_PREFIX_MESH}${identity.publicKey}:${normalizeRelayUrl(relayUrl)}`;
+}
+
+/** Last verified membership for (owner, relay), re-verified on every read. */
+export function loadVerifiedMesh(identity: OwnerIdentity, relayUrl: string): VerifiedMesh | null {
+  const stored = readJson(meshStorageKey(identity, relayUrl));
+  if (!stored || typeof stored !== "object") return null;
+  const { blob, sig, version } = stored as Partial<StoredMesh>;
+  if (typeof blob !== "string" || typeof sig !== "string" || typeof version !== "number") return null;
+  return verifyMeshEnvelope({ blob, sig }, identity.publicKeyBytes, version);
+}
+
+export type MeshSyncResult =
+  | { kind: "updated"; mesh: VerifiedMesh }
+  | { kind: "unchanged" }
+  | { kind: "failed"; reason: string };
+
+/**
+ * Pulls `GET /mesh/<hash>` from the relay (through `/api/relay-mesh`, since
+ * relays send no CORS headers) and accepts it only when the owner signature
+ * verifies and the version moves forward.
+ */
+export async function syncMesh(identity: OwnerIdentity, relayUrl: string): Promise<MeshSyncResult> {
+  const known = loadVerifiedMesh(identity, relayUrl);
+  const params = new URLSearchParams({ relay: normalizeRelayUrl(relayUrl), hash: ownerPkHash(identity.publicKeyBytes) });
+  if (known) params.set("since", String(known.version));
+  let res: Response;
   try {
-    const list = getSavedSessions().filter((s) => s.id !== id);
-    localStorage.setItem(STORAGE_KEY_SESSIONS, JSON.stringify(list));
-    if (localStorage.getItem(STORAGE_KEY_ACTIVE) === id) {
-      localStorage.removeItem(STORAGE_KEY_ACTIVE);
-    }
+    res = await fetch(`/api/relay-mesh?${params}`, { cache: "no-store" });
   } catch (err) {
-    console.error("Failed to delete session", err);
+    return { kind: "failed", reason: err instanceof Error ? err.message : "network error" };
+  }
+  // 304: nothing newer; 404: this owner never published (no PCs yet).
+  if (res.status === 304 || res.status === 404) return { kind: "unchanged" };
+  if (res.status !== 200) return { kind: "failed", reason: `relay answered ${res.status}` };
+  const body: unknown = await res.json().catch(() => null);
+  if (!body || typeof body !== "object") return { kind: "failed", reason: "mesh response is not JSON" };
+  const { blob, sig, version } = body as Partial<StoredMesh>;
+  if (typeof blob !== "string" || typeof sig !== "string" || typeof version !== "number") {
+    return { kind: "failed", reason: "mesh response is malformed" };
+  }
+  const mesh = verifyMeshEnvelope({ blob, sig }, identity.publicKeyBytes, version);
+  if (!mesh) return { kind: "failed", reason: "mesh signature does not verify for this owner" };
+  if (known && mesh.version <= known.version) return { kind: "failed", reason: "mesh version rolled back" };
+  try {
+    const stored: StoredMesh = { blob, sig, version };
+    localStorage.setItem(meshStorageKey(identity, relayUrl), JSON.stringify(stored));
+  } catch {}
+  return { kind: "updated", mesh };
+}
+
+/** Mesh members → Home's PC records (storage.dart mesh projection). */
+export function peersFromMesh(mesh: VerifiedMesh | null): PeerRecord[] {
+  return (mesh?.members ?? []).map((m) => ({
+    remoteEpk: toStandardB64(m.remoteEpk),
+    sessionName: m.nickname ?? "remote_pi",
+    nickname: m.nickname ?? undefined,
+    relayUrl: m.relayUrl,
+    pairedAt: m.pairedAt,
+  }));
+}
+
+// ── room commands (inner messages the Pi accepts) ────────────────────────────
+
+export type RoomCommand =
+  | { action: "send_message"; text: string }
+  | { action: "queue_message"; text: string }
+  | { action: "clear_queued"; targetId?: string }
+  | { action: "approve_tool"; toolCallId: string; decision: "allow" | "deny" }
+  | { action: "cancel"; targetId: string }
+  | { action: "sync" }
+  | { action: "set_model"; model: string }
+  | { action: "set_thinking"; thinking: string }
+  | { action: "compact" }
+  | { action: "new_session" };
+
+export function buildRoomCommand(cmd: RoomCommand): InnerFrame {
+  const now = Date.now();
+  switch (cmd.action) {
+    case "send_message":
+      return { type: "user_message", id: `cli_${now}`, text: cmd.text };
+    case "queue_message":
+      return { type: "queued_message_set", id: `q_${now}`, text: cmd.text };
+    case "clear_queued":
+      return { type: "queued_message_clear", id: `cq_${now}`, target_id: cmd.targetId };
+    case "approve_tool":
+      return { type: "approve_tool", id: `dec_${now}`, tool_call_id: cmd.toolCallId, decision: cmd.decision };
+    case "cancel":
+      return { type: "cancel", id: `can_${now}`, target_id: cmd.targetId };
+    case "sync":
+      return { type: "session_sync", id: `sync_${now}`, limit: 1000 };
+    case "set_model": {
+      const [provider, modelId] = cmd.model.includes("/") ? cmd.model.split("/") : ["google", cmd.model];
+      return { type: "model_set", id: `act_${now}`, provider, model_id: modelId };
+    }
+    case "set_thinking":
+      return { type: "thinking_set", id: `act_${now}`, level: cmd.thinking };
+    case "compact":
+      return { type: "session_compact", id: `act_${now}` };
+    case "new_session":
+      return { type: "session_new", id: `act_${now}` };
   }
 }
 
-export function getActiveSessionId(): string | null {
-  if (typeof window === "undefined") return null;
-  return localStorage.getItem(STORAGE_KEY_ACTIVE);
-}
+// ── chat client bound to one (PC, room) over the shared relay link ──────────
 
-export function setActiveSessionId(id: string): void {
-  if (typeof window === "undefined") return;
-  localStorage.setItem(STORAGE_KEY_ACTIVE, id);
+/** Callbacks a chat view registers when it binds a client to its room. */
+export interface ChatClientEvents {
+  onPresenceChange?: (presence: PeerPresence) => void;
+  onMessage?: (msg: WebChatMessage) => void;
+  onStreamingChunk?: (chunk: string, inReplyTo: string) => void;
+  onAgentDone?: (inReplyTo: string) => void;
+  onToolRequest?: (tool: ToolCallData) => void;
+  onToolResult?: (toolCallId: string, result: unknown, error?: string) => void;
+  onSessionHistory?: (messages: WebChatMessage[]) => void;
+  onCompaction?: (summary: string, tokensBefore: number) => void;
+  onRoomMeta?: (meta: { model?: string; thinking?: string; working?: boolean }) => void;
+  onQueuedState?: (items: Array<{ id: string; text: string; editable?: boolean }>) => void;
 }
-
-// ── RELAY CLIENT WITH DIRECT SERVER-SENT BRIDGE ───────────────────────────────
 
 export class RemotePiRelayClient {
-  private eventSource: EventSource | null = null;
-  private session: PairedSession;
-  private isDisposed = false;
+  private readonly conn: RelayConnection;
+  private readonly session: PairedSession;
+  private readonly peer: string;
+  private pending: InnerFrame[] = [];
+  private unsubscribers: Array<() => void> = [];
+  private events: ChatClientEvents = {};
 
-  public onStateChange?: (state: ConnectionState, error?: string) => void;
-  public onPresenceChange?: (presence: PeerPresence) => void;
-  public onMessage?: (msg: WebChatMessage) => void;
-  public onStreamingChunk?: (chunk: string, inReplyTo: string) => void;
-  public onAgentDone?: (inReplyTo: string) => void;
-  public onToolRequest?: (tool: ToolCallData) => void;
-  public onToolResult?: (toolCallId: string, result: unknown, error?: string) => void;
-  public onSessionHistory?: (messages: WebChatMessage[]) => void;
-  public onCompaction?: (summary: string, tokensBefore: number) => void;
-  public onRoomMeta?: (meta: { model?: string; thinking?: string; working?: boolean }) => void;
-  public onQueuedState?: (items: Array<{ id: string; text: string; editable?: boolean }>) => void;
-  constructor(session: PairedSession) {
+  constructor(conn: RelayConnection, session: PairedSession) {
+    this.conn = conn;
     this.session = session;
+    this.peer = toStandardB64(session.remoteEpk);
   }
 
-  public async connect(): Promise<void> {
-    this.isDisposed = false;
-    this.onStateChange?.("connecting");
-
-    try {
-      const params = new URLSearchParams({
-        sessionId: this.session.id,
-        roomId: this.session.roomId || "main",
-        remoteEpk: this.session.remoteEpk || "",
-        relayUrl: this.session.relayUrl || "",
-      });
-      const url = `/api/relay-bridge?${params.toString()}`;
-      this.eventSource = new EventSource(url);
-      this.eventSource.onmessage = (event) => {
-        try {
-          const payload = JSON.parse(event.data);
-          this.handleBridgeEvent(payload);
-        } catch (err) {
-          console.warn("SSE frame error", err);
-        }
-      };
-
-      this.eventSource.onerror = (err) => {
-        if (this.isDisposed) return;
-        console.warn("SSE connection error", err);
-        this.onStateChange?.("reconnecting");
-        this.onPresenceChange?.("reconnecting");
-      };
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Failed to connect to relay bridge";
-      this.onStateChange?.("error", msg);
-    }
+  public connect(events: ChatClientEvents): void {
+    this.disconnect();
+    this.events = events;
+    this.unsubscribers.push(
+      this.conn.onInner((peer, room, inner) => {
+        // Strict (peer, room) isolation: other rooms share this socket.
+        if (toStandardB64(peer) !== this.peer || room !== this.session.roomId) return;
+        this.handleServerMessage(inner);
+      }),
+      this.conn.onStatus((status) => this.handleStatus(status)),
+    );
+    this.handleStatus(this.conn.currentStatus);
   }
 
-  private handleBridgeEvent(event: Record<string, unknown>): void {
-    if (event.type === "init") {
-      this.onStateChange?.("connected");
-      if (event.presence) {
-        this.onPresenceChange?.(event.presence as PeerPresence);
-      }
-      return;
-    }
+  public disconnect(): void {
+    this.unsubscribers.forEach((u) => u());
+    this.unsubscribers = [];
+    this.pending = [];
+    this.events = {};
+  }
 
-    if (event.type === "presence") {
-      this.onPresenceChange?.(event.presence as PeerPresence || "offline");
-      return;
-    }
+  /** Every (re)connect flushes queued sends and re-syncs history, like the app. */
+  private handleStatus(status: RelayStatus): void {
+    if (status !== "online") return;
+    const queued = this.pending;
+    this.pending = [];
+    for (const inner of queued) this.send(inner);
+    this.requestSync();
+  }
 
-    if (event.type === "inner" && event.data && typeof event.data === "object") {
-      this.handleServerMessage(event.data as Record<string, unknown>);
-    }
+  private send(inner: InnerFrame): void {
+    if (!this.conn.sendInner(this.peer, this.session.roomId, inner)) this.pending.push(inner);
   }
 
   private handleServerMessage(msg: Record<string, unknown>): void {
     const type = msg.type;
     switch (type) {
-      case "pair_ok":
-        this.onStateChange?.("connected");
-        this.onPresenceChange?.("online");
-        this.requestSync();
-        break;
-
       case "session_history":
         if (Array.isArray(msg.events)) {
           const historyMessages: WebChatMessage[] = [];
@@ -358,12 +349,12 @@ export class RemotePiRelayClient {
               });
             }
           }
-          this.onSessionHistory?.(historyMessages);
+          this.events.onSessionHistory?.(historyMessages);
         }
         break;
 
       case "user_input":
-        this.onMessage?.({
+        this.events.onMessage?.({
           id: (msg.id as string) || `user-${Date.now()}`,
           role: "user",
           text: (msg.text as string) || "",
@@ -373,13 +364,13 @@ export class RemotePiRelayClient {
         break;
 
       case "agent_chunk":
-        this.onPresenceChange?.("working");
-        this.onStreamingChunk?.((msg.delta as string) || "", (msg.in_reply_to as string) || "");
+        this.events.onPresenceChange?.("working");
+        this.events.onStreamingChunk?.((msg.delta as string) || "", (msg.in_reply_to as string) || "");
         break;
 
       case "agent_message":
-        this.onPresenceChange?.("online");
-        this.onMessage?.({
+        this.events.onPresenceChange?.("online");
+        this.events.onMessage?.({
           id: `asst-${Date.now()}`,
           role: "assistant",
           text: (msg.text as string) || "",
@@ -388,102 +379,76 @@ export class RemotePiRelayClient {
         break;
 
       case "agent_done":
-        this.onPresenceChange?.("online");
-        this.onAgentDone?.((msg.in_reply_to as string) || "");
+        this.events.onPresenceChange?.("online");
+        this.events.onAgentDone?.((msg.in_reply_to as string) || "");
         break;
 
-      case "tool_request":
-        this.onPresenceChange?.("working");
-        this.onToolRequest?.({
+      case "tool_request": {
+        const args = msg.args && typeof msg.args === "object" ? (msg.args as Record<string, unknown>) : undefined;
+        this.events.onPresenceChange?.("working");
+        this.events.onToolRequest?.({
           id: msg.tool_call_id as string,
           tool: msg.tool as string,
-          args: msg.args as Record<string, unknown>,
-          command: typeof (msg.args as Record<string, unknown>)?.command === "string" ? (msg.args as Record<string, unknown>).command as string : undefined,
+          args,
+          command: typeof args?.command === "string" ? args.command : undefined,
           status: "pending",
         });
         break;
+      }
 
       case "tool_result":
-        this.onToolResult?.(msg.tool_call_id as string, msg.result, msg.error as string | undefined);
+        this.events.onToolResult?.(msg.tool_call_id as string, msg.result, msg.error as string | undefined);
         break;
 
       case "compaction":
-        this.onCompaction?.((msg.summary as string) || "Context compacted", (msg.tokens_before as number) || 0);
+        this.events.onCompaction?.((msg.summary as string) || "Context compacted", (msg.tokens_before as number) || 0);
         break;
 
       case "room_meta_updated":
       case "room_meta":
         if (msg.meta && typeof msg.meta === "object") {
           const meta = msg.meta as Record<string, unknown>;
-          const update = {
+          this.events.onRoomMeta?.({
             model: typeof meta.model === "string" ? meta.model : undefined,
             thinking: typeof meta.thinking === "string" ? meta.thinking : undefined,
             working: typeof meta.working === "boolean" ? meta.working : undefined,
-          };
-          if (update.model) this.session.model = update.model;
-          if (update.thinking) this.session.thinking = update.thinking;
-          this.onRoomMeta?.(update);
+          });
         }
         break;
 
       case "queued_message_state":
         if (Array.isArray(msg.items)) {
-          this.onQueuedState?.(msg.items as Array<{ id: string; text: string; editable?: boolean }>);
+          this.events.onQueuedState?.(msg.items as Array<{ id: string; text: string; editable?: boolean }>);
         } else if (typeof msg.text === "string" && msg.text) {
-          this.onQueuedState?.([{ id: (msg.id as string) || "q1", text: msg.text, editable: true }]);
+          this.events.onQueuedState?.([{ id: (msg.id as string) || "q1", text: msg.text, editable: true }]);
         } else {
-          this.onQueuedState?.([]);
+          this.events.onQueuedState?.([]);
         }
         break;
     }
   }
-  public async postAction(action: string, payload: Record<string, unknown> = {}): Promise<void> {
-    try {
-      await fetch("/api/relay-bridge", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          sessionId: this.session.id,
-          roomId: this.session.roomId || "main",
-          remoteEpk: this.session.remoteEpk,
-          relayUrl: this.session.relayUrl,
-          action,
-          ...payload,
-        }),
-      });
-    } catch (err) {
-      console.warn("Failed to post action", err);
-    }
-  }
 
   public requestSync(): void {
-    this.postAction("sync");
+    this.send(buildRoomCommand({ action: "sync" }));
   }
 
   public sendMessage(text: string): void {
-    this.postAction("send_message", { text });
+    this.send(buildRoomCommand({ action: "send_message", text }));
   }
 
   public queueMessage(text: string): void {
-    this.postAction("queue_message", { text });
+    this.send(buildRoomCommand({ action: "queue_message", text }));
   }
 
   public clearQueuedMessage(targetId?: string): void {
-    this.postAction("clear_queued", { targetId });
+    this.send(buildRoomCommand({ action: "clear_queued", targetId }));
   }
 
   public approveTool(toolCallId: string, decision: "allow" | "deny"): void {
-    this.postAction("approve_tool", { toolCallId, decision });
-  }
-  public cancelTurn(targetId: string): void {
-    this.postAction("cancel", { targetId });
+    this.send(buildRoomCommand({ action: "approve_tool", toolCallId, decision }));
   }
 
-  public disconnect(): void {
-    this.isDisposed = true;
-    if (this.eventSource) {
-      this.eventSource.close();
-      this.eventSource = null;
-    }
+  public cancelTurn(targetId: string): void {
+    this.send(buildRoomCommand({ action: "cancel", targetId }));
   }
 }

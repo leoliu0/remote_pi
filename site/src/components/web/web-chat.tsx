@@ -1,18 +1,30 @@
 "use client";
 
-import { useState, useEffect, useLayoutEffect, useRef } from "react";
+import { useState, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import {
   WebChatMessage,
   PairedSession,
   PeerPresence,
-  ConnectionState,
-  ToolCallData,
   RemotePiRelayClient,
 } from "./web-client";
 import { MarkdownRenderer } from "./markdown-renderer";
+import type { RelayConnection } from "./relay-connection";
+
+type ToolDisplay = "brief" | "full" | "hidden";
+
+function readToolDisplay(): ToolDisplay {
+  try {
+    const saved = localStorage.getItem("remotepi_tool_display");
+    if (saved === "brief" || saved === "full" || saved === "hidden") return saved;
+  } catch {}
+  return "brief";
+}
 
 interface WebChatProps {
   session: PairedSession;
+  connection: RelayConnection;
+  /** This room's state from the relay's room/presence frames (Home's source of truth). */
+  roomPresence: PeerPresence;
   onDisconnect: () => void;
   onOpenSessionInfo: () => void;
   onOpenQuickActions: () => void;
@@ -39,6 +51,8 @@ const READ_ONLY_TOOLS = new Set([
 
 export function WebChat({
   session,
+  connection,
+  roomPresence,
   onDisconnect,
   onOpenSessionInfo,
   onOpenQuickActions,
@@ -46,26 +60,31 @@ export function WebChat({
 }: WebChatProps) {
   const [messages, setMessages] = useState<WebChatMessage[]>([]);
   const [inputText, setInputText] = useState("");
-  const [isWorking, setIsWorking] = useState(session.status === "working");
-  const [presence, setPresence] = useState<PeerPresence>(
-    session.status || (session.isLive ? "online" : "offline")
-  );
-  const [connState, setConnState] = useState<ConnectionState>("connecting");
-  const [connError, setConnError] = useState<string | null>(null);
+  const [isWorking, setIsWorking] = useState(roomPresence === "working");
+  const [presence, setPresence] = useState<PeerPresence>(roomPresence);
+  // Relay room/meta frames win over in-chat signals whenever they change.
+  const [syncedRoomPresence, setSyncedRoomPresence] = useState(roomPresence);
+  if (roomPresence !== syncedRoomPresence) {
+    setSyncedRoomPresence(roomPresence);
+    setPresence(roomPresence);
+    setIsWorking(roomPresence === "working");
+  }
   const [showScrollBottom, setShowScrollBottom] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
   const [history, setHistory] = useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
   const [slashMenuOpen, setSlashMenuOpen] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
-  const [toolDisplay, setToolDisplay] = useState<"brief" | "full" | "hidden">("brief");
+  const [toolDisplay, setToolDisplay] = useState<ToolDisplay>(readToolDisplay);
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
   const [queuedItems, setQueuedItems] = useState<Array<{ id: string; text: string; editable?: boolean }>>([]);
 
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const isInitialLoadRef = useRef(true);
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  const clientRef = useRef<RemotePiRelayClient | null>(null);
+  // Built during render (no side effects in the constructor); the effect below
+  // wires callbacks and subscribes it to the shared relay link.
+  const client = useMemo(() => new RemotePiRelayClient(connection, session), [connection, session]);
   // Synchronously position at the bottom before browser paints
   useLayoutEffect(() => {
     if (isInitialLoadRef.current && messages.length > 0 && scrollContainerRef.current) {
@@ -74,199 +93,6 @@ export function WebChat({
     }
   }, [messages]);
   const activeStreamIdRef = useRef<string | null>(null);
-
-  // Initialize Real WebSocket Relay Client & Load Session History
-  useEffect(() => {
-    try {
-      const savedMode = localStorage.getItem("remotepi_tool_display");
-      if (savedMode === "brief" || savedMode === "full" || savedMode === "hidden") {
-        setToolDisplay(savedMode);
-      }
-    } catch {}
-
-    const handleStorageChange = () => {
-      try {
-        const savedMode = localStorage.getItem("remotepi_tool_display");
-        if (savedMode === "brief" || savedMode === "full" || savedMode === "hidden") {
-          setToolDisplay(savedMode);
-        }
-      } catch {}
-    };
-    window.addEventListener("tool_display_changed", handleStorageChange);
-
-    setMessages([]);
-    // 1. Load on-disk / cached history immediately
-    fetch(`/api/session-history?roomId=${encodeURIComponent(session.roomId)}&cwd=${encodeURIComponent(session.cwd || "")}`)
-      .then((res) => res.json())
-      .then((data) => {
-        if (data && data.ok && Array.isArray(data.messages) && data.messages.length > 0) {
-          setMessages(data.messages);
-          requestAnimationFrame(() => {
-            if (scrollContainerRef.current) {
-              scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight;
-            }
-          });
-        }
-      })
-      .catch(() => {});
-
-    const client = new RemotePiRelayClient(session);
-    clientRef.current = client;
-    client.onStateChange = (state, err) => {
-      setConnState(state);
-      if (err) setConnError(err);
-      if (state === "connected") {
-        setConnError(null);
-      } else if (state === "disconnected" || state === "error") {
-        setPresence("offline");
-      }
-    };
-
-    client.onPresenceChange = (p) => {
-      setPresence(p);
-      setIsWorking(p === "working");
-    };
-
-    client.onSessionHistory = (histMsgs) => {
-      if (histMsgs.length > 0) {
-        setMessages(histMsgs);
-        requestAnimationFrame(() => {
-          if (scrollContainerRef.current) {
-            scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight;
-          }
-        });
-      }
-    };
-    client.onMessage = (msg) => {
-      setMessages((prev) => {
-        // If message with same id exists, update it; otherwise append
-        const exists = prev.some((m) => m.id === msg.id);
-        if (exists) {
-          return prev.map((m) => (m.id === msg.id ? { ...m, ...msg } : m));
-        }
-        return [...prev, msg];
-      });
-
-      // Increment unread count if user is scrolled up
-      if (scrollContainerRef.current) {
-        const { scrollTop, scrollHeight, clientHeight } = scrollContainerRef.current;
-        if (scrollHeight - scrollTop - clientHeight > 120) {
-          setUnreadCount((c) => c + 1);
-        } else {
-          setTimeout(() => scrollToBottom(true), 50);
-        }
-      }
-    };
-
-    client.onStreamingChunk = (delta, inReplyTo) => {
-      activeStreamIdRef.current = inReplyTo;
-      setIsWorking(true);
-      setMessages((prev) => {
-        const streamMsgId = `stream-${inReplyTo}`;
-        const existingIdx = prev.findIndex((m) => m.id === streamMsgId);
-        if (existingIdx >= 0) {
-          const updated = [...prev];
-          updated[existingIdx] = {
-            ...updated[existingIdx],
-            text: updated[existingIdx].text + delta,
-            isStreaming: true,
-          };
-          return updated;
-        } else {
-          return [
-            ...prev,
-            {
-              id: streamMsgId,
-              role: "assistant",
-              text: delta,
-              timestamp: Date.now(),
-              isStreaming: true,
-            },
-          ];
-        }
-      });
-
-      // Auto-scroll if near bottom
-      if (scrollContainerRef.current) {
-        const { scrollTop, scrollHeight, clientHeight } = scrollContainerRef.current;
-        if (scrollHeight - scrollTop - clientHeight <= 120) {
-          scrollToBottom(true);
-        }
-      }
-    };
-
-    client.onAgentDone = (inReplyTo) => {
-      setIsWorking(false);
-      activeStreamIdRef.current = null;
-      setMessages((prev) =>
-        prev.map((m) => (m.id === `stream-${inReplyTo}` ? { ...m, isStreaming: false } : m))
-      );
-      setTimeout(() => scrollToBottom(true), 50);
-    };
-
-    client.onToolRequest = (tool) => {
-      setIsWorking(true);
-      const toolMsg: WebChatMessage = {
-        id: `tool-${tool.id}`,
-        role: "tool",
-        text: `${tool.tool}: ${tool.command || JSON.stringify(tool.args || {})}`,
-        timestamp: Date.now(),
-        tool,
-      };
-      setMessages((prev) => [...prev, toolMsg]);
-      setTimeout(() => scrollToBottom(true), 50);
-    };
-
-    client.onToolResult = (toolCallId, result, error) => {
-      setMessages((prev) =>
-        prev.map((m) => {
-          if (m.tool && m.tool.id === toolCallId) {
-            return {
-              ...m,
-              tool: {
-                ...m.tool,
-                status: error ? "error" : "done",
-                error,
-                output: typeof result === "string" ? result : JSON.stringify(result, null, 2),
-              },
-            };
-          }
-          return m;
-        })
-      );
-    };
-
-    client.onCompaction = (summary, tokensBefore) => {
-      const compMsg: WebChatMessage = {
-        id: `comp-${Date.now()}`,
-        role: "compaction",
-        text: summary,
-        timestamp: Date.now(),
-        tokensBefore,
-      };
-      setMessages((prev) => [...prev, compMsg]);
-    };
-
-    client.onQueuedState = (items) => {
-      setQueuedItems(items);
-    };
-
-    client.onRoomMeta = (meta) => {
-      if (meta.thinking) {
-        session.thinking = meta.thinking;
-      }
-      if (meta.model) {
-        session.model = meta.model;
-      }
-    };
-
-    client.connect();
-
-    return () => {
-      window.removeEventListener("tool_display_changed", handleStorageChange);
-      client.disconnect();
-    };
-  }, [session]);
 
   // Scroll detection for "Scroll to bottom" button
   const handleScroll = () => {
@@ -292,27 +118,164 @@ export function WebChat({
     setShowScrollBottom(false);
   };
 
+  // Bind the chat client to this room; history arrives via session_sync, like the app.
+  useEffect(() => {
+    const handleStorageChange = () => setToolDisplay(readToolDisplay());
+    window.addEventListener("tool_display_changed", handleStorageChange);
+
+    client.connect({
+      onPresenceChange: (p) => {
+        setPresence(p);
+        setIsWorking(p === "working");
+      },
+
+      onSessionHistory: (histMsgs) => {
+        if (histMsgs.length > 0) {
+          setMessages(histMsgs);
+          requestAnimationFrame(() => {
+            if (scrollContainerRef.current) {
+              scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight;
+            }
+          });
+        }
+      },
+
+      onMessage: (msg) => {
+        setMessages((prev) => {
+          // If message with same id exists, update it; otherwise append
+          const exists = prev.some((m) => m.id === msg.id);
+          if (exists) {
+            return prev.map((m) => (m.id === msg.id ? { ...m, ...msg } : m));
+          }
+          return [...prev, msg];
+        });
+
+        // Increment unread count if user is scrolled up
+        if (scrollContainerRef.current) {
+          const { scrollTop, scrollHeight, clientHeight } = scrollContainerRef.current;
+          if (scrollHeight - scrollTop - clientHeight > 120) {
+            setUnreadCount((c) => c + 1);
+          } else {
+            setTimeout(() => scrollToBottom(true), 50);
+          }
+        }
+      },
+
+      onStreamingChunk: (delta, inReplyTo) => {
+        activeStreamIdRef.current = inReplyTo;
+        setIsWorking(true);
+        setMessages((prev) => {
+          const streamMsgId = `stream-${inReplyTo}`;
+          const existingIdx = prev.findIndex((m) => m.id === streamMsgId);
+          if (existingIdx >= 0) {
+            const updated = [...prev];
+            updated[existingIdx] = {
+              ...updated[existingIdx],
+              text: updated[existingIdx].text + delta,
+              isStreaming: true,
+            };
+            return updated;
+          } else {
+            return [
+              ...prev,
+              {
+                id: streamMsgId,
+                role: "assistant",
+                text: delta,
+                timestamp: Date.now(),
+                isStreaming: true,
+              },
+            ];
+          }
+        });
+
+        // Auto-scroll if near bottom
+        if (scrollContainerRef.current) {
+          const { scrollTop, scrollHeight, clientHeight } = scrollContainerRef.current;
+          if (scrollHeight - scrollTop - clientHeight <= 120) {
+            scrollToBottom(true);
+          }
+        }
+      },
+
+      onAgentDone: (inReplyTo) => {
+        setIsWorking(false);
+        activeStreamIdRef.current = null;
+        setMessages((prev) =>
+          prev.map((m) => (m.id === `stream-${inReplyTo}` ? { ...m, isStreaming: false } : m))
+        );
+        setTimeout(() => scrollToBottom(true), 50);
+      },
+
+      onToolRequest: (tool) => {
+        setIsWorking(true);
+        const toolMsg: WebChatMessage = {
+          id: `tool-${tool.id}`,
+          role: "tool",
+          text: `${tool.tool}: ${tool.command || JSON.stringify(tool.args || {})}`,
+          timestamp: Date.now(),
+          tool,
+        };
+        setMessages((prev) => [...prev, toolMsg]);
+        setTimeout(() => scrollToBottom(true), 50);
+      },
+
+      onToolResult: (toolCallId, result, error) => {
+        setMessages((prev) =>
+          prev.map((m) => {
+            if (m.tool && m.tool.id === toolCallId) {
+              return {
+                ...m,
+                tool: {
+                  ...m.tool,
+                  status: error ? "error" : "done",
+                  error,
+                  output: typeof result === "string" ? result : JSON.stringify(result, null, 2),
+                },
+              };
+            }
+            return m;
+          })
+        );
+      },
+
+      onCompaction: (summary, tokensBefore) => {
+        const compMsg: WebChatMessage = {
+          id: `comp-${Date.now()}`,
+          role: "compaction",
+          text: summary,
+          timestamp: Date.now(),
+          tokensBefore,
+        };
+        setMessages((prev) => [...prev, compMsg]);
+      },
+
+      onQueuedState: (items) => {
+        setQueuedItems(items);
+      },
+    });
+
+    return () => {
+      window.removeEventListener("tool_display_changed", handleStorageChange);
+      client.disconnect();
+    };
+  }, [client]);
+
   const handleQueueMessage = () => {
     const text = inputText.trim();
     if (!text) return;
-    if (clientRef.current) {
-      clientRef.current.queueMessage(text);
-    }
+    client.queueMessage(text);
     setInputText("");
   };
 
   const handleEditQueued = (item: { id: string; text: string }) => {
-    if (clientRef.current) {
-      clientRef.current.clearQueuedMessage(item.id);
-    }
+    client.clearQueuedMessage(item.id);
     setInputText(item.text);
     inputRef.current?.focus();
   };
 
   const handleClearQueued = (id: string) => {
-    if (clientRef.current) {
-      clientRef.current.clearQueuedMessage(id);
-    }
+    client.clearQueuedMessage(id);
     setQueuedItems((prev) => prev.filter((q) => q.id !== id));
   };
 
@@ -340,15 +303,11 @@ export function WebChat({
     setTimeout(() => scrollToBottom(true), 50);
 
     // Send to WebSocket
-    if (clientRef.current) {
-      clientRef.current.sendMessage(text);
-    }
+    client.sendMessage(text);
   };
 
   const handleToolDecision = (toolCallId: string, decision: "allow" | "deny") => {
-    if (clientRef.current) {
-      clientRef.current.approveTool(toolCallId, decision);
-    }
+    client.approveTool(toolCallId, decision);
     setMessages((prev) =>
       prev.map((m) => {
         if (m.tool && m.tool.id === toolCallId) {
@@ -367,8 +326,8 @@ export function WebChat({
   };
 
   const handleCancelTurn = () => {
-    if (clientRef.current && activeStreamIdRef.current) {
-      clientRef.current.cancelTurn(activeStreamIdRef.current);
+    if (activeStreamIdRef.current) {
+      client.cancelTurn(activeStreamIdRef.current);
     }
   };
 
@@ -514,27 +473,10 @@ export function WebChat({
         </div>
       </div>
 
-      {/* Connection Notice / Error Banner */}
-      {connError && (
-        <div className="px-4 py-2 bg-red-500/15 border-b border-red-500/30 text-red-300 text-xs font-mono flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <span>⚠️</span>
-            <span>{connError}</span>
-          </div>
-          <button
-            type="button"
-            onClick={() => clientRef.current?.connect()}
-            className="underline hover:text-white cursor-pointer"
-          >
-            Retry
-          </button>
-        </div>
-      )}
-
       {/* 2. CHAT TIMELINE / MESSAGE LIST */}
       <div
         ref={(el) => {
-          (scrollContainerRef as any).current = el;
+          scrollContainerRef.current = el;
           if (el && isInitialLoadRef.current && messages.length > 0) {
             el.scrollTop = el.scrollHeight;
           }
@@ -623,14 +565,12 @@ export function WebChat({
                     ? m.tool.command
                     : m.tool.args && typeof m.tool.args === "object"
                     ? String(
-                        (m.tool.args as Record<string, any>).path ||
-                          (m.tool.args as Record<string, any>).pattern ||
-                          (m.tool.args as Record<string, any>).query ||
-                          (m.tool.args as Record<string, any>).command ||
+                        m.tool.args.path ||
+                          m.tool.args.pattern ||
+                          m.tool.args.query ||
+                          m.tool.args.command ||
                           JSON.stringify(m.tool.args)
                       )
-                    : typeof m.tool.args === "string"
-                    ? m.tool.args
                     : "";
                 if (!isExpanded) {
                   return (
