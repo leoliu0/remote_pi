@@ -99,6 +99,16 @@ export function WebChat({
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const isInitialLoadRef = useRef(true);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  // Composer grows with its text like the app's (minLines 1 → maxLines, then
+  // scrolls). Desktop has room, so allow up to ~10 lines.
+  useLayoutEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    const max = 240;
+    el.style.height = `${Math.min(el.scrollHeight, max)}px`;
+    el.style.overflowY = el.scrollHeight > max ? "auto" : "hidden";
+  }, [inputText]);
   // Built during render (no side effects in the constructor); the effect below
   // wires callbacks and subscribes it to the shared relay link.
   const client = useMemo(() => new RemotePiRelayClient(connection, session), [connection, session]);
@@ -682,7 +692,7 @@ export function WebChat({
           </div>
         )}
 
-        <div className="relative flex items-center gap-2 rounded-xl bg-black/60 border border-white/15 focus-within:border-[#4fc3f7]/60 focus-within:ring-1 focus-within:ring-[#4fc3f7]/60 px-2.5 py-1.5 transition-all">
+        <div className="relative flex items-end gap-2 rounded-xl bg-black/60 border border-white/15 focus-within:border-[#4fc3f7]/60 focus-within:ring-1 focus-within:ring-[#4fc3f7]/60 px-2.5 py-1.5 transition-all">
           <div className="flex items-center gap-0.5 shrink-0">
             {/* Quick Actions icon visible when input is empty (matching Flutter) */}
             {!inputText && (
@@ -729,7 +739,7 @@ export function WebChat({
                 ? "Agent is working… Enter to steer, Ctrl+Enter to queue"
                 : "Type a prompt, or / for commands…"
             }
-            className="flex-1 bg-transparent py-1 px-1 text-sm text-white placeholder:text-[#555] font-[family-name:var(--ff-body)] resize-none outline-none max-h-32 min-h-[26px] leading-relaxed"
+            className="flex-1 self-center bg-transparent py-1 px-1 text-sm text-white placeholder:text-[#555] font-[family-name:var(--ff-body)] resize-none outline-none min-h-[26px] leading-relaxed"
           />
 
           {/* Right Buttons */}

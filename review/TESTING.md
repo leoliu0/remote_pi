@@ -597,3 +597,9 @@ Existing stored duplicates are not purged by this fix.
 - Ask select (bridge frame `tool:tc_1`): picked Beta + note → outgoing `{"type":"extension_ui_response","id":"tool:tc_1","ask":{"flow_id":"tool:tc_1","kind":"answer","mode":"submit","answers":{"goal":{"values":["b"],"note":"picked on the web"}}}}`; modal stayed in Sending… until the `notify` dismiss closed it (`2026-10-09-web-full-ask-select-{open,chosen,submitted,dismissed}.png`). Confirm `c1` → `{"type":"extension_ui_response","id":"c1","confirmed":true}` (`2026-10-09-web-full-confirm-open.png`).
 - Checks: `pnpm test` 79/79, `tsc --noEmit` clean, eslint 0 errors (2 pre-existing unused-var warnings in web-chat.tsx), `pnpm build` ok. Deployed via `install-vps.sh`; live chunk `0enzrt.n76.gt.js` contains `Add a note (optional)`, `Command exited with code`, `extension_ui_response`.
 - Not verified: a real paired session (live relay + pi-extension answering through pi-ask / ask tool).
+
+### 2026-10-09 — Web composer auto-grow
+
+- Surface: `/web` chat composer, headless Chromium (900px wide, DPR 2) against `pnpm dev` with the temporary fake-transport page (deleted before build). Typed with Shift+Enter between lines.
+- Textarea heights: empty 31px, 1 line 31px, 4 lines 99px, 15 lines 240px (capped; overflowY auto, scrollHeight 349, caret line visible). Left icons and Send button bottoms stayed at the row bottom (898px) in every state. Enter sent all 15 lines as one user_message and the box went back to 31px, overflowY hidden (`2026-10-09-web-composer-{1,4,15,after-send}.png`).
+- `pnpm build` ok (the first run failed on a transient next/font/google lookup; the rerun was clean). Redeployed via `install-vps.sh`; live chunk `14dmz1hos3bc8.js` contains `overflowY`.
