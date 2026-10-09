@@ -611,3 +611,12 @@ Existing stored duplicates are not purged by this fix.
 - Thinking: a history message with `<think>` showed a muted Thinking block clamped to 2 lines, expanding on click. A streaming unterminated `<think>` showed `Thinking…`. With the switch OFF both were stripped. The Settings switch defaults ON and persists `remotepi_show_thinking` across reloads (`2026-10-09-web-thinking-{on-collapsed,on-expanded,on-streaming,off,settings-on}.png`).
 - Checks: `pnpm test` 89/89, tsc clean, eslint 0 errors (2 pre-existing warnings), `pnpm build` ok.
 - Not verified: frames from a real omp session over the relay.
+
+### 2026-10-09 — Terminal parity on phone and web (bash card, ask, thinking, activity panel, composer)
+
+- Bash Full card on both clients: `$ <command>`, intent, `in <cwd>`, `Output` body (or `(no output)`), footer `Wall: Xs | Timeout: Ns | exit N`; shared vectors pass on both. Web bug: live output/errors were never shown (card read `tool.result`, live set `output`/`error`).
+- Ask prompts: web had no `extension_ui_request` handling; now implemented in the phone's wire format. App: 8 defects fixed (incl. a second prompt replacing the first, prompts never closed after an offline dismiss, confirm without "No").
+- Extension: thinking blocks kept in history (byte-identical to the live stream on a real session); subagent `pi` handlers no longer broadcast tool cards / spurious `agent_done` into the main chat (real omp run before/after frames); new `agent_activity` snapshot from `task:subagent:*` events + `getAsyncJobSnapshot()`.
+- Activity panel (`waiting on N jobs`, `└─ <id> <label> · <elapsed>`) and `Show thinking traces` switch on both clients; web composer auto-grows to ~10 lines.
+- Suites: extension 880 (+2 known host failures), app 797, site 89. Web deployed and live chunk verified. App `1.2.47+2058` CI-signed, checksum OK. Extension rebuilt on rosebery and uts.
+- UI smoke used recorded real frames through fake transports. Not verified end-to-end: phone install (unplugged) and a real session on phone/web; running omp sessions need a restart to load the new extension.
