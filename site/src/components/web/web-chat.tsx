@@ -9,6 +9,19 @@ import {
 } from "./web-client";
 import { MarkdownRenderer } from "./markdown-renderer";
 import type { RelayConnection } from "./relay-connection";
+import { workingLabel } from "./working-label";
+
+// Same frames and cadence as the phone's working banner (streaming_bubble.dart).
+const BRAILLE_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+function BrailleSpinner() {
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setTick((n) => n + 1), 80);
+    return () => clearInterval(t);
+  }, []);
+  return <span aria-hidden className="w-3 inline-block">{BRAILLE_FRAMES[tick % BRAILLE_FRAMES.length]}</span>;
+}
 
 type ToolDisplay = "brief" | "full" | "hidden";
 
@@ -742,10 +755,10 @@ export function WebChat({
       })()}
 
         {isWorking && (
-          <div className="flex items-center justify-between text-xs font-mono text-[#4fc3f7] py-2 px-3 rounded-xl bg-[#4fc3f7]/10 border border-[#4fc3f7]/20 w-fit animate-pulse">
-            <div className="flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-[#4fc3f7]" />
-              Agent is working…
+          <div className="flex items-center justify-between text-xs font-mono text-[#4fc3f7] py-2 px-3 rounded-xl bg-[#4fc3f7]/10 border border-[#4fc3f7]/20 w-full sm:w-fit max-w-full">
+            <div className="flex items-center gap-2 min-w-0">
+              <BrailleSpinner />
+              <span className="truncate">{workingLabel(messages)}</span>
             </div>
             <button
               type="button"
