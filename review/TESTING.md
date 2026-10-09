@@ -573,3 +573,11 @@ Existing stored duplicates are not purged by this fix.
 - `/api/relay-tunnel` and `/api/relay-mesh` are restricted by `RELAY_PROXY_HOSTS`; a tunnel to `ws://127.0.0.1:22` returns 400. Site tests 46 passed.
 - App `1.2.45+2056` (CI signed, checksum OK): Settings → Sign in on web → warning → QR + Copy. The link targets `kWebClientBaseUrl` (this VPS), never the upstream site; a test pins that. App suite 707 passed. Lockfile kept on CI's Flutter 3.44.4 pins (only `qr`/`qr_flutter` added).
 - Not verified: install on the phone and a real sign-in showing real sessions — the phone was not connected over USB.
+
+### 2026-10-09 — Web sign-in reversed: the website shows a QR, the phone scans it
+
+- Replaces the phone-shows-link flow (`#k=` removed on both sides; no key in any URL). Contract: website shows `remotepi://web-login?h&id&pk` (ephemeral X25519); the phone accepts only `h` = this fork's web host, confirms, encrypts `{v,seed,relay}` (X25519 + HKDF-SHA256 + AES-256-GCM, AAD = id), and POSTs to `/api/web-login/<id>`; the browser polls once and decrypts. Server holds ciphertext only, one-shot, 120 s TTL.
+- Site: 60 tests (incl. a known vector produced by an independent phone-side implementation); app: 722 tests, and the app reproduces the site's vector byte-for-byte. Dev smoke: wrong-AAD delivery → decrypt error + new QR; valid throwaway delivery → Home ([qr](screens/2026-10-09-weblogin-site-01-signin-qr.png), [error](screens/2026-10-09-weblogin-site-02-decrypt-error.png), [home](screens/2026-10-09-weblogin-site-03-home.png)).
+- Deployed to `https://178-157-59-181.sslip.io/web`: live QR with countdown ([live](screens/2026-10-09-weblogin-live-01-qr.png)); API create → id, pending poll 204, garbage deliver 400, unknown id 404.
+- App `1.2.46+2057` built and signed by CI (checksum OK). Lockfile keeps CI's Flutter 3.44.4 pins (only `qr`/`qr_flutter` removed).
+- Not verified: install on the phone and a real scan — the phone was unplugged when the build finished.
