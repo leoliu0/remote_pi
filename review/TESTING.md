@@ -581,3 +581,10 @@ Existing stored duplicates are not purged by this fix.
 - Deployed to `https://178-157-59-181.sslip.io/web`: live QR with countdown ([live](screens/2026-10-09-weblogin-live-01-qr.png)); API create → id, pending poll 204, garbage deliver 400, unknown id 404.
 - App `1.2.46+2057` built and signed by CI (checksum OK). Lockfile keeps CI's Flutter 3.44.4 pins (only `qr`/`qr_flutter` removed).
 - Not verified: install on the phone and a real scan — the phone was unplugged when the build finished.
+
+### 2026-10-09 — Web shows no PCs after a real QR sign-in
+
+- Symptom: after scanning on the phone (1.2.46), the browser landed on Home with no PCs.
+- Cause: the VPS could not reach its own relay at `http://178.157.59.181` (`000`): nftables `PREROUTING :80 → :3000` only covers inbound traffic. `/api/relay-mesh` returned 502 and `/api/relay-tunnel` could not open, so the web client had neither the mesh blob nor a relay socket. The owner's blob existed on the relay (`f008ced6…`, v11, members uts + rosebery).
+- Fix: `iptables -t nat -A OUTPUT -d 178.157.59.181 -p tcp --dport 80 -j REDIRECT --to-ports 3000`, saved to `/etc/sysconfig/iptables` and added to `site/scripts/install-vps.sh`. After: self-reach 200, `/api/relay-mesh` for the owner 200, tunnel `{"t":"open"}`, outside relay `/health` still 200.
+- Pending: user reload of `/web` to confirm PCs and sessions appear.

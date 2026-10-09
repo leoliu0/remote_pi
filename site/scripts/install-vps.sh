@@ -97,6 +97,16 @@ Restart=always
 WantedBy=multi-user.target
 EOF
 
+# The relay listens on :3000 and nftables PREROUTING maps public :80 → :3000,
+# which only applies to traffic arriving from outside. The site's relay proxies
+# run on this host and dial the public relay URL, so map local traffic too;
+# without it they fail and the web client shows no PCs.
+PUBLIC_IP=178.157.59.181
+if ! iptables -t nat -C OUTPUT -p tcp -d "$PUBLIC_IP" --dport 80 -j REDIRECT --to-ports 3000 2>/dev/null; then
+  iptables -t nat -A OUTPUT -p tcp -d "$PUBLIC_IP" --dport 80 -j REDIRECT --to-ports 3000
+  iptables-save > /etc/sysconfig/iptables
+fi
+
 systemctl daemon-reload
 systemctl enable --now remote-pi-site
 systemctl restart remote-pi-site
