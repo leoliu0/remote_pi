@@ -271,4 +271,181 @@ void main() {
     h.sync.dispose();
     h.conn.dispose();
   });
+
+  // The Pi answers a session_sync with: session_history, then every prompt it
+  // still holds open (bridge + ask tool), then skills_list (index.ts
+  // _handleSessionSync). This replays exactly that for the app's latest sync.
+  Future<void> replySync(
+    _FakeChannel ch, {
+    List<ExtensionUiRequest> stillOpen = const [],
+  }) async {
+    final syncId = ch.sent.whereType<SessionSync>().last.id;
+    ch.push(
+      SessionHistory(
+        inReplyTo: syncId,
+        sessionStartedAt: 1,
+        events: const [],
+        eos: true,
+      ),
+    );
+    stillOpen.forEach(ch.push);
+    ch.push(SkillsList(inReplyTo: syncId, skills: const []));
+    await Future<void>.delayed(const Duration(milliseconds: 30));
+  }
+
+  test('two open prompts: dismissing the shown one reveals the other', () async {
+    final h = await harness();
+
+    h.ch.push(_request('ask_a'));
+    h.ch.push(_request('ask_b'));
+    await Future<void>.delayed(const Duration(milliseconds: 30));
+    expect((h.vm.state as ChatReady).pendingUiRequest?.id, 'ask_b');
+
+    // A rejection for the hidden prompt stays with that prompt.
+    h.ch.push(
+      const ExtensionUiRequest(
+        id: 'ask_a',
+        method: ExtensionUiMethod.notify,
+        message: 'Unknown option value.',
+        notifyType: 'warning',
+      ),
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 30));
+    expect((h.vm.state as ChatReady).pendingUiError, isNull);
+
+    // ask_b answered → its dismiss notify → ask_a is still waiting.
+    h.ch.push(
+      const ExtensionUiRequest(
+        id: 'ask_b',
+        method: ExtensionUiMethod.notify,
+        message: 'Clarification resolved.',
+      ),
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 30));
+    var state = h.vm.state as ChatReady;
+    expect(state.pendingUiRequest?.id, 'ask_a');
+    expect(state.pendingUiError, 'Unknown option value.');
+
+    h.ch.push(
+      const ExtensionUiRequest(
+        id: 'ask_a',
+        method: ExtensionUiMethod.notify,
+        message: 'Clarification resolved.',
+      ),
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 30));
+    state = h.vm.state as ChatReady;
+    expect(state.pendingUiRequest, isNull);
+    expect(state.pendingUiError, isNull);
+
+    h.vm.dispose();
+    h.sync.dispose();
+    h.conn.dispose();
+  });
+
+  test('answered elsewhere while offline: resync without it closes the modal',
+      () async {
+    final h = await harness();
+
+    h.ch.push(_request('ask_a'));
+    await Future<void>.delayed(const Duration(milliseconds: 30));
+    expect((h.vm.state as ChatReady).pendingUiRequest?.id, 'ask_a');
+
+    // The dismiss notify was lost while the phone was offline; on reconnect
+    // the app re-syncs and the Pi no longer replays the prompt.
+    h.sync.requestSync();
+    await replySync(h.ch);
+
+    expect((h.vm.state as ChatReady).pendingUiRequest, isNull);
+
+    h.vm.dispose();
+    h.sync.dispose();
+    h.conn.dispose();
+  });
+
+  test('resync that replays the prompt keeps it open (same id)', () async {
+    final h = await harness();
+
+    h.ch.push(_request('ask_a'));
+    h.ch.push(_request('ask_b'));
+    await Future<void>.delayed(const Duration(milliseconds: 30));
+
+    h.sync.requestSync();
+    await replySync(h.ch, stillOpen: [_request('ask_a'), _request('ask_b')]);
+
+    expect((h.vm.state as ChatReady).pendingUiRequest?.id, 'ask_b');
+    h.ch.push(
+      const ExtensionUiRequest(
+        id: 'ask_b',
+        method: ExtensionUiMethod.notify,
+        message: 'Clarification resolved.',
+      ),
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 30));
+    expect((h.vm.state as ChatReady).pendingUiRequest?.id, 'ask_a');
+
+    h.vm.dispose();
+    h.sync.dispose();
+    h.conn.dispose();
+  });
+
+  test('a stale sync reply (older sync id) never closes an open prompt',
+      () async {
+    final h = await harness();
+
+    h.sync.requestSync();
+    final oldId = h.ch.sent.whereType<SessionSync>().last.id;
+    h.sync.requestSync();
+    h.ch.push(_request('ask_a'));
+    await Future<void>.delayed(const Duration(milliseconds: 30));
+
+    h.ch.push(SkillsList(inReplyTo: oldId, skills: const []));
+    await Future<void>.delayed(const Duration(milliseconds: 30));
+    expect((h.vm.state as ChatReady).pendingUiRequest?.id, 'ask_a');
+
+    h.vm.dispose();
+    h.sync.dispose();
+    h.conn.dispose();
+  });
+
+  test('prompt that arrived while the chat was closed shows when it opens',
+      () async {
+    final ch = _FakeChannel();
+    final storage = _FakeStorage();
+    final conn = ConnectionManager(
+      factory: (_, _) async => ch,
+      storage: storage,
+    );
+    final sync = SyncService(conn, _store);
+    final prefs = Preferences(_database);
+    await prefs.setSelectedPeerEpk(_peer.remoteEpk);
+    await prefs.setSelectedRoom(epk: _peer.remoteEpk, roomId: 'main');
+    conn.adopt(ch, _peer);
+    await Future<void>.delayed(const Duration(milliseconds: 30));
+
+    // No chat open: the live frame has no listener.
+    ch.push(_request('ask_closed'));
+    await Future<void>.delayed(const Duration(milliseconds: 30));
+
+    final syncsBefore = ch.sent.whereType<SessionSync>().length;
+    final vm = ChatViewModel(
+      SessionReadRepository(_store),
+      sync,
+      conn,
+      prefs,
+      storage,
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    expect(
+      ch.sent.whereType<SessionSync>().length,
+      greaterThan(syncsBefore),
+      reason: 'opening the chat asks the Pi to replay open prompts',
+    );
+    await replySync(ch, stillOpen: [_request('ask_closed')]);
+    expect((vm.state as ChatReady).pendingUiRequest?.id, 'ask_closed');
+
+    vm.dispose();
+    sync.dispose();
+    conn.dispose();
+  });
 }

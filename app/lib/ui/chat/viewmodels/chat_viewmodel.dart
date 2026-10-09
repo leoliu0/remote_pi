@@ -34,6 +34,7 @@ class ChatViewModel extends ViewModel<ChatState> {
   StreamSubscription<List<QueuedMsg>>? _queuedSub;
   StreamSubscription<SessionEvent>? _eventSub;
   StreamSubscription<ExtensionUiRequest>? _uiReqSub;
+  StreamSubscription<Set<String>>? _uiOpenSub;
   StreamSubscription<Map<String, List<RoomInfo>>>? _roomsSub;
   StreamSubscription<ConnectionStatus>? _statusSub;
 
@@ -46,12 +47,14 @@ class ChatViewModel extends ViewModel<ChatState> {
   StreamingMessage? _streaming;
   bool _working = false;
   List<QueuedMsg> _queuedMessages = const [];
-  // Plan/57 — interactive extension_ui_request awaiting an answer (ask_user).
-  ExtensionUiRequest? _pendingUiRequest;
-  // Plan/57 — last submit-result error for the pending request (null when none
+  // Plan/57 — interactive extension_ui_requests awaiting an answer, in arrival
+  // order; the newest is shown, older ones resurface once it resolves (several
+  // can be open at once: parallel ask calls, plan review + ask, a sync replay).
+  final List<ExtensionUiRequest> _uiRequests = [];
+  // Plan/57 — last submit-result error per open request id (absent when none
   // / resolved). Surfaced to the modal so the user can retry instead of staring
   // at a closed/dismissed flow that's still blocked on desktop.
-  String? _pendingUiError;
+  final Map<String, String> _uiErrors = {};
   RuntimeRecord _runtime = const RuntimeRecord();
   bool _pairingRevoked = false;
   String? _peerOfflineReason;
@@ -69,6 +72,7 @@ class ChatViewModel extends ViewModel<ChatState> {
     _queuedSub = _sync.queuedStream.listen(_onQueued);
     _eventSub = _sync.events.listen(_onEvent);
     _uiReqSub = _sync.extensionUiRequestStream.listen(_onExtensionUiRequest);
+    _uiOpenSub = _sync.extensionUiOpenStream.listen(_onExtensionUiOpen);
     _roomsSub = _conn.roomsStream.listen((_) => _recompute());
     _statusSub = _conn.statusStream.listen(_onStatus);
     // ignore: discarded_futures
@@ -268,32 +272,47 @@ class ChatViewModel extends ViewModel<ChatState> {
 
   /// Plan/57 — interactive extension_ui_request arrived (ask_user via pi-ask).
   ///
-  /// A `notify` whose id matches the open request is either:
-  ///  - a `completed` dismiss (notify_type absent/info) → close the modal, OR
-  ///  - a submit-result warning (notify_type warning/error) → keep the modal
-  ///    open and surface the message so the user can retry.
-  /// Any non-notify request opens/replaces the modal (and clears a prior error).
+  /// A `notify` whose id matches an open request is either:
+  ///  - a `completed` dismiss (notify_type absent/info) → close that prompt, OR
+  ///  - a submit-result warning (notify_type warning/error) → keep it open and
+  ///    surface the message so the user can retry.
+  /// Any non-notify request opens a prompt, or refreshes the open one with the
+  /// same id in place (sync replay) and clears its prior error.
   void _onExtensionUiRequest(ExtensionUiRequest req) {
+    final idx = _uiRequests.indexWhere((r) => r.id == req.id);
     if (req.method == ExtensionUiMethod.notify) {
-      final matchesOpen =
-          _pendingUiRequest != null && req.id == _pendingUiRequest!.id;
-      if (matchesOpen) {
+      if (idx >= 0) {
         final isWarning =
             req.notifyType == 'warning' || req.notifyType == 'error';
         if (isWarning) {
-          _pendingUiError = (req.message?.isNotEmpty ?? false)
-              ? req.message
+          _uiErrors[req.id] = (req.message?.isNotEmpty ?? false)
+              ? req.message!
               : 'Answer was not accepted.';
         } else {
-          _pendingUiRequest = null;
-          _pendingUiError = null;
+          _uiRequests.removeAt(idx);
+          _uiErrors.remove(req.id);
         }
       }
       // Unmatched notifies (stand-alone notices) are ignored in v1.
     } else {
-      _pendingUiRequest = req;
-      _pendingUiError = null;
+      if (idx >= 0) {
+        _uiRequests[idx] = req;
+      } else {
+        _uiRequests.add(req);
+      }
+      _uiErrors.remove(req.id);
     }
+    _recompute();
+  }
+
+  /// Plan/57 — the Pi finished answering a session_sync; [openIds] are the
+  /// prompts it still holds. Anything else was resolved while this device was
+  /// away (its dismiss notify never arrived) → close it.
+  void _onExtensionUiOpen(Set<String> openIds) {
+    final before = _uiRequests.length;
+    _uiRequests.removeWhere((r) => !openIds.contains(r.id));
+    if (_uiRequests.length == before) return;
+    _uiErrors.removeWhere((id, _) => !openIds.contains(id));
     _recompute();
   }
 
@@ -328,8 +347,8 @@ class ChatViewModel extends ViewModel<ChatState> {
       peerPresence: peerPresence,
       isWorking: isWorking,
       queuedMessages: _queuedMessages,
-      pendingUiRequest: _pendingUiRequest,
-      pendingUiError: _pendingUiError,
+      pendingUiRequest: _uiRequests.lastOrNull,
+      pendingUiError: _uiErrors[_uiRequests.lastOrNull?.id],
     );
   }
 
@@ -355,16 +374,16 @@ class ChatViewModel extends ViewModel<ChatState> {
   /// answer (`invalid_answer`) without emitting `completed`, which would close
   /// the modal and leave the flow blocked on desktop (dead end). The modal stays
   /// open in a "submitting" state and closes only on the `completed` dismiss
-  /// notify. A rejected answer surfaces as [_pendingUiError] for retry. We do
-  /// clear any prior error here so a retry stops showing the old message.
+  /// notify. A rejected answer surfaces as that prompt's error for retry. We
+  /// do clear any prior error here so a retry stops showing the old message.
   /// A send that never left the device (no live channel) errors immediately —
   /// no point spinning 25s toward the sheet's backstop.
   Future<void> respondExtensionUi(ExtensionUiResponse resp) async {
-    _pendingUiError = null;
+    _uiErrors.remove(resp.id);
     _recompute();
     final sent = await _sync.respondExtensionUi(resp);
     if (!sent) {
-      _pendingUiError = 'Not connected — check the link to Pi and retry.';
+      _uiErrors[resp.id] = 'Not connected — check the link to Pi and retry.';
       _recompute();
     }
   }
@@ -403,6 +422,7 @@ class ChatViewModel extends ViewModel<ChatState> {
     _queuedSub?.cancel();
     _eventSub?.cancel();
     _uiReqSub?.cancel();
+    _uiOpenSub?.cancel();
     _roomsSub?.cancel();
     _statusSub?.cancel();
     super.dispose();

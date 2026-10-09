@@ -38,7 +38,7 @@ void main() {
     testWidgets('shows tool name and command', (tester) async {
       await tester.pumpWidget(_wrap(const ToolRequestCard(tool: _bashTool)));
       expect(find.text('BASH'), findsOneWidget);
-      expect(find.text('ls -la'), findsOneWidget);
+      expect(find.text(r'$ ls -la'), findsOneWidget);
     });
 
     testWidgets('edit renders rich hunks with context lines', (tester) async {
@@ -79,8 +79,8 @@ void main() {
       const done = ToolEvent(
         id: 'tc1',
         toolCallId: 'tc1',
-        tool: 'Bash',
-        args: {'command': 'ls'},
+        tool: 'read',
+        args: {'path': 'README.md'},
         status: ToolEventStatus.completed,
       );
       await tester.pumpWidget(_wrap(const ToolRequestCard(tool: done)));
@@ -126,8 +126,8 @@ void main() {
       const done = ToolEvent(
         id: 'tc1',
         toolCallId: 'tc1',
-        tool: 'Bash',
-        args: {'command': 'ls'},
+        tool: 'read',
+        args: {'path': 'README.md'},
         status: ToolEventStatus.completed,
       );
       await tester.pumpWidget(_wrap(const ToolRequestCard(tool: done)));
@@ -138,22 +138,27 @@ void main() {
       const failed = ToolEvent(
         id: 'tc1',
         toolCallId: 'tc1',
-        tool: 'Bash',
-        args: {'command': 'exit 1'},
+        tool: 'read',
+        args: {'path': 'missing.md'},
         status: ToolEventStatus.failed,
-        error: 'command failed: exit 1',
+        error: 'ENOENT: missing.md',
       );
       await tester.pumpWidget(_wrap(const ToolRequestCard(tool: failed)));
       expect(find.text('FAILED'), findsOneWidget);
       expect(
-        outcomeColor(tester, '✗ command failed: exit 1'),
+        outcomeColor(tester, '✗ ENOENT: missing.md'),
         AppColors.dark.error,
       );
     });
 
     testWidgets('running → blue "⏳ Running…"', (tester) async {
-      // pending defaults
-      await tester.pumpWidget(_wrap(const ToolRequestCard(tool: _bashTool)));
+      const running = ToolEvent(
+        id: 'tc1',
+        toolCallId: 'tc1',
+        tool: 'read',
+        args: {'path': 'README.md'},
+      );
+      await tester.pumpWidget(_wrap(const ToolRequestCard(tool: running)));
       expect(outcomeColor(tester, '⏳ Running…'), AppColors.dark.accent);
     });
 
@@ -180,51 +185,191 @@ void main() {
         tool: 'Bash',
         args: {'command': 'git status'},
         status: ToolEventStatus.completed,
+        result: 'clean\n\nWall time: 0.10 seconds',
       );
       await tester.pumpWidget(_wrap(const ToolRequestCard(tool: done, brief: true)));
-      expect(find.text('✓ Done'), findsNothing);
+      expect(find.text('Output'), findsNothing);
 
       // Tap the pill to expand
       await tester.tap(find.text('BASH'));
       await tester.pumpAndSettle();
-      expect(find.text('✓ Done'), findsOneWidget);
+      expect(find.text(r'$ git status'), findsOneWidget);
+      expect(find.text('Output'), findsOneWidget);
+      expect(find.text('Wall: 0.10s'), findsOneWidget);
       expect(find.text('DONE'), findsOneWidget);
 
       // Tap collapse chevron
       await tester.tap(find.byIcon(LucideIcons.chevronUp));
       await tester.pumpAndSettle();
-      expect(find.text('✓ Done'), findsNothing);
-    });
-    testWidgets('renders command output block when tool result is present', (
-      tester,
-    ) async {
-      const withResult = ToolEvent(
-        id: 'tc1',
-        toolCallId: 'tc1',
-        tool: 'Bash',
-        args: {'command': 'echo "hello world"', 'i': 'Print greeting'},
-        status: ToolEventStatus.completed,
-        result: 'hello world\nline 2',
-      );
-      await tester.pumpWidget(_wrap(const ToolRequestCard(tool: withResult)));
-      expect(find.text('OUTPUT'), findsOneWidget);
-      expect(find.text('hello world\nline 2'), findsOneWidget);
-      expect(find.textContaining('# Print greeting'), findsOneWidget);
+      expect(find.text('Output'), findsNothing);
     });
 
-    testWidgets('renders map tool result output cleanly', (tester) async {
-      const withMapResult = ToolEvent(
-        id: 'tc1',
-        toolCallId: 'tc1',
-        tool: 'Bash',
-        args: {'cmd': 'git branch'},
-        status: ToolEventStatus.completed,
-        result: {'output': '* main\n  feature-1'},
-      );
-      await tester.pumpWidget(_wrap(const ToolRequestCard(tool: withMapResult)));
-      expect(find.text('OUTPUT'), findsOneWidget);
-      expect(find.text('* main\n  feature-1'), findsOneWidget);
-      expect(find.text('git branch'), findsOneWidget);
+    group('bash Full card (terminal / web parity)', () {
+      Color? spanColor(WidgetTester tester, String footer, String part) {
+        final rich = tester.widget<Text>(find.text(footer));
+        Color? found;
+        rich.textSpan!.visitChildren((span) {
+          if (span is TextSpan && span.text == part) {
+            found = span.style?.color;
+            return false;
+          }
+          return true;
+        });
+        return found;
+      }
+
+      testWidgets('live tool_result error: exact strings + red exit', (
+        tester,
+      ) async {
+        // Shape of a live `tool_result` for a failing command: pi-extension
+        // sends the full tool text as `error` (isError) → status failed.
+        const failed = ToolEvent(
+          id: 'tc1',
+          toolCallId: 'tc1',
+          tool: 'bash',
+          args: {
+            'command': 'flutter test',
+            'timeout': 300,
+            'i': 'Running app tests',
+            'cwd': 'app',
+          },
+          status: ToolEventStatus.failed,
+          error:
+              'error: command not found: flutter\n\n\nWall time: 0.00 seconds'
+              '\n\nCommand exited with code 127',
+        );
+        await tester.pumpWidget(_wrap(const ToolRequestCard(tool: failed)));
+        expect(find.text(r'$ flutter test'), findsOneWidget);
+        expect(find.text('Running app tests'), findsOneWidget);
+        expect(find.text('in app'), findsOneWidget);
+        expect(find.text('Output'), findsOneWidget);
+        expect(find.text('error: command not found: flutter'), findsOneWidget);
+        expect(find.textContaining('Wall time'), findsNothing);
+        expect(find.textContaining('Command exited'), findsNothing);
+        const footer = 'Wall: 0.00s | Timeout: 300s | exit 127';
+        expect(find.text(footer), findsOneWidget);
+        expect(spanColor(tester, footer, ' | exit 127'), AppColors.dark.error);
+        expect(
+          spanColor(tester, footer, 'Wall: 0.00s | Timeout: 300s'),
+          isNot(AppColors.dark.error),
+        );
+      });
+
+      testWidgets('history-synced result: (no output) + wall-only footer', (
+        tester,
+      ) async {
+        // A replayed history event lands as `result` on a completed row.
+        const done = ToolEvent(
+          id: 'tc2',
+          toolCallId: 'tc2',
+          tool: 'bash',
+          args: {'command': 'sleep 15'},
+          status: ToolEventStatus.completed,
+          result: '(no output)\n\nWall time: 15.67 seconds',
+        );
+        await tester.pumpWidget(_wrap(const ToolRequestCard(tool: done)));
+        expect(find.text('(no output)'), findsOneWidget);
+        expect(find.text('Wall: 15.67s'), findsOneWidget);
+        expect(find.textContaining('exit'), findsNothing);
+        expect(find.text('✓ Done'), findsNothing);
+      });
+
+      testWidgets('empty result shows (no output)', (tester) async {
+        const done = ToolEvent(
+          id: 'tc3',
+          toolCallId: 'tc3',
+          tool: 'bash',
+          args: {'command': 'true'},
+          status: ToolEventStatus.completed,
+          result: '',
+        );
+        await tester.pumpWidget(_wrap(const ToolRequestCard(tool: done)));
+        expect(find.text('(no output)'), findsOneWidget);
+      });
+
+      testWidgets('running: no Output section, footer Running…', (
+        tester,
+      ) async {
+        await tester.pumpWidget(_wrap(const ToolRequestCard(tool: _bashTool)));
+        expect(find.text('Output'), findsNothing);
+        expect(find.text('Running…'), findsOneWidget);
+        expect(
+          tester.widget<Text>(find.text('Running…')).textSpan!.style!.color,
+          AppColors.dark.accent,
+        );
+      });
+
+      testWidgets('multi-line command is shown in full, never truncated', (
+        tester,
+      ) async {
+        final longCmd = [
+          for (var i = 0; i < 40; i++) 'echo line-$i-${'x' * 60}',
+        ].join('\n');
+        await tester.pumpWidget(
+          _wrap(
+            SingleChildScrollView(
+              child: ToolRequestCard(
+                tool: ToolEvent(
+                  id: 'tc4',
+                  toolCallId: 'tc4',
+                  tool: 'bash',
+                  args: {'command': longCmd},
+                ),
+              ),
+            ),
+          ),
+        );
+        final cmdFinder = find.ancestor(
+          of: find.text('\$ $longCmd'),
+          matching: find.byType(SelectableText),
+        );
+        expect(tester.widget<SelectableText>(cmdFinder).maxLines, isNull);
+        // Wraps and grows with the command instead of clipping it.
+        expect(tester.getSize(cmdFinder).height, greaterThan(400));
+      });
+
+      testWidgets('long output scrolls inside the card', (tester) async {
+        final longOut = [for (var i = 0; i < 200; i++) 'row $i'].join('\n');
+        await tester.pumpWidget(
+          _wrap(
+            SingleChildScrollView(
+              child: ToolRequestCard(
+                tool: ToolEvent(
+                  id: 'tc5',
+                  toolCallId: 'tc5',
+                  tool: 'bash',
+                  args: const {'command': 'seq 200'},
+                  status: ToolEventStatus.completed,
+                  result: '$longOut\n\nWall time: 0.01 seconds',
+                ),
+              ),
+            ),
+          ),
+        );
+        final scroll = find.ancestor(
+          of: find.text(longOut),
+          matching: find.byType(SingleChildScrollView),
+        );
+        expect(tester.getSize(scroll.first).height, lessThanOrEqualTo(320));
+        expect(find.text('Wall: 0.01s'), findsOneWidget);
+      });
+
+      testWidgets('map result (cmd key) renders cleanly', (tester) async {
+        const withMapResult = ToolEvent(
+          id: 'tc1',
+          toolCallId: 'tc1',
+          tool: 'Bash',
+          args: {'cmd': 'git branch'},
+          status: ToolEventStatus.completed,
+          result: {'output': '* main\n  feature-1'},
+        );
+        await tester.pumpWidget(
+          _wrap(const ToolRequestCard(tool: withMapResult)),
+        );
+        expect(find.text('Output'), findsOneWidget);
+        expect(find.text('* main\n  feature-1'), findsOneWidget);
+        expect(find.text(r'$ git branch'), findsOneWidget);
+      });
     });
     testWidgets('edit with old_string and new_string renders diff lines', (
       tester,

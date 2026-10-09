@@ -40,9 +40,17 @@ class _ExtensionUiSheetState extends State<ExtensionUiSheet> {
   final Map<String, Set<String>> _selected = {};
   // Rich: question id → custom text controller (lazily created, disposed).
   final Map<String, TextEditingController> _custom = {};
+  // Rich: question id → note controller (pi-ask `note`), created on demand
+  // when the user taps "Add note".
+  final Map<String, TextEditingController> _notes = {};
   // Degraded (no ask envelope) state.
   String? _singleValue;
-  final TextEditingController _textController = TextEditingController();
+  // Editor requests open with their `prefill` (the SDK contract), editable.
+  late final TextEditingController _textController = TextEditingController(
+    text: widget.request.method == ExtensionUiMethod.editor
+        ? (widget.request.prefill ?? '')
+        : '',
+  );
   bool _submitting = false;
   // Plan/57 — backstop so a submit/cancel that never gets a `completed`/error
   // (relay drop, pi-ask gone) doesn't strand the user on a spinner forever.
@@ -50,6 +58,9 @@ class _ExtensionUiSheetState extends State<ExtensionUiSheet> {
   bool _awaitHint = false;
 
   AskEnrichmentWire? get _ask => widget.request.ask;
+
+  bool get _isConfirm =>
+      _ask == null && widget.request.method == ExtensionUiMethod.confirm;
 
   @override
   void didUpdateWidget(covariant ExtensionUiSheet oldWidget) {
@@ -91,6 +102,9 @@ class _ExtensionUiSheetState extends State<ExtensionUiSheet> {
     for (final c in _custom.values) {
       c.dispose();
     }
+    for (final c in _notes.values) {
+      c.dispose();
+    }
     _textController.dispose();
     super.dispose();
   }
@@ -98,9 +112,10 @@ class _ExtensionUiSheetState extends State<ExtensionUiSheet> {
   TextEditingController _customFor(String qid) =>
       _custom.putIfAbsent(qid, TextEditingController.new);
 
+  /// pi-ask: `presentedType` is what the TUI actually shows after a live
+  /// toggle / policy, so it wins over the requested `type`.
   bool _isMulti(AskQuestionWire q) =>
-      q.type == AskQuestionWireType.multi ||
-      q.presentedType == AskQuestionWireType.multi;
+      (q.presentedType ?? q.type) == AskQuestionWireType.multi;
 
   bool get _canSubmit {
     final ask = _ask;
@@ -124,25 +139,33 @@ class _ExtensionUiSheetState extends State<ExtensionUiSheet> {
 
   Future<void> _submit() async {
     if (!_canSubmit || _submitting) return;
+    await _send(_buildResponse());
+  }
+
+  /// SDK confirm: Yes → `confirmed: true`, No → `confirmed: false` (a "no" is
+  /// an answer, not a cancel; the close button still cancels).
+  Future<void> _confirm(bool confirmed) async {
+    if (_submitting) return;
+    await _send(
+      ExtensionUiResponse(id: widget.request.id, confirmed: confirmed),
+    );
+  }
+
+  Future<void> _send(ExtensionUiResponse response) async {
     setState(() {
       _submitting = true;
       _awaitHint = false;
     });
     _armSubmitTimeout();
-    await widget.onRespond(_buildResponse());
+    await widget.onRespond(response);
     // The modal stays open until the ChatViewModel clears the pending request
     // on the `completed` dismiss notify (or surfaces an error for retry).
   }
 
   Future<void> _cancel() async {
     if (_submitting) return;
-    setState(() {
-      _submitting = true;
-      _awaitHint = false;
-    });
-    _armSubmitTimeout();
     final ask = _ask;
-    await widget.onRespond(
+    await _send(
       ExtensionUiResponse(
         id: widget.request.id,
         cancelled: true,
@@ -162,6 +185,7 @@ class _ExtensionUiSheetState extends State<ExtensionUiSheet> {
         final selected =
             _selected[q.id]?.toList(growable: false) ?? const <String>[];
         final custom = _customFor(q.id).text.trim();
+        final note = _notes[q.id]?.text.trim() ?? '';
         final multi = _isMulti(q);
 
         // pi-ask forbids combining value + customText on non-multi questions.
@@ -169,8 +193,12 @@ class _ExtensionUiSheetState extends State<ExtensionUiSheet> {
             ? selected
             : (custom.isNotEmpty ? const <String>[] : selected);
         final customText = custom.isEmpty ? null : custom;
-        if (values.isEmpty && customText == null) continue;
-        answers[q.id] = AskAnswerWire(values: values, customText: customText);
+        if (values.isEmpty && customText == null && note.isEmpty) continue;
+        answers[q.id] = AskAnswerWire(
+          values: values,
+          customText: customText,
+          note: note.isEmpty ? null : note,
+        );
       }
       return ExtensionUiResponse(
         id: id,
@@ -190,7 +218,10 @@ class _ExtensionUiSheetState extends State<ExtensionUiSheet> {
       ),
       ExtensionUiMethod.input || ExtensionUiMethod.editor =>
         ExtensionUiResponse(id: id, value: _textController.text),
-      ExtensionUiMethod.confirm => ExtensionUiResponse(id: id, confirmed: true),
+      ExtensionUiMethod.confirm => ExtensionUiResponse(
+        id: id,
+        confirmed: true,
+      ),
       ExtensionUiMethod.notify => ExtensionUiResponse(id: id, cancelled: true),
     };
   }
@@ -294,7 +325,9 @@ class _ExtensionUiSheetState extends State<ExtensionUiSheet> {
               ),
           ],
         ),
-        if (q.label.isNotEmpty) ...[
+        // The label is a short header chip (ask tool `header`); when the
+        // question has none it equals the prompt — don't print it twice.
+        if (q.label.isNotEmpty && q.label != q.prompt) ...[
           const SizedBox(height: 2),
           Text(q.label, style: text.labelSmall?.copyWith(color: colors.muted)),
         ],
@@ -319,7 +352,40 @@ class _ExtensionUiSheetState extends State<ExtensionUiSheet> {
             ),
           ),
         ),
+        _buildNote(context, q),
       ],
+    );
+  }
+
+  /// pi-ask `note`: optional context attached to a question's answer. Hidden
+  /// behind "Add note" so the common single-tap answer stays uncluttered.
+  Widget _buildNote(BuildContext context, AskQuestionWire q) {
+    final note = _notes[q.id];
+    if (note == null) {
+      return Align(
+        alignment: Alignment.centerLeft,
+        child: TextButton.icon(
+          onPressed: _submitting
+              ? null
+              : () => setState(() => _notes[q.id] = TextEditingController()),
+          icon: const Icon(Icons.sticky_note_2_outlined, size: 18),
+          label: const Text('Add note'),
+        ),
+      );
+    }
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: TextField(
+        controller: note,
+        enabled: !_submitting,
+        autofocus: true,
+        decoration: const InputDecoration(
+          hintText: 'Note (optional)',
+          isDense: true,
+          border: OutlineInputBorder(),
+          contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+        ),
+      ),
     );
   }
 
@@ -333,7 +399,9 @@ class _ExtensionUiSheetState extends State<ExtensionUiSheet> {
     final colors = context.colors;
     final text = Theme.of(context).textTheme;
     final selected = sel.contains(o.value);
-    final isPreview = q.type == AskQuestionWireType.preview;
+    // Previews ride on any option that carries one: the ask tool sends them
+    // on single/multi questions, pi-ask on `preview` questions.
+    final hasPreview = o.preview != null && o.preview!.isNotEmpty;
 
     return InkWell(
       onTap: _submitting ? null : () => _toggle(q.id, o.value, multi),
@@ -388,7 +456,7 @@ class _ExtensionUiSheetState extends State<ExtensionUiSheet> {
                 ),
               ),
             ],
-            if (isPreview && o.preview != null && o.preview!.isNotEmpty) ...[
+            if (hasPreview) ...[
               const SizedBox(height: 8),
               Container(
                 width: double.infinity,
@@ -497,21 +565,27 @@ class _ExtensionUiSheetState extends State<ExtensionUiSheet> {
               children: [
                 Expanded(
                   child: OutlinedButton(
-                    onPressed: _submitting ? null : _cancel,
-                    child: const Text('Cancel'),
+                    onPressed: _submitting
+                        ? null
+                        : (_isConfirm ? () => _confirm(false) : _cancel),
+                    child: Text(_isConfirm ? 'No' : 'Cancel'),
                   ),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
                   child: FilledButton(
-                    onPressed: (_canSubmit && !_submitting) ? _submit : null,
+                    onPressed: _submitting
+                        ? null
+                        : (_isConfirm
+                              ? () => _confirm(true)
+                              : (_canSubmit ? _submit : null)),
                     child: _submitting
                         ? const SizedBox(
                             width: 18,
                             height: 18,
                             child: CircularProgressIndicator(strokeWidth: 2),
                           )
-                        : const Text('Submit'),
+                        : Text(_isConfirm ? 'Yes' : 'Submit'),
                   ),
                 ),
               ],

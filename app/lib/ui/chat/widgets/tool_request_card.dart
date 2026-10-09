@@ -1,5 +1,6 @@
 import 'package:app/domain/session_state.dart';
 import 'package:app/protocol/protocol.dart';
+import 'package:app/ui/chat/widgets/bash_tool_format.dart';
 import 'package:app/ui/core/themes/themes.dart';
 import 'package:flutter/material.dart';
 
@@ -83,15 +84,121 @@ class _ToolRequestCardState extends State<ToolRequestCard> {
           children: [
             _buildHeader(context, color),
             const SizedBox(height: 10),
-            _buildCodeBlock(context),
-            if (_buildResultBlock(context) case final resultWidget?)
-              resultWidget,
-            const SizedBox(height: 8),
-            _buildOutcome(color),
+            if (_isBash)
+              ..._buildBashBody(context, color)
+            else ...[
+              _buildCodeBlock(context),
+              ?_buildResultBlock(context),
+              const SizedBox(height: 8),
+              _buildOutcome(color),
+            ],
           ],
         ),
       ),
     );
+  }
+
+  bool get _isBash => tool.tool.toLowerCase() == 'bash';
+
+  bool get _isRunning =>
+      tool.status == ToolEventStatus.pending ||
+      tool.status == ToolEventStatus.allowed;
+
+  /// Full-mode bash card, same strings as the terminal and the web client:
+  /// `$ <command>`, muted intent / `in <cwd>`, an `Output` section with the
+  /// status trailers stripped, then `Wall: …s | Timeout: …s | exit n`.
+  List<Widget> _buildBashBody(BuildContext context, Color color) {
+    final colors = context.colors;
+    final mono = context.typo.mono;
+    final settled = !_isRunning &&
+        tool.status != ToolEventStatus.denied &&
+        tool.status != ToolEventStatus.expired;
+    final view = bashCardView(
+      tool.args,
+      settled ? toolOutputText(tool.result, tool.error) : null,
+    );
+    final muted = mono.copyWith(fontSize: 12.5, color: colors.muted);
+    final body = view.body;
+    final footer = view.footer;
+
+    return [
+      Container(
+        width: double.infinity,
+        decoration: BoxDecoration(
+          color: colors.codeBg,
+          border: Border.all(color: colors.border),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        child: SelectableText('\$ ${view.command}', style: mono),
+      ),
+      if (view.intent case final intent?) ...[
+        const SizedBox(height: 6),
+        Text(intent, style: muted),
+      ],
+      if (view.cwd case final cwd?) ...[
+        const SizedBox(height: 4),
+        Text('in $cwd', style: muted),
+      ],
+      if (body != null) ...[
+        const SizedBox(height: 10),
+        Text(
+          'Output',
+          style: mono.copyWith(
+            fontSize: 11.0,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 0.4,
+            color: colors.muted,
+          ),
+        ),
+        const SizedBox(height: 6),
+        Container(
+          width: double.infinity,
+          decoration: BoxDecoration(
+            color: colors.codeBg,
+            border: Border.all(color: colors.border.withValues(alpha: 0.8)),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+          // Long output scrolls inside the card instead of growing the chat.
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 320),
+            child: SingleChildScrollView(
+              child: SelectableText(
+                body,
+                style: mono.copyWith(
+                  fontSize: 13.5,
+                  height: 1.4,
+                  color: colors.text,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+      if (!settled && !_isRunning) ...[
+        const SizedBox(height: 8),
+        _buildOutcome(color),
+      ] else if (footer.line.isNotEmpty) ...[
+        const SizedBox(height: 8),
+        Text.rich(
+          TextSpan(
+            style: mono.copyWith(
+              fontSize: 12.5,
+              color: _isRunning ? color : colors.muted,
+            ),
+            children: [
+              TextSpan(text: footer.text),
+              if (footer.exit case final exit?)
+                TextSpan(
+                  text: footer.text.isEmpty ? exit : ' | $exit',
+                  style: TextStyle(color: colors.error),
+                ),
+            ],
+          ),
+        ),
+      ],
+    ];
   }
 
   Widget _buildBriefPill(BuildContext context, Color color) {

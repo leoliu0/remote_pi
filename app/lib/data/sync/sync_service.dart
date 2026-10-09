@@ -57,6 +57,16 @@ class SyncService extends Service {
   final StreamController<ExtensionUiRequest> _extensionUiController =
       StreamController<ExtensionUiRequest>.broadcast();
 
+  // Plan/57 — the Pi answers `session_sync` with session_history, then every
+  // interactive prompt it still holds open, then skills_list (in_reply_to the
+  // sync id). Collect the prompt ids seen since the latest sync went out so a
+  // prompt resolved while this device was offline (its dismiss notify lost)
+  // can be closed once the reply completes without replaying it.
+  String? _uiReplaySyncId;
+  final Set<String> _uiReplayIds = {};
+  final StreamController<Set<String>> _extensionUiOpenController =
+      StreamController<Set<String>>.broadcast();
+
   List<QueuedMsg> _queuedMessages = const [];
   final StreamController<List<QueuedMsg>> _queuedController =
       StreamController<List<QueuedMsg>>.broadcast();
@@ -119,6 +129,13 @@ class SyncService extends Service {
   /// a full-screen modal and replies via [respondExtensionUi].
   Stream<ExtensionUiRequest> get extensionUiRequestStream =>
       _extensionUiController.stream;
+
+  /// Plan/57 — emitted when the Pi finishes answering the latest
+  /// `session_sync`: the ids of every interactive prompt it still holds open.
+  /// A prompt the app shows that is NOT in the set was resolved while this
+  /// device was away and must close.
+  Stream<Set<String>> get extensionUiOpenStream =>
+      _extensionUiOpenController.stream;
   List<QueuedMsg> get queuedMessages => _queuedMessages;
   String? get queuedText =>
       _queuedMessages.isEmpty ? null : _queuedMessages.first.text;
@@ -393,7 +410,10 @@ class SyncService extends Service {
       return;
     }
     _pendingSyncRequest = false;
-    ch.send(SessionSync(id: _newId()));
+    final id = _newId();
+    _uiReplaySyncId = id;
+    _uiReplayIds.clear();
+    ch.send(SessionSync(id: id));
   }
 
   /// Plan/28 — `session_new` acked: wipe the active session's rows + index.
@@ -686,6 +706,9 @@ class SyncService extends Service {
       case ExtensionUiRequest():
         // Plan/57 — transient interactive prompt (ask_user via pi-ask).
         // Surface to the UI; never persist (it's a live request, not history).
+        if (_uiReplaySyncId != null && msg.method != ExtensionUiMethod.notify) {
+          _uiReplayIds.add(msg.id);
+        }
         _extensionUiController.add(msg);
         break;
       case Pong():
@@ -695,10 +718,16 @@ class SyncService extends Service {
       case ActionError():
       case ModelsList():
         break;
-      case SkillsList(:final skills):
+      case SkillsList(:final skills, :final inReplyTo):
         _dynamicSkills = skills;
         if (!_skillsController.isClosed) {
           _skillsController.add(skills);
+        }
+        // Last frame of the Pi's session_sync reply (after the prompt replay).
+        if (inReplyTo != null && inReplyTo == _uiReplaySyncId) {
+          _uiReplaySyncId = null;
+          _extensionUiOpenController.add(Set.of(_uiReplayIds));
+          _uiReplayIds.clear();
         }
         break;
     }
@@ -1283,6 +1312,7 @@ class SyncService extends Service {
     _streamingController.close();
     _eventController.close();
     _extensionUiController.close();
+    _extensionUiOpenController.close();
     _workingController.close();
     _queuedController.close();
   }

@@ -14,6 +14,7 @@ import 'package:app/data/transport/connection_manager.dart';
 import 'package:app/domain/session_state.dart';
 import 'package:app/pairing/storage.dart';
 import 'package:app/protocol/protocol.dart';
+import 'package:app/ui/chat/widgets/bash_tool_format.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 class _FakeChannel implements IChannel, IControlLink {
@@ -1437,6 +1438,91 @@ void main() {
       await sub.cancel();
       s.conn.dispose();
       s.sync.dispose();
+    });
+  });
+
+  group('bash tool card data (live tool_result == history)', () {
+    const errorText =
+        'error: command not found: flutter\n\n\nWall time: 0.00 seconds\n\n'
+        'Command exited with code 127';
+    const args = {'command': 'flutter test', 'timeout': 300};
+
+    BashCardView cardFor(MessageRecord row) {
+      final tool = row.toChatMessage() as ToolEvent;
+      return bashCardView(tool.args, toolOutputText(tool.result, tool.error));
+    }
+
+    test('live frames (wire JSON) feed the bash card exactly', () async {
+      final s = await setup();
+      addTearDown(s.conn.dispose);
+      addTearDown(s.sync.dispose);
+      s.ch.push(ServerMessage.fromJson(const {
+        'type': 'tool_request',
+        'tool_call_id': 'tc_live',
+        'tool': 'bash',
+        'args': args,
+      }));
+      s.ch.push(ServerMessage.fromJson(const {
+        'type': 'tool_result',
+        'tool_call_id': 'tc_live',
+        'error': errorText,
+      }));
+      await _settle();
+
+      final row = messages(s.epk).singleWhere((r) => r.role == MsgRole.tool);
+      expect(row.tool!.status, ToolEventStatus.failed);
+      final card = cardFor(row);
+      expect(card.body, 'error: command not found: flutter');
+      expect(card.footer.line, 'Wall: 0.00s | Timeout: 300s | exit 127');
+    });
+
+    test('history-synced events feed the bash card exactly', () async {
+      final s = await setup();
+      addTearDown(s.conn.dispose);
+      addTearDown(s.sync.dispose);
+      s.ch.push(ServerMessage.fromJson(const {
+        'type': 'session_history',
+        'in_reply_to': 'sync1',
+        'session_started_at': 1700000000000,
+        'eos': true,
+        'events': [
+          {
+            'ts': 1700000000001,
+            'type': 'tool_request',
+            'tool_call_id': 'tc_a',
+            'tool': 'bash',
+            'args': args,
+          },
+          {
+            'ts': 1700000000002,
+            'type': 'tool_result',
+            'tool_call_id': 'tc_a',
+            'error': errorText,
+          },
+          {
+            'ts': 1700000000003,
+            'type': 'tool_request',
+            'tool_call_id': 'tc_b',
+            'tool': 'bash',
+            'args': {'command': 'sleep 15'},
+          },
+          {
+            'ts': 1700000000004,
+            'type': 'tool_result',
+            'tool_call_id': 'tc_b',
+            'result': '(no output)\n\nWall time: 15.67 seconds',
+          },
+        ],
+      }));
+      await _settle();
+
+      final rows = messages(s.epk).where((r) => r.role == MsgRole.tool);
+      final a = cardFor(rows.firstWhere((r) => r.id == 'tc_a'));
+      expect(a.body, 'error: command not found: flutter');
+      expect(a.footer.line, 'Wall: 0.00s | Timeout: 300s | exit 127');
+      final b = cardFor(rows.firstWhere((r) => r.id == 'tc_b'));
+      expect(b.body, '(no output)');
+      expect(b.footer.line, 'Wall: 15.67s');
     });
   });
 }
