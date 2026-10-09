@@ -338,10 +338,78 @@ export type ServerMessage =
   | { type: "action_ok"; in_reply_to: string; action: ActionName }
   | { type: "action_error"; in_reply_to: string; action: ActionName; error: string }
   | { type: "models_list"; in_reply_to: string; models: WireModel[]; current?: WireModel }
+  // Running subagents + background jobs (omp's bottom activity panel).
+  // Full snapshot, never a delta: replace local state with `jobs` wholesale.
+  // Broadcast to active owners on change (throttled to ≤2/s), and sent to an
+  // owner on attach and after every session_sync reply. `jobs: []` means
+  // nothing is running and nothing finished recently.
+  | { type: "agent_activity"; jobs: AgentActivityJob[]; ts: number }
   // Plan/57 — interactive extension prompt (ask_user via pi-ask). Mirrors
   // RpcExtensionUIRequest (select/confirm/input/editor/notify); the optional
   // `ask` envelope carries pi-ask's full question so the app renders richly.
   | ExtensionUiRequestWire;
+
+/** Lifecycle of one activity row. `done`/`failed`/`cancelled` rows linger
+ *  a few seconds after `ended_at` (and are dropped at the main agent's
+ *  `agent_end`) so clients can flash the outcome before the row disappears. */
+export type AgentActivityStatus = "running" | "done" | "failed" | "cancelled";
+
+/**
+ * One row of the `agent_activity` panel.
+ *
+ * - `kind: "subagent"` — an omp `task` subagent. `id` is the subagent name
+ *   (`AgentA`, nested: `Outer.Inner`); `label` is omp's short description
+ *   (`id` until omp generates one, ~1 s after start).
+ * - `kind: "bash"` — an async/background bash job. `id` is the job id
+ *   (`bg_1`); `label` and `command` hold the command line.
+ * - `kind: "job"` — any other omp background job; `job_type` names it.
+ *
+ * Elapsed time is NOT on the wire (it would change every snapshot): clients
+ * render `now - started_at` while `running`, `ended_at - started_at` after.
+ */
+export interface AgentActivityJob {
+  id: string;
+  kind: "subagent" | "bash" | "job";
+  label: string;
+  status: AgentActivityStatus;
+  /** Epoch ms. */
+  started_at: number;
+  /** Epoch ms; set once `status` is no longer `running`. */
+  ended_at?: number;
+  /** Subagent: agent definition name (`task`, `scout`, …). */
+  agent?: string;
+  /** Subagent: omp's generated short description of the assignment. */
+  description?: string;
+  /** Subagent: the assignment text, truncated to 300 chars. */
+  assignment?: string;
+  /** Subagent: the `task` tool call that spawned it (ties the row to that tool card). */
+  parent_tool_call_id?: string;
+  /** Bash: the command line. */
+  command?: string;
+  /** `kind: "job"`: omp's raw job type. */
+  job_type?: string;
+  /** One-line "what is it doing now" (subagent intent or `running <tool>`). */
+  detail?: string;
+  /** Subagent live progress, as last reported by omp. */
+  progress?: AgentActivityProgress;
+}
+
+export interface AgentActivityProgress {
+  /** Tool currently executing, e.g. `bash`. */
+  tool?: string;
+  /** Its primary argument (command, path, …), truncated to 200 chars. */
+  tool_args?: string;
+  /** Epoch ms when `tool` started. */
+  tool_started_at?: number;
+  /** Tool calls made so far. */
+  tool_count?: number;
+  /** Tokens used so far. */
+  tokens?: number;
+  /** Cost so far (provider currency units, usually USD). */
+  cost?: number;
+  /** omp's completion estimate, 0–100, when it reports one. */
+  percent?: number;
+}
 
 /**
  * Plan/28 — Stable names for the typed actions the app can request. Kept

@@ -251,8 +251,14 @@ const {
   _tryExecuteTerminalSlashCommand,
   _tryExecuteTerminalInput,
   restartSession,
+  _resetMainSessionForTest,
 } = indexModule;
 const { acquireCwdLock } = await import("./session/cwd_lock.js");
+
+// Every test starts like a fresh process: no main session bound yet.
+beforeEach(() => {
+  _resetMainSessionForTest();
+});
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -1395,6 +1401,28 @@ describe("multi-channel broadcast (W2D)", () => {
     fire({ type: "text_delta", contentIndex: 0, delta: "Visible." });
     fire({ type: "thinking_delta", contentIndex: 1, delta: "orphan" });
     expect(deltas()).toEqual(["Visible.", "\n\n", "<think>", "orphan"]);
+  });
+
+  test("history re-sync renders a thinking message exactly like the live stream did", async () => {
+    const { fire, deltas } = await _setupChunkCapture();
+    // Event sequence omp emitted for claude-opus-5-5:high (real run).
+    fire({ type: "start" });
+    fire({ type: "thinking_start", contentIndex: 0 });
+    fire({ type: "thinking_delta", contentIndex: 0, delta: "17 times 23 gives 391" });
+    fire({ type: "thinking_end", contentIndex: 0, content: "17 times 23 gives 391" });
+    fire({ type: "text_start", contentIndex: 1 });
+    fire({ type: "text_delta", contentIndex: 1, delta: "12121" });
+    fire({ type: "text_end", contentIndex: 1, content: "12121" });
+    const history = _mapAgentMessagesToEvents([{
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "17 times 23 gives 391", thinkingSignature: "CAQS9QQK" },
+        { type: "text", text: "12121" },
+      ],
+      timestamp: 1,
+    }]);
+    expect(history).toHaveLength(1);
+    expect((history[0] as { text: string }).text).toBe(deltas().join(""));
   });
 
   test("session_sync from owner A → session_history reply only to A", async () => {
@@ -4044,6 +4072,88 @@ describe("session sync", () => {
       summary: "summarised 10 turns",
       tokens_before: 12345,
     });
+  });
+
+  // omp persists reasoning as `{type:"thinking", thinking, thinkingSignature}`
+  // blocks (real shape from ~/.omp/agent/sessions). History used to drop them,
+  // so Full mode lost every thinking trace after a resync.
+  test("mapping: thinking blocks keep their order around text and tool calls", () => {
+    const ts = 1_700_000_000_000;
+    const events = _mapAgentMessagesToEvents([
+      { role: "user", content: "go", timestamp: ts },
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "Plan the listing.\n\n", thinkingSignature: "CAQSvw" },
+          { type: "text", text: "Listing files." },
+          { type: "toolCall", id: "tc_1", name: "bash", arguments: { command: "ls" } },
+        ],
+        timestamp: ts + 1,
+      },
+      { role: "toolResult", toolCallId: "tc_1", content: [{ type: "text", text: "a.ts" }], timestamp: ts + 2 },
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "Only a.ts.", thinkingSignature: "CAQSww" },
+          { type: "text", text: "One file." },
+        ],
+        timestamp: ts + 3,
+      },
+    ]);
+    expect(events.map((e) => [e.type, "text" in e ? e.text : "tool_call_id" in e ? e.tool_call_id : ""])).toEqual([
+      ["user_input", "go"],
+      ["agent_message", "<think>Plan the listing.\n\n</think>\n\nListing files."],
+      ["tool_request", "tc_1"],
+      ["tool_result", "tc_1"],
+      ["agent_message", "<think>Only a.ts.</think>\n\nOne file."],
+    ]);
+  });
+
+  test("mapping: consecutive thinking blocks, and thinking with no text before a tool call", () => {
+    const events = _mapAgentMessagesToEvents([
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "first" },
+          { type: "thinking", thinking: "second" },
+          { type: "text", text: "Answer." },
+          { type: "thinking", thinking: "before tool" },
+          { type: "toolCall", id: "tc_2", name: "read", arguments: { path: "x" } },
+          { type: "thinking", thinking: "trailing" },
+        ],
+        timestamp: 5,
+      },
+    ]);
+    expect(events.map((e) => [e.type, "text" in e ? e.text : ""])).toEqual([
+      ["agent_message", "<think>first</think>\n\n<think>second</think>\n\nAnswer."],
+      ["agent_message", "<think>before tool</think>"],
+      ["tool_request", ""],
+      ["agent_message", "<think>trailing</think>"],
+    ]);
+  });
+
+  test("mapping: empty, whitespace-only and redacted thinking blocks are skipped", () => {
+    const events = _mapAgentMessagesToEvents([
+      {
+        role: "assistant",
+        content: [
+          // Signature-only block, as Gemini/Anthropic persist hidden reasoning.
+          { type: "thinking", thinking: "", thinkingSignature: "CAQSvwkK" },
+          { type: "thinking", thinking: "  \n\n", thinkingSignature: "CAQSwwcK" },
+          { type: "thinking", thinking: "", thinkingSignature: "opaque", redacted: true },
+          { type: "thinking", thinking: "kept" },
+          { type: "text", text: "Visible." },
+          // Hidden reasoning alone before a tool call: no empty bubble either.
+          { type: "thinking", thinking: "", thinkingSignature: "CAQSvwkL" },
+          { type: "toolCall", id: "tc_3", name: "bash", arguments: { command: "ls" } },
+        ],
+        timestamp: 6,
+      },
+    ]);
+    expect(events.map((e) => "text" in e ? e.text : e.type)).toEqual([
+      "<think>kept</think>\n\nVisible.",
+      "tool_request",
+    ]);
   });
   test("mapping: assistant message with local image path inlines as data URI", () => {
     const tmpDir = mkdtempSync(join(tmpdir(), "pi-img-test-"));
@@ -7056,5 +7166,189 @@ describe("terminal slash command execution from mobile", () => {
         delete process.env["REMOTE_PI_DAEMON"];
       }
     }
+  });
+});
+
+// ── omp in-process subagents + agent_activity ─────────────────────────────────
+//
+// omp runs `task` subagents in the same process and calls the extension
+// factory again with each subagent's own `pi`. Before the main-session gate,
+// a subagent's tool calls, text and agent_end leaked into the paired chat
+// (real run: `bash`/`yield` tool cards from AgentA/AgentB plus a premature
+// `agent_done` per subagent), and its factory call stole `_pi`.
+
+type PiHandler = (event: unknown, ctx?: unknown) => unknown;
+
+function makePiHarness(): {
+  fire: (eventName: string, event: unknown, ctx?: unknown) => unknown;
+  emitBus: (channel: string, data: unknown) => void;
+  sendUserMessage: ReturnType<typeof vi.fn>;
+} {
+  const handlers = new Map<string, PiHandler>();
+  const busHandlers = new Map<string, Array<(data: unknown) => void>>();
+  const sendUserMessage = vi.fn();
+  const pi = {
+    on(e: string, h: PiHandler) { handlers.set(e, h); },
+    events: {
+      emit(channel: string, data: unknown) {
+        for (const h of busHandlers.get(channel) ?? []) h(data);
+      },
+      on(channel: string, h: (data: unknown) => void) {
+        busHandlers.set(channel, [...(busHandlers.get(channel) ?? []), h]);
+        return () => busHandlers.set(channel, (busHandlers.get(channel) ?? []).filter((x) => x !== h));
+      },
+    },
+    registerCommand: () => undefined,
+    registerTool: () => undefined, registerShortcut: () => undefined,
+    registerFlag: () => undefined, getFlag: () => undefined,
+    registerMessageRenderer: () => undefined,
+    sendMessage: () => undefined, sendUserMessage,
+  } as unknown as ExtensionAPI;
+  (extension as ExtensionFactory)(pi);
+  return {
+    fire(eventName, event, ctx) {
+      const h = handlers.get(eventName);
+      if (!h) throw new Error(`event "${eventName}" handler not registered`);
+      return h(event, ctx);
+    },
+    emitBus(channel, data) {
+      for (const h of busHandlers.get(channel) ?? []) h(data);
+    },
+    sendUserMessage,
+  };
+}
+
+// Real omp subagent ctx: headless, transcript in a task temp dir.
+const SUBAGENT_CTX = {
+  hasUI: false,
+  cwd: "/tmp/x",
+  ui: { notify: vi.fn() },
+  sessionManager: {
+    getSessionFile: () => "/tmp/omp-task-159fef78a471ec81/AgentA.jsonl",
+    getEntries: () => [],
+  },
+};
+
+describe("omp in-process subagents", () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    _knownPeers.length = 0;
+    _addedPeers.length = 0;
+    _removedPeers.length = 0;
+    _consumeCalls.length = 0;
+    _setRelayCalls.length = 0;
+    _savedRelayUrl = null;
+    _tokenStatus = "ok";
+    relayRef.current = null;
+    const qr = await import("./pairing/qr.js");
+    (qr.qrSession.consumeToken as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+      (token: string) => { _consumeCalls.push(token); return _tokenStatus; },
+    );
+    const stop = captureHandler("remote-pi stop");
+    await stop("", makeMockCtx());
+  });
+
+  const sentSince = (before: number) =>
+    relayRef.current!.send.mock.calls.slice(before).map((c) => decodeSentCt(c[0] as string).inner);
+
+  /** Owner paired, main session started and mid-turn. */
+  async function startMainTurn(mainCtx: object = makeMockCtx()) {
+    await _pairForTest("ownerA__1234567890");
+    const main = makePiHarness();
+    main.fire("session_start", { type: "session_start" }, mainCtx);
+    main.fire("input", { source: "interactive", text: "spawn two agents" });
+    main.fire("agent_start", { type: "agent_start" });
+    main.fire("turn_start", { type: "turn_start", turnIndex: 0 }, mainCtx);
+    const sub = makePiHarness();
+    sub.fire("session_start", { type: "session_start" }, SUBAGENT_CTX);
+    return { main, sub };
+  }
+
+  test("a subagent's tool calls, text and lifecycle never reach the chat or flip turn state", async () => {
+    const { main, sub } = await startMainTurn();
+    const turnId = _getCurrentTurnIdForTest();
+    expect(turnId).not.toBeNull();
+    const bufferBefore = _getMessageBufferForTest().length;
+    const sendsBefore = relayRef.current!.send.mock.calls.length;
+    const ctrlBefore = relayRef.current!.sendControl.mock.calls.length;
+
+    // Event sequence omp fired on AgentA's `pi` in the real run.
+    const userMsg = { role: "user", content: [{ type: "text", text: "Complete assignment thoroughly:\n\nRun `sleep 8; echo alpha`." }] };
+    const call = { type: "toolCall", id: "toolu_01ReKgct47zJ32y5deTirDgQ", name: "bash", arguments: { command: "sleep 8; echo alpha" } };
+    sub.fire("agent_start", { type: "agent_start" }, SUBAGENT_CTX);
+    sub.fire("turn_start", { type: "turn_start", turnIndex: 0 }, SUBAGENT_CTX);
+    sub.fire("message_start", { type: "message_start", message: userMsg }, SUBAGENT_CTX);
+    sub.fire("message_end", { type: "message_end", message: userMsg }, SUBAGENT_CTX);
+    sub.fire("message_update", { assistantMessageEvent: { type: "thinking_start", contentIndex: 0 } }, SUBAGENT_CTX);
+    sub.fire("message_update", { assistantMessageEvent: { type: "text_delta", contentIndex: 1, delta: "Running it." } }, SUBAGENT_CTX);
+    sub.fire("tool_call", { type: "tool_call", toolName: "bash", toolCallId: call.id, input: call.arguments }, SUBAGENT_CTX);
+    sub.fire("message_end", { type: "message_end", message: { role: "assistant", content: [call], stopReason: "toolUse" } }, SUBAGENT_CTX);
+    sub.fire("tool_execution_start", { type: "tool_execution_start", toolCallId: call.id, toolName: "bash", args: call.arguments }, SUBAGENT_CTX);
+    sub.fire("tool_execution_end", {
+      type: "tool_execution_end", toolCallId: call.id, toolName: "bash",
+      result: { content: [{ type: "text", text: "alpha\n\n\nWall time: 8.00 seconds" }] }, isError: false,
+    }, SUBAGENT_CTX);
+    sub.fire("message_end", { type: "message_end", message: { role: "toolResult", toolCallId: call.id, content: [{ type: "text", text: "alpha" }] } }, SUBAGENT_CTX);
+    sub.fire("message_end", { type: "message_end", message: { role: "assistant", content: [], stopReason: "error", errorMessage: "boom" } }, SUBAGENT_CTX);
+    sub.fire("turn_end", { type: "turn_end", turnIndex: 0 }, SUBAGENT_CTX);
+    sub.fire("agent_end", { type: "agent_end", messages: [] }, SUBAGENT_CTX);
+    await new Promise<void>((r) => setTimeout(r, 200));  // past the working-off debounce
+
+    const leaked = sentSince(sendsBefore).filter((m) => m.type !== "agent_activity");
+    expect(leaked).toEqual([]);
+    expect(_getCurrentTurnIdForTest()).toBe(turnId);
+    expect(_getMessageBufferForTest()).toHaveLength(bufferBefore);
+    const working = relayRef.current!.sendControl.mock.calls.slice(ctrlBefore)
+      .filter((c) => JSON.stringify(c[0]).includes("\"working\""));
+    expect(working).toEqual([]);
+
+    // The main session still streams normally.
+    main.fire("tool_execution_start", { type: "tool_execution_start", toolCallId: "toolu_main", toolName: "bash", args: { command: "ls" } });
+    expect(sentSince(sendsBefore)).toContainEqual(expect.objectContaining({ type: "tool_request", tool_call_id: "toolu_main" }));
+  });
+
+  test("a subagent's factory call does not take over the main session's pi", async () => {
+    const { main, sub } = await startMainTurn();
+    relayRef.current!.emit("message", JSON.stringify({
+      peer: "ownerA__1234567890",
+      ct: Buffer.from(JSON.stringify({ type: "user_message", id: "msg-sub-1", text: "status?" })).toString("base64"),
+    }));
+    await vi.waitFor(() => expect(main.sendUserMessage).toHaveBeenCalled(), { timeout: 2000 });
+    expect(sub.sendUserMessage).not.toHaveBeenCalled();
+  });
+
+  test("agent_activity: subagent bus events + async jobs → owner snapshots; sync and shutdown resend", async () => {
+    let jobs: { running: unknown[]; recent: unknown[] } = { running: [], recent: [] };
+    const mainCtx = { ...makeMockCtx(), getAsyncJobSnapshot: () => jobs };
+    const { main, sub } = await startMainTurn(mainCtx);
+    const sendsBefore = relayRef.current!.send.mock.calls.length;
+    const activity = () => sentSince(sendsBefore)
+      .filter((m) => m.type === "agent_activity")
+      .map((m) => (m.jobs as Array<{ id: string; status: string }>).map((j) => `${j.id}:${j.status}`));
+
+    // Async bash job registered by the main agent's tool call.
+    jobs = { running: [{ id: "bg_1", type: "bash", status: "running", label: "sleep 20", command: "sleep 20", startTime: 1 }], recent: [] };
+    main.fire("tool_execution_end", { type: "tool_execution_end", toolCallId: "t_bg", toolName: "bash", result: { content: [] }, isError: false });
+    expect(activity()).toEqual([["bg_1:running"]]);
+
+    // A subagent's own bus is not the panel source; the main bus is.
+    sub.emitBus("task:subagent:lifecycle", { id: "Nested", status: "started" });
+    await new Promise<void>((r) => setTimeout(r, 600));
+    expect(activity()).toEqual([["bg_1:running"]]);
+    main.emitBus("task:subagent:lifecycle", { id: "AgentA", agent: "task", status: "started", index: 0 });
+    expect(activity()).toEqual([["bg_1:running"], ["bg_1:running", "AgentA:running"]]);
+
+    // session_sync replies with history, then the current panel.
+    relayRef.current!.emit("message", JSON.stringify({
+      peer: "ownerA__1234567890",
+      ct: Buffer.from(JSON.stringify({ type: "session_sync", id: "sync-act", limit: 10 })).toString("base64"),
+    }));
+    await vi.waitFor(() => expect(activity()).toHaveLength(3));
+    const types = sentSince(sendsBefore).map((m) => m.type);
+    expect(types.indexOf("agent_activity", types.indexOf("session_history"))).toBeGreaterThan(types.indexOf("session_history"));
+
+    // Main session replaced: the panel empties at once.
+    await main.fire("session_shutdown", { type: "session_shutdown", reason: "new" }, mainCtx);
+    expect(activity().at(-1)).toEqual([]);
   });
 });

@@ -75,6 +75,12 @@ import {
   type ExtensionUiBridge,
 } from "./extension_ui_bridge.js";
 import { roomIdFor } from "./rooms.js";
+import {
+  ActivityBroadcaster,
+  ActivityTracker,
+  SUBAGENT_LIFECYCLE_CHANNEL,
+  SUBAGENT_PROGRESS_CHANNEL,
+} from "./activity.js";
 import { registerAgentTools } from "./session/tools.js";
 import {
   registerAskWrapperTool,
@@ -1491,6 +1497,13 @@ export function _setPiForTest(pi: unknown): void {
   _pi = pi as typeof _pi;
 }
 
+/** Test-only: forget the bound main session (fresh-process state), so one
+ *  test's session_start can't make the next test's `pi` look like a subagent. */
+export function _resetMainSessionForTest(): void {
+  _mainPi = null;
+  _resetActivity();
+}
+
 /**
  * Persist a model change to the PROJECT settings (`<cwd>/.pi/settings.json`) so
  * a model picked from the app survives a Pi/daemon restart. `pi.setModel` only
@@ -1614,6 +1627,59 @@ let _pi: ExtensionAPI | null = null;
 // Plan/57 — Bridge to pi-ask's clarification-flow events. null until the
 // extension factory wires it (and null if the SDK exposes no events bus).
 let _extensionUiBridge: ExtensionUiBridge | null = null;
+
+// The main session's `pi`. omp runs `task` subagents in-process and calls the
+// factory again with each subagent's own `pi`, so every handler below also
+// fires for subagent tool calls, streamed text and turn/agent lifecycle.
+// Those must never reach the paired chat or flip turn/working state:
+// subagents surface only as `agent_activity` rows. The first session_start
+// (or the first after the main session's shutdown) binds the main `pi`; a
+// session_start on another `pi` with a subagent-shaped ctx while the main is
+// live marks that `pi` as a subagent and mutes its handlers.
+let _mainPi: object | null = null;
+const _subagentPis = new WeakSet<object>();
+
+// Running subagents + background jobs → `agent_activity` snapshots.
+const ACTIVITY_POLL_MS = 1_000;
+const _activity = new ActivityTracker();
+const _activityBroadcaster = new ActivityBroadcaster(
+  () => _activity.snapshot(),
+  _broadcastToActive,
+  _anyPeerActive,
+);
+let _activityPollTimer: NodeJS.Timeout | null = null;
+
+/**
+ * Re-reads omp's async-job snapshot (it has no change event) and broadcasts
+ * the panel if it changed. Keeps polling while the main agent runs or any
+ * row is live, so job completions and the linger expiry are picked up.
+ */
+function _refreshActivity(): void {
+  // omp-only ExtensionContext method; absent from the pi SDK typings.
+  const ctx = _lastEventCtx as { getAsyncJobSnapshot?: () => unknown } | null;
+  const hasJobs = typeof ctx?.getAsyncJobSnapshot === "function";
+  try { _activity.applyJobSnapshot(ctx?.getAsyncJobSnapshot?.()); } catch { /* stale ctx */ }
+  _activity.prune();
+  _activityBroadcaster.schedule();
+  // Plain pi has no job snapshot: only lingering rows need the timer there.
+  const wantPoll = (hasJobs && _agentActive) || _activity.hasRows();
+  if (wantPoll && !_activityPollTimer) {
+    _activityPollTimer = setInterval(_refreshActivity, ACTIVITY_POLL_MS);
+    _activityPollTimer.unref?.();
+  } else if (!wantPoll && _activityPollTimer) {
+    clearInterval(_activityPollTimer);
+    _activityPollTimer = null;
+  }
+}
+
+/** Main session replaced/ended: empty the panel on every owner right away. */
+function _resetActivity(): void {
+  clearInterval(_activityPollTimer ?? undefined);
+  _activityPollTimer = null;
+  _activity.reset();
+  _activityBroadcaster.flush();
+  _activityBroadcaster.reset();
+}
 
 let _stopAutoListener: (() => void) | null = null;
 
@@ -2463,6 +2529,8 @@ function _installAutoListener(relay: RelayClient): () => void {
       // it explicitly via the new channel so the sender gets a reply.
       // Use _liveCtx (session_start-fresh) — not bare _lastCtx (#55).
       _routeClientMessageFrom(channel, inner, (_liveCtx() as typeof _noopCtx) ?? _noopCtx);
+      // Current running subagents/jobs, so the panel is right before any change.
+      channel.send(_activityBroadcaster.message());
       return;
     }
 
@@ -2569,7 +2637,7 @@ async function _handlePairRequest(
   // in the terminal title and in /remote-pi status.
   const sessionName = _displayName(cwd);
 
-  _attachOwner(relay, appPeerId, inner.device_name);
+  const channel = _attachOwner(relay, appPeerId, inner.device_name);
 
   sendInner({
     type: "pair_ok",
@@ -2588,6 +2656,7 @@ async function _handlePairRequest(
     harness: _HARNESS,
     hostname: _HOSTNAME,
   });
+  channel.send(_activityBroadcaster.message());
 
   // Notify local RPC clients (e.g. Cockpit) that pairing completed, so they can
   // close the QR screen and show the new device. Pure data event (display:false)
@@ -2648,15 +2717,40 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   if (applied.has(pi)) return;  // this session's pi was already wired
   applied.add(pi);
 
-  _pi = pi;
+  // While a main session is live, a new `pi` is an in-process subagent (omp
+  // `task`): it must not take over the module-level `pi` (phone prompts would
+  // land in the subagent) or the main session's pi-ask bridge.
+  const subagentCandidate = _mainPi !== null && !_disposed;
+  if (!subagentCandidate) {
+    _pi = pi;
+    // Plan/57 — bridge @eko24ive/pi-ask clarification flows to the paired app.
+    // Inert when pi-ask isn't installed (no events fire) or the SDK exposes no
+    // events bus. ask_user without pi-ask doesn't exist, so this never breaks a
+    // Pi that doesn't use the extension. Dispose any prior bridge first so a
+    // factory re-run (new pi session) can't leak subscriptions or double-send.
+    _extensionUiBridge?.dispose();
+    _extensionUiBridge = createExtensionUiBridge(pi, _broadcastToActive, _makeExtensionUiBridgeOptions());
+  }
+  /** True for a subagent's `pi`: its events never reach the paired chat. */
+  const fromSubagent = (): boolean => _subagentPis.has(pi);
 
-  // Plan/57 — bridge @eko24ive/pi-ask clarification flows to the paired app.
-  // Inert when pi-ask isn't installed (no events fire) or the SDK exposes no
-  // events bus. ask_user without pi-ask doesn't exist, so this never breaks a
-  // Pi that doesn't use the extension. Dispose any prior bridge first so a
-  // factory re-run (new pi session) can't leak subscriptions or double-send.
-  _extensionUiBridge?.dispose();
-  _extensionUiBridge = createExtensionUiBridge(pi, _broadcastToActive, _makeExtensionUiBridgeOptions());
+  // omp's `task` tool reports subagent lifecycle/progress on the main
+  // session's event bus. Subagent `pi`s see their own bus; only the main
+  // session's bus feeds the activity panel.
+  const busOffs: Array<() => void> = [];
+  // Typed as required, but older hosts and test doubles omit it.
+  const bus: ExtensionAPI["events"] | undefined = pi.events;
+  if (bus) {
+    const onBus = (channel: string, apply: (data: unknown) => void): void => {
+      busOffs.push(bus.on(channel, (data) => {
+        if (fromSubagent() || (_mainPi !== null && _mainPi !== pi)) return;
+        apply(data);
+        _refreshActivity();
+      }));
+    };
+    onBus(SUBAGENT_LIFECYCLE_CHANNEL, (data) => _activity.onLifecycle(data));
+    onBus(SUBAGENT_PROGRESS_CHANNEL, (data) => _activity.onProgress(data));
+  }
 
   // Plano 19: ensure ~/.pi/remote/{sessions,skills}/ exist and deploy the
   // agent-network skill on first load. resources_discover lets Pi find it.
@@ -2697,6 +2791,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   // from routeClientMessage, which already set _currentTurnId — skip to
   // avoid a double turnId.
   pi.on("input", (event) => {
+    if (fromSubagent()) return undefined;
     // Transparent control channel: a `CTRL_PREFIX`-tagged input from an RPC
     // client (Cockpit button) toggles the relay. Run it and SWALLOW the input
     // (`action:"handled"`) so it never reaches the LLM or the transcript.
@@ -2738,6 +2833,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   // friendly name and broadcast a room_meta_update so the relay can fan it
   // out to subscribed apps without needing a new pair.
   pi.on("model_select", (event) => {
+    if (fromSubagent()) return;
     const m = event?.model as { name?: string; id?: string } | undefined;
     const modelName = m?.name ?? m?.id;
     if (!modelName) return;
@@ -2760,6 +2856,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   // "min" and `_persistThinkingDefault` bakes the resolved level to disk,
   // permanently replacing "auto". `_autoSelected` tracks the window.
   pi.on("thinking_level_select", (event) => {
+    if (fromSubagent()) return;
     const level = event?.level as ThinkingLevel | undefined;
     if (!level) return;
     if (_autoSelected) return;
@@ -2777,6 +2874,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   // `goal_updated` whenever the goal loop starts/stops/pauses.
   // We compute status: 'active' | 'paused' | 'idle' and mirror it to room_meta.
   (pi as { on: (event: string, handler: (event: unknown) => void) => void }).on("goal_updated", (event) => {
+    if (fromSubagent()) return;
     const raw = event as { state?: { enabled?: boolean; goal?: { status?: string } }; goal?: { status?: string } } | undefined;
     const enabled = raw?.state?.enabled === true;
     const status = raw?.state?.goal?.status ?? raw?.goal?.status;
@@ -2810,17 +2908,21 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   }
 
   (pi as { on: (event: string, handler: (event: unknown) => void) => void }).on("loop_updated", (event: any) => {
+    if (fromSubagent()) return;
     const status = event?.status ?? (event?.enabled ? "active" : "idle");
     _publishLoopStatus(status);
   });
 
   pi.on("agent_start", () => {
+    if (fromSubagent()) return;
     _agentActive = true;
     _agentRunActive = true;
     _agentRunGeneration += 1;
+    _refreshActivity();
   });
 
   pi.on("message_start", (event) => {
+    if (fromSubagent()) return;
     const message = event?.message as BufferMsg | undefined;
     if (!_anyPeerActive() || message?.role !== "user") return;
     _broadcastConsumedSteerForUserContent(message.content);
@@ -2850,6 +2952,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   };
 
   pi.on("message_update", (event) => {
+    if (fromSubagent()) return;
     if (!_anyPeerActive() || !_currentTurnId) return;
     const ae = event.assistantMessageEvent as Record<string, unknown> | undefined;
     if (!ae) return;
@@ -2909,6 +3012,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   // (visibility only, NOT approval). Fires before the tool executes so the app
   // immediately renders the running tool pill before any output arrives.
   pi.on("tool_call", (event: unknown) => {
+    if (fromSubagent()) return;
     const ev = event as Record<string, unknown> | undefined;
     const tcid = (ev?.toolCallId ?? ev?.id ?? ev?.tool_call_id) as string | undefined;
     const name = (ev?.toolName ?? ev?.name ?? ev?.tool) as string | undefined;
@@ -2919,14 +3023,18 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   const _activeToolArgs = new Map<string, unknown>();
 
   pi.on("tool_execution_start", (event) => {
+    if (fromSubagent()) return;
     _activeToolArgs.set(event.toolCallId, event.args);
     _handleToolStart(event.toolCallId, event.toolName, event.args);
   });
 
   pi.on("tool_execution_end", (event) => {
+    if (fromSubagent()) return;
     _emittedToolRequests.delete(event.toolCallId);
     const rawArgs = _activeToolArgs.get(event.toolCallId);
     _activeToolArgs.delete(event.toolCallId);
+    // An async bash / detached task just registered a background job.
+    _refreshActivity();
     if (!_anyPeerActive()) return;
     const text = _stringifyToolResult(event.result);
     const msg: ServerMessage = event.isError
@@ -2960,6 +3068,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   // or RPC. Previous impl overwrote on `agent_end` and lost everything but the
   // last turn (see diagnostics 14, 15).
   pi.on("message_end", (event) => {
+    if (fromSubagent()) return;
     const m = event?.message as { role?: string; content?: unknown; stopReason?: string; errorMessage?: string } | undefined;
     if (!m) return;
     if (m.role === "user" && _anyPeerActive()) {
@@ -3022,7 +3131,11 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   }
 
   pi.on("agent_end", () => {
+    if (fromSubagent()) return;
     _agentActive = false;
+    // omp drops settled subagent/job rows when the main run ends.
+    _activity.clearFinished();
+    _refreshActivity();
     for (const steer of _pendingSteers) {
       _broadcastToActive({ type: "steer_consumed", id: steer.id });
     }
@@ -3050,6 +3163,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   // room_meta over the relay (plan/32) below — that's independent of the
   // broker and drives the app's working indicator.
   pi.on("turn_start", (_event, ctx) => {
+    if (fromSubagent()) return;
     _turnActive = true;
     _agentActive = true;
     _streamPhase = null;
@@ -3070,6 +3184,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     }
   });
   pi.on("turn_end", () => {
+    if (fromSubagent()) return;
     _turnActive = false;
     _scheduleWorkingMetaOff(_agentActive ? 150 : 0);
     _maybeFinalizeTurn();
@@ -3085,9 +3200,10 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
         event.preparation.turnPrefixMessages,
       );
     }
-    _publishWorking(true);
+    if (!fromSubagent()) _publishWorking(true);
   });
   pi.on("session_compact", (event) => {
+    if (fromSubagent()) return;
     const entry = event?.compactionEntry as { summary?: unknown; tokensBefore?: unknown } | undefined;
     const summary = typeof entry?.summary === "string" ? entry.summary : "";
     const tokensBefore = typeof entry?.tokensBefore === "number" ? entry.tokensBefore : 0;
@@ -3109,6 +3225,13 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   // New session. Fires on startup/new/fork/reload/resume; the ctx is always
   // bound to the current session.
   pi.on("session_start", (_event, ctx) => {
+    const subagentCtx = _isSubagentSession(ctx);
+    // An in-process subagent (omp `task`) starts on its own `pi` while the
+    // main session is live: mute it for good (see `_mainPi`).
+    if (subagentCtx && !_disposed && _mainPi !== null && _mainPi !== pi) {
+      _subagentPis.add(pi);
+      return;
+    }
     // Post-shutdown rearm MUST run BEFORE the subagent early-return. A
     // module-reuse host can deliver the replacement MAIN session with a
     // subagent-looking ctx (hasUI:false custom hosts, session-file parent dirs
@@ -3126,7 +3249,20 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
       };
       _launchRoot(ctx, restartAuthority);
     }
-    if (_isSubagentSession(ctx)) return;
+    if (_mainPi !== pi) {
+      // First boot, a replacement session, or a main-shaped start on a new
+      // `pi`: this is the main session now.
+      if (_mainPi !== null) _resetActivity();
+      _mainPi = pi;
+      _subagentPis.delete(pi);
+      if (_pi !== pi) {
+        // The factory deferred these while the previous main looked live.
+        _pi = pi;
+        _extensionUiBridge?.dispose();
+        _extensionUiBridge = createExtensionUiBridge(pi, _broadcastToActive, _makeExtensionUiBridgeOptions());
+      }
+    }
+    if (subagentCtx) return;
     _lastEventCtx = ctx;
     _pollModelAndThinkingChanges();
     if (ctx && (ctx as { sessionManager?: unknown }).sessionManager) {
@@ -3215,6 +3351,17 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   // best-effort: every step is guarded so a partially-initialised instance
   // (e.g. shutdown lands mid-`_cmdRoot`) tears down without throwing.
   pi.on("session_shutdown", async (_event, ctx) => {
+    if (_subagentPis.has(pi)) {
+      // A subagent `pi` never starts again; drop its bus listeners.
+      for (const off of busOffs.splice(0)) off();
+      return;
+    }
+    if (pi === _mainPi) {
+      // Unbind even for a subagent-shaped main ctx (hasUI:false hosts), so the
+      // replacement session_start binds as main instead of as a subagent.
+      _mainPi = null;
+      _resetActivity();
+    }
     if (_isSubagentSession(ctx)) return;
     // Revoke async authority synchronously, before any teardown await. `_disposed`
     // blocks the outgoing continuation immediately; the root and candidate
@@ -6019,6 +6166,9 @@ function _handleSessionSync(
     eos: true,
     truncated,
   });
+  // The activity panel is live state, not history: resend it after the
+  // client substitutes its timeline.
+  sender.send(_activityBroadcaster.message());
 
   // Plan/57 — replay ask_user flows still awaiting an answer. The bridge
   // broadcasts `started` once; a peer that connects afterwards would otherwise
@@ -6480,20 +6630,47 @@ export function _mapAgentMessagesToEvents(
           });
         }
       } else if (Array.isArray(m.content)) {
+        // Reasoning gets the same <think>…</think> wrapping the live stream
+        // emits (message_update), so Full mode shows it after a resync and
+        // Brief strips it. Live streaming puts a thinking block in the same
+        // bubble as the text after it ("<think>r</think>\n\ntext"); a
+        // thinking block with no text before the next tool call/image (or
+        // the message end) becomes its own agent_message.
+        let pendingThinking = "";
+        const flushThinking = (): void => {
+          if (!pendingThinking) return;
+          events.push({
+            ts,
+            type: "agent_message",
+            in_reply_to: lastUserId ?? `sync_${ts}`,
+            text: pendingThinking,
+            ...(usage ? { usage } : {}),
+          });
+          pendingThinking = "";
+        };
         for (const raw of m.content) {
           if (!raw || typeof raw !== "object") continue;
-          const block = raw as { type?: string; text?: unknown; id?: unknown; name?: unknown; arguments?: unknown; data?: unknown; mimeType?: unknown; source?: unknown; image_url?: unknown };
-          if (block.type === "text") {
+          const block = raw as { type?: string; text?: unknown; thinking?: unknown; id?: unknown; name?: unknown; arguments?: unknown; data?: unknown; mimeType?: unknown; source?: unknown; image_url?: unknown };
+          if (block.type === "thinking") {
+            // Redacted/encrypted blocks keep only a signature: nothing to show.
+            const reasoning = typeof block.thinking === "string" ? block.thinking : "";
+            if (!reasoning.trim()) continue;
+            const wrapped = `<think>${reasoning}</think>`;
+            pendingThinking = pendingThinking ? `${pendingThinking}\n\n${wrapped}` : wrapped;
+          } else if (block.type === "text") {
             const text = String(block.text ?? "");
             if (!text) continue;
+            const body = _inlineLocalMarkdownImages(text, sessionCwd);
             events.push({
               ts,
               type: "agent_message",
               in_reply_to: lastUserId ?? `sync_${ts}`,
-              text: _inlineLocalMarkdownImages(text, sessionCwd),
+              text: pendingThinking ? `${pendingThinking}\n\n${body}` : body,
               ...(usage ? { usage } : {}),
             });
+            pendingThinking = "";
           } else if (block.type === "image") {
+            flushThinking();
             let imgData = "";
             let imgMime = "image/png";
             if (typeof block.data === "string") {
@@ -6515,6 +6692,7 @@ export function _mapAgentMessagesToEvents(
               });
             }
           } else if (block.type === "image_url") {
+            flushThinking();
             const url = typeof block.image_url === "string" ? block.image_url : (block.image_url as Record<string, unknown>)?.url;
             if (url) {
               events.push({
@@ -6526,6 +6704,7 @@ export function _mapAgentMessagesToEvents(
               });
             }
           } else if (block.type === "toolCall") {
+            flushThinking();
             events.push({
               ts,
               type: "tool_request",
@@ -6535,6 +6714,7 @@ export function _mapAgentMessagesToEvents(
             });
           }
         }
+        flushThinking();
       }
     } else if (m.role === "toolResult") {
       // Same helper as the live `tool_execution_end` broadcast → live == re-sync.
