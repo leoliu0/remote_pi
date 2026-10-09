@@ -127,6 +127,55 @@ void main() {
   );
 
   testWidgets(
+    '"Show thinking traces" switch defaults ON, persists, and leaves the '
+    'tool-call mode alone',
+    (tester) async {
+      final prefs = _preferences();
+      await prefs.load();
+      await prefs.setToolCallDisplay(ToolCallDisplay.hidden);
+      final conn = ConnectionManager(
+        factory: (_, _) async =>
+            PlainPeerChannel(transport: _NoopTransport()),
+        storage: _FakeStorage(),
+      );
+      final vm = SettingsViewModel(_FakeStorage(), prefs, conn);
+      await tester.pumpWidget(
+        MultiProvider(
+          providers: [
+            ChangeNotifierProvider<Preferences>.value(value: prefs),
+            ChangeNotifierProvider<SettingsViewModel>.value(value: vm),
+          ],
+          child: MaterialApp(
+            theme: buildDarkTheme(),
+            home: const SettingsPage(),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+
+      final toggle = find.byKey(const Key('show-thinking-switch'));
+      await tester.scrollUntilVisible(
+        toggle,
+        200,
+        scrollable: find.byType(Scrollable).first,
+      );
+      expect(find.text('Show thinking traces'), findsOneWidget);
+      expect(tester.widget<Switch>(toggle).value, isTrue);
+
+      await tester.tap(toggle);
+      await tester.pump();
+      expect(prefs.showThinking, isFalse);
+      expect(tester.widget<Switch>(toggle).value, isFalse);
+      expect(prefs.toolCallDisplay, ToolCallDisplay.hidden);
+
+      vm.dispose();
+      conn.dispose();
+      prefs.dispose();
+    },
+  );
+
+  testWidgets(
     'Text size control still fits at 320px (small phones)',
     (tester) async {
       tester.view.physicalSize = const Size(320, 700);

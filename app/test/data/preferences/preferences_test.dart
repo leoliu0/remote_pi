@@ -29,10 +29,12 @@ void main() {
       expect(preferences.themeMode, ThemeMode.system);
       expect(preferences.fontScale, AppFontScale.large);
       expect(preferences.fontFamily, AppFontFamily.jetbrainsMono);
+      expect(preferences.showThinking, isTrue);
 
       await preferences.load();
       expect(preferences.toolCallDisplay, ToolCallDisplay.brief);
       expect(preferences.fontScale, AppFontScale.large);
+      expect(preferences.showThinking, isTrue);
     });
 
     test('all settings round-trip through a new Preferences instance',
@@ -45,6 +47,7 @@ void main() {
       await first.setThemeMode(ThemeMode.dark);
       await first.setFontScale(AppFontScale.standard);
       await first.setFontFamily(AppFontFamily.firaCode);
+      await first.setShowThinking(false);
       first.setDraft('abc123', 'room-xyz', 'unfinished text');
 
       final reopened = Preferences(database);
@@ -59,6 +62,7 @@ void main() {
       expect(reopened.themeMode, ThemeMode.dark);
       expect(reopened.fontScale, AppFontScale.standard);
       expect(reopened.fontFamily, AppFontFamily.firaCode);
+      expect(reopened.showThinking, isFalse);
       expect(reopened.getDraft('abc123', 'room-xyz'), 'unfinished text');
     });
 

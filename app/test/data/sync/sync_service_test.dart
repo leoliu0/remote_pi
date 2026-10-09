@@ -15,6 +15,7 @@ import 'package:app/domain/session_state.dart';
 import 'package:app/pairing/storage.dart';
 import 'package:app/protocol/protocol.dart';
 import 'package:app/ui/chat/widgets/bash_tool_format.dart';
+import 'package:app/ui/chat/widgets/thinking_block.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 class _FakeChannel implements IChannel, IControlLink {
@@ -1523,6 +1524,111 @@ void main() {
       final b = cardFor(rows.firstWhere((r) => r.id == 'tc_b'));
       expect(b.body, '(no output)');
       expect(b.footer.line, 'Wall: 15.67s');
+    });
+  });
+
+  group('agent_activity (per active session, full snapshots)', () {
+    Map<String, dynamic> snapshot(List<Map<String, dynamic>> jobs) => {
+      'type': 'agent_activity',
+      'ts': 1,
+      'jobs': jobs,
+    };
+    Map<String, dynamic> job(String id) => {
+      'id': id,
+      'kind': 'subagent',
+      'label': id,
+      'status': 'running',
+      'started_at': 1,
+    };
+
+    test('each snapshot replaces the list; [] clears it', () async {
+      final s = await setup();
+      addTearDown(s.conn.dispose);
+      addTearDown(s.sync.dispose);
+      final seen = <List<String>>[];
+      final sub = s.sync.agentActivityStream.listen(
+        (jobs) => seen.add([for (final j in jobs) j.id]),
+      );
+      addTearDown(sub.cancel);
+
+      s.ch.push(ServerMessage.fromJson(snapshot([job('A'), job('B')])));
+      await _settle();
+      expect(s.sync.agentActivity.map((j) => j.id), ['A', 'B']);
+
+      // A later snapshot without A is the whole truth: A is gone, not merged.
+      s.ch.push(ServerMessage.fromJson(snapshot([job('C')])));
+      await _settle();
+      expect(s.sync.agentActivity.map((j) => j.id), ['C']);
+
+      s.ch.push(ServerMessage.fromJson(snapshot(const [])));
+      await _settle();
+      expect(s.sync.agentActivity, isEmpty);
+      expect(seen, [
+        ['A', 'B'],
+        ['C'],
+        <String>[],
+      ]);
+    });
+
+    test('switching session clears the previous session\'s activity', () async {
+      final s = await setup();
+      addTearDown(s.conn.dispose);
+      addTearDown(s.sync.dispose);
+      s.ch.push(ServerMessage.fromJson(snapshot([job('A')])));
+      await _settle();
+      expect(s.sync.agentActivity, hasLength(1));
+
+      await s.sync.activate(s.epk, 'other-room');
+      expect(s.sync.agentActivity, isEmpty);
+    });
+  });
+
+  group('thinking traces reach the bubble intact (live == history)', () {
+    void expectTrace(MessageRecord row) {
+      final text = (row.toChatMessage() as AssistantMsg).text;
+      final segs = splitThinking(text);
+      expect(segs.map((s) => (s.isThinking, s.text)), [
+        (true, 'weigh options'),
+        (false, 'Use plan B.'),
+      ]);
+    }
+
+    test('live chunks wrapped in <think> by the extension', () async {
+      final s = await setup();
+      addTearDown(s.conn.dispose);
+      addTearDown(s.sync.dispose);
+      for (final d in ['<think>', 'weigh ', 'options', '</think>\n\n', 'Use plan B.']) {
+        s.ch.push(AgentChunk(inReplyTo: 'u1', delta: d));
+      }
+      s.ch.push(AgentDone(inReplyTo: 'u1'));
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+      expectTrace(
+        messages(s.epk).singleWhere((r) => r.role == MsgRole.assistant),
+      );
+    });
+
+    test('history agent_message', () async {
+      final s = await setup();
+      addTearDown(s.conn.dispose);
+      addTearDown(s.sync.dispose);
+      s.ch.push(ServerMessage.fromJson(const {
+        'type': 'session_history',
+        'in_reply_to': 'sync1',
+        'session_started_at': 1700000000000,
+        'eos': true,
+        'events': [
+          {
+            'ts': 1700000000001,
+            'type': 'agent_message',
+            'in_reply_to': 'u1',
+            'text': '<think>weigh options</think>\n\nUse plan B.',
+          },
+        ],
+      }));
+      await _settle();
+      expectTrace(
+        messages(s.epk).singleWhere((r) => r.role == MsgRole.assistant),
+      );
     });
   });
 }

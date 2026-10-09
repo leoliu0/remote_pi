@@ -35,6 +35,7 @@ class Preferences extends ChangeNotifier {
   final PreferenceStore _store;
 
   ToolCallDisplay _toolCallDisplay = ToolCallDisplay.brief;
+  bool _showThinking = true;
   String? _selectedPeerEpk;
   String? _relayUrl;
   bool _onboardingCompleted = false;
@@ -51,11 +52,17 @@ class Preferences extends ChangeNotifier {
   static const String _fontScaleKey = 'prefs.font_scale';
   static const String _fontFamilyKey = 'prefs.font_family';
   static const String _toolCallDisplayKey = 'prefs.tool_call_display';
+  static const String _showThinkingKey = 'prefs.show_thinking';
   static const String _draftPrefix = 'prefs.draft.';
 
   bool get hideToolCalls => _toolCallDisplay == ToolCallDisplay.hidden;
 
   ToolCallDisplay get toolCallDisplay => _toolCallDisplay;
+
+  /// Settings › "Show thinking traces" (default on). Independent of
+  /// [toolCallDisplay]: on renders `<think>` sections as a collapsible
+  /// Thinking block in assistant replies, off strips them.
+  bool get showThinking => _showThinking;
 
   /// Epoch of the selected peer. The persisted representation can include a
   /// `:roomId` suffix for room-aware navigation.
@@ -127,6 +134,12 @@ class Preferences extends ChangeNotifier {
               : ToolCallDisplay.brief);
     if (_toolCallDisplay != nextDisplay) {
       _toolCallDisplay = nextDisplay;
+      changed = true;
+    }
+
+    final nextShowThinking = values[_showThinkingKey] != 'false';
+    if (_showThinking != nextShowThinking) {
+      _showThinking = nextShowThinking;
       changed = true;
     }
 
@@ -203,6 +216,13 @@ class Preferences extends ChangeNotifier {
       _hideToolCallsKey: '${value == ToolCallDisplay.hidden}',
     });
     _toolCallDisplay = value;
+    notifyListeners();
+  }
+
+  Future<void> setShowThinking(bool value) async {
+    if (_showThinking == value) return;
+    _store.put(_showThinkingKey, '$value');
+    _showThinking = value;
     notifyListeners();
   }
 

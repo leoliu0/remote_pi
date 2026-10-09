@@ -1,6 +1,6 @@
 import 'package:app/domain/session_state.dart';
-import 'package:app/ui/chat/widgets/agent_markdown.dart';
 import 'package:app/ui/chat/widgets/image_bubble.dart';
+import 'package:app/ui/chat/widgets/thinking_block.dart';
 import 'package:app/ui/core/themes/themes.dart';
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
@@ -219,20 +219,31 @@ class _CompactionBubbleState extends State<CompactionBubble> {
 
 class AssistantBubble extends StatelessWidget {
   final AssistantMsg message;
-  final bool brief;
-  const AssistantBubble(this.message, {super.key, this.brief = false});
+
+  /// Settings › "Show thinking traces": render `<think>` sections as a
+  /// collapsible Thinking block (true) or strip them (false).
+  final bool showThinking;
+  const AssistantBubble(this.message, {super.key, this.showThinking = true});
 
   @override
   Widget build(BuildContext context) {
-    final text = brief ? stripThinkingTrace(message.text) : message.text;
-    if (text.isEmpty) return const SizedBox.shrink();
+    if (!AssistantContent.hasContent(
+      message.text,
+      showThinking: showThinking,
+    )) {
+      return const SizedBox.shrink();
+    }
     // Plan/32b — agent output is rendered as Markdown (GFM + code blocks),
     // spanning the FULL content width (the message list already pads 16px on
     // each side) — unlike the user's right-aligned chat bubble, which stays
     // capped. Selectable so prose/code can be copied.
     return SizedBox(
       width: double.infinity,
-      child: AgentMarkdown(text, selectable: true),
+      child: AssistantContent(
+        message.text,
+        showThinking: showThinking,
+        selectable: true,
+      ),
     );
   }
 }

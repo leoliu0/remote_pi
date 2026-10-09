@@ -874,6 +874,9 @@ sealed class ServerMessage {
       // carries pi-ask's full question so the app renders multi/preview/notes.
       'extension_ui_request' => ExtensionUiRequest.fromJson(json),
       'skills_list' => SkillsList.fromJson(json),
+      // Running subagents + background jobs (omp's bottom activity panel).
+      // Full snapshot: replace local state wholesale, never merge.
+      'agent_activity' => AgentActivity.fromJson(json),
       // forward-compat: unknown types are not fatal — callers catch and log
       _ => throw UnsupportedTypeException(type ?? ''),
     };
@@ -1765,4 +1768,158 @@ class ExtensionUiResponse extends ClientMessage {
     if (ask != null) m['ask'] = ask!.toJson();
     return m;
   }
+}
+
+// ---------------------------------------------------------------------------
+// agent_activity — running subagents + background jobs (omp's bottom panel).
+// Contract: pi-extension/src/protocol/types.ts (AgentActivityJob) and
+// pi-extension/src/activity.ts. Every frame is a FULL snapshot; `jobs: []`
+// means nothing is running. Elapsed time is not on the wire: clients render
+// `now - started_at` while running, `ended_at - started_at` after.
+// ---------------------------------------------------------------------------
+
+enum AgentActivityKind {
+  subagent('subagent'),
+  bash('bash'),
+  job('job');
+
+  final String wire;
+  const AgentActivityKind(this.wire);
+
+  /// Unknown kinds render like a generic background job (forward-compat).
+  static AgentActivityKind fromWire(String? s) {
+    for (final k in values) {
+      if (k.wire == s) return k;
+    }
+    return AgentActivityKind.job;
+  }
+}
+
+enum AgentActivityStatus {
+  running('running'),
+  done('done'),
+  failed('failed'),
+  cancelled('cancelled');
+
+  final String wire;
+  const AgentActivityStatus(this.wire);
+
+  /// Unknown statuses count as finished (mirrors the extension's mapping).
+  static AgentActivityStatus fromWire(String? s) {
+    for (final st in values) {
+      if (st.wire == s) return st;
+    }
+    return AgentActivityStatus.done;
+  }
+}
+
+/// Subagent live progress, as last reported by omp.
+class AgentActivityProgress {
+  final String? tool;
+  final String? toolArgs;
+  final int? toolStartedAt;
+  final int? toolCount;
+  final int? tokens;
+  final double? cost;
+  final double? percent;
+
+  const AgentActivityProgress({
+    this.tool,
+    this.toolArgs,
+    this.toolStartedAt,
+    this.toolCount,
+    this.tokens,
+    this.cost,
+    this.percent,
+  });
+
+  factory AgentActivityProgress.fromJson(Map<String, dynamic> j) =>
+      AgentActivityProgress(
+        tool: j['tool'] as String?,
+        toolArgs: j['tool_args'] as String?,
+        toolStartedAt: (j['tool_started_at'] as num?)?.toInt(),
+        toolCount: (j['tool_count'] as num?)?.toInt(),
+        tokens: (j['tokens'] as num?)?.toInt(),
+        cost: (j['cost'] as num?)?.toDouble(),
+        percent: (j['percent'] as num?)?.toDouble(),
+      );
+}
+
+/// One row of the activity panel.
+class AgentActivityJob {
+  final String id;
+  final AgentActivityKind kind;
+  final String label;
+  final AgentActivityStatus status;
+
+  /// Epoch ms.
+  final int startedAt;
+
+  /// Epoch ms; set once [status] is no longer running.
+  final int? endedAt;
+  final String? agent;
+  final String? description;
+  final String? assignment;
+  final String? parentToolCallId;
+  final String? command;
+  final String? jobType;
+  final String? detail;
+  final AgentActivityProgress? progress;
+
+  const AgentActivityJob({
+    required this.id,
+    required this.kind,
+    required this.label,
+    required this.status,
+    required this.startedAt,
+    this.endedAt,
+    this.agent,
+    this.description,
+    this.assignment,
+    this.parentToolCallId,
+    this.command,
+    this.jobType,
+    this.detail,
+    this.progress,
+  });
+
+  factory AgentActivityJob.fromJson(Map<String, dynamic> j) {
+    final id = j['id'] as String? ?? '';
+    return AgentActivityJob(
+      id: id,
+      kind: AgentActivityKind.fromWire(j['kind'] as String?),
+      label: (j['label'] as String?) ?? id,
+      status: AgentActivityStatus.fromWire(j['status'] as String?),
+      startedAt: (j['started_at'] as num?)?.toInt() ?? 0,
+      endedAt: (j['ended_at'] as num?)?.toInt(),
+      agent: j['agent'] as String?,
+      description: j['description'] as String?,
+      assignment: j['assignment'] as String?,
+      parentToolCallId: j['parent_tool_call_id'] as String?,
+      command: j['command'] as String?,
+      jobType: j['job_type'] as String?,
+      detail: j['detail'] as String?,
+      progress: j['progress'] is Map
+          ? AgentActivityProgress.fromJson(
+              (j['progress'] as Map).cast<String, dynamic>(),
+            )
+          : null,
+    );
+  }
+}
+
+/// ServerMessage: full snapshot of the session's running subagents + jobs.
+class AgentActivity extends ServerMessage {
+  final List<AgentActivityJob> jobs;
+  final int? ts;
+
+  const AgentActivity({required this.jobs, this.ts});
+
+  factory AgentActivity.fromJson(Map<String, dynamic> j) => AgentActivity(
+    jobs: (j['jobs'] as List<dynamic>? ?? const <dynamic>[])
+        .whereType<Map>()
+        .map((m) => AgentActivityJob.fromJson(m.cast<String, dynamic>()))
+        .toList(growable: false),
+    ts: (j['ts'] as num?)?.toInt(),
+  );
 }

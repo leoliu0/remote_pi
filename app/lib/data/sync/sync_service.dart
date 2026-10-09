@@ -67,6 +67,13 @@ class SyncService extends Service {
   final StreamController<Set<String>> _extensionUiOpenController =
       StreamController<Set<String>>.broadcast();
 
+  // Running subagents + background jobs for the ACTIVE session, as last
+  // reported by `agent_activity` (a full snapshot each time). In-memory only;
+  // cleared on session switch so one chat never shows another's jobs.
+  List<AgentActivityJob> _agentActivity = const [];
+  final StreamController<List<AgentActivityJob>> _agentActivityController =
+      StreamController<List<AgentActivityJob>>.broadcast();
+
   List<QueuedMsg> _queuedMessages = const [];
   final StreamController<List<QueuedMsg>> _queuedController =
       StreamController<List<QueuedMsg>>.broadcast();
@@ -136,6 +143,12 @@ class SyncService extends Service {
   /// device was away and must close.
   Stream<Set<String>> get extensionUiOpenStream =>
       _extensionUiOpenController.stream;
+
+  /// Running subagents + background jobs of the active session (latest
+  /// `agent_activity` snapshot; empty when nothing runs).
+  List<AgentActivityJob> get agentActivity => _agentActivity;
+  Stream<List<AgentActivityJob>> get agentActivityStream =>
+      _agentActivityController.stream;
   List<QueuedMsg> get queuedMessages => _queuedMessages;
   String? get queuedText =>
       _queuedMessages.isEmpty ? null : _queuedMessages.first.text;
@@ -199,6 +212,19 @@ class SyncService extends Service {
     if (_working) {
       _working = false;
       if (!_workingController.isClosed) _workingController.add(false);
+    }
+    _setAgentActivity(const []);
+  }
+
+  /// Replaces the activity list wholesale (the wire sends full snapshots).
+  void _setAgentActivity(List<AgentActivityJob> jobs) {
+    if (identical(jobs, _agentActivity) ||
+        (jobs.isEmpty && _agentActivity.isEmpty)) {
+      return;
+    }
+    _agentActivity = jobs;
+    if (!_agentActivityController.isClosed) {
+      _agentActivityController.add(jobs);
     }
   }
 
@@ -730,6 +756,8 @@ class SyncService extends Service {
           _uiReplayIds.clear();
         }
         break;
+      case AgentActivity(:final jobs):
+        _setAgentActivity(jobs);
     }
   }
 
@@ -1313,6 +1341,7 @@ class SyncService extends Service {
     _eventController.close();
     _extensionUiController.close();
     _extensionUiOpenController.close();
+    _agentActivityController.close();
     _workingController.close();
     _queuedController.close();
   }

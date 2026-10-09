@@ -56,6 +56,11 @@ class ChatReady extends ChatState {
   /// dead end when pi-ask rejects an answer.
   final String? pendingUiError;
 
+  /// Running subagents + background jobs of this session (latest
+  /// `agent_activity` snapshot). Non-empty → the activity panel shows above
+  /// the input bar. Identity compared (replaced wholesale per snapshot).
+  final List<AgentActivityJob> activity;
+
   String? get queuedText =>
       queuedMessages.isEmpty ? null : queuedMessages.first.text;
 
@@ -70,6 +75,7 @@ class ChatReady extends ChatState {
     this.queuedMessages = const [],
     this.pendingUiRequest,
     this.pendingUiError,
+    this.activity = const [],
   });
 
   ChatReady copyWith({
@@ -88,6 +94,7 @@ class ChatReady extends ChatState {
     bool clearPendingUiRequest = false,
     String? pendingUiError,
     bool clearPendingUiError = false,
+    List<AgentActivityJob>? activity,
   }) =>
       ChatReady(
         messages: messages ?? this.messages,
@@ -108,6 +115,7 @@ class ChatReady extends ChatState {
         pendingUiError: clearPendingUiError
             ? null
             : (pendingUiError ?? this.pendingUiError),
+        activity: activity ?? this.activity,
       );
 
   @override
@@ -122,7 +130,8 @@ class ChatReady extends ChatState {
       other.isWorking == isWorking &&
       other.queuedMessages == queuedMessages &&
       other.pendingUiRequest == pendingUiRequest &&
-      other.pendingUiError == pendingUiError;
+      other.pendingUiError == pendingUiError &&
+      other.activity == activity;
 
   @override
   int get hashCode => Object.hash(
@@ -136,6 +145,7 @@ class ChatReady extends ChatState {
         queuedMessages,
         pendingUiRequest,
         pendingUiError,
+        activity,
       );
 }
 

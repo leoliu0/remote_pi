@@ -12,9 +12,10 @@ import 'package:app/ui/chat/voice/viewmodels/voice_input_viewmodel.dart';
 import 'package:app/ui/chat/widgets/attach_sheet.dart';
 import 'package:app/ui/chat/widgets/input_bar.dart';
 import 'package:app/ui/chat/widgets/message_bubble.dart';
-import 'package:app/ui/chat/widgets/agent_markdown.dart';
+import 'package:app/ui/chat/widgets/thinking_block.dart';
 import 'package:app/ui/chat/widgets/streaming_bubble.dart';
 import 'package:app/ui/chat/widgets/tool_request_card.dart';
+import 'package:app/ui/chat/widgets/activity_panel.dart';
 import 'package:app/ui/chat/widgets/extension_ui_sheet.dart';
 import 'package:app/ui/settings/settings_sheet.dart';
 import 'package:app_settings/app_settings.dart';
@@ -138,6 +139,8 @@ class _ChatPageState extends State<ChatPage> {
                 ],
               ),
             ),
+            if (state is ChatReady && state.activity.isNotEmpty)
+              ActivityPanel(jobs: state.activity),
             _buildInput(context, state, vm),
           ],
         ),
@@ -431,7 +434,9 @@ class _ChatPageState extends State<ChatPage> {
       s.length <= max ? s : '${s.substring(0, max - 1)}…';
 
   Widget _buildBody(BuildContext context, ChatState state, ChatViewModel vm) {
-    final toolDisplay = context.watch<Preferences>().toolCallDisplay;
+    final prefs = context.watch<Preferences>();
+    final toolDisplay = prefs.toolCallDisplay;
+    final showThinking = prefs.showThinking;
     return switch (state) {
       // Edge case: opened /chat without a peer (e.g. peer revoked while
       // user was here). The chat is not the place to pair — render
@@ -452,7 +457,6 @@ class _ChatPageState extends State<ChatPage> {
         onAction: () => context.go('/pair'),
       ),
       ChatReady(:final messages, :final streaming) => () {
-        final isBriefOrHidden = toolDisplay != ToolCallDisplay.full;
         final visible = messages.where((m) {
           if (m is ToolEvent) {
             if (toolDisplay == ToolCallDisplay.hidden) return false;
@@ -474,8 +478,10 @@ class _ChatPageState extends State<ChatPage> {
             return true;
           }
           if (m is AssistantMsg) {
-            final text = isBriefOrHidden ? stripThinkingTrace(m.text) : m.text;
-            return text.trim().isNotEmpty;
+            return AssistantContent.hasContent(
+              m.text,
+              showThinking: showThinking,
+            );
           }
           return true;
         }).toList();
@@ -549,6 +555,7 @@ class _ChatPageState extends State<ChatPage> {
           isWorking: vm.isWorking,
           onDecide: (id, decision) => vm.approveTool(id, decision),
           briefToolCalls: toolDisplay != ToolCallDisplay.full,
+          showThinking: showThinking,
           workingLabel: workingLabel,
           onCancel: onCancel,
         );
@@ -742,6 +749,7 @@ class _MessageList extends StatelessWidget {
   final bool isWorking;
   final void Function(String, ApproveDecision) onDecide;
   final bool briefToolCalls;
+  final bool showThinking;
 
   final String? workingLabel;
 
@@ -752,6 +760,7 @@ class _MessageList extends StatelessWidget {
     required this.isWorking,
     required this.onDecide,
     this.briefToolCalls = false,
+    this.showThinking = true,
     this.workingLabel,
     this.onCancel,
   });
@@ -761,10 +770,11 @@ class _MessageList extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final hasActiveBubble = (streaming != null &&
-            (briefToolCalls
-                    ? stripThinkingTrace(streaming!.buffer)
-                    : streaming!.buffer)
-                .isNotEmpty) ||
+            AssistantContent.hasContent(
+              streaming!.buffer,
+              showThinking: showThinking,
+              live: true,
+            )) ||
         (isWorking && (workingLabel != null || streaming != null));
     final hasActiveTurn = hasActiveBubble;
     final totalCount = messages.length + (hasActiveTurn ? 1 : 0);
@@ -782,7 +792,7 @@ class _MessageList extends StatelessWidget {
             child: StreamingBubble(
               streaming: streaming,
               isWorking: isWorking,
-              brief: briefToolCalls,
+              showThinking: showThinking,
               workingLabel: workingLabel,
               onCancel: onCancel,
             ),
@@ -797,7 +807,7 @@ class _MessageList extends StatelessWidget {
           key: ValueKey('${msg.runtimeType}_${msg.id}_$msgIdx'),
           child: switch (msg) {
             UserMsg() => UserBubble(msg),
-            AssistantMsg() => AssistantBubble(msg, brief: briefToolCalls),
+            AssistantMsg() => AssistantBubble(msg, showThinking: showThinking),
             ToolEvent() => ToolRequestCard(
                 tool: msg,
                 onDecide: onDecide,

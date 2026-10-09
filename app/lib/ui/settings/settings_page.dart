@@ -540,6 +540,39 @@ class _DisplaySection extends StatelessWidget {
             ],
           ),
         ),
+        // Thinking traces in assistant replies — independent of the tool-call
+        // display mode above.
+        Padding(
+          padding: const EdgeInsets.fromLTRB(18, 12, 10, 4),
+          child: Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Show thinking traces',
+                      style: context.typo.sansBody.copyWith(color: colors.text),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Shows the model\'s reasoning as a collapsible Thinking block in replies.',
+                      style: context.typo.sansBody.copyWith(
+                        color: colors.muted,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Switch.adaptive(
+                key: const Key('show-thinking-switch'),
+                value: prefs.showThinking,
+                onChanged: prefs.setShowThinking,
+              ),
+            ],
+          ),
+        ),
         const SizedBox(height: 8),
       ],
     );

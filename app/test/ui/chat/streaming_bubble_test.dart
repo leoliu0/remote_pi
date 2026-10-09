@@ -38,7 +38,7 @@ void main() {
     expect(cursor.left, closeTo(md.left, 1));
   });
 
-  testWidgets('brief mode strips thinking tags and hides indicator once visible text arrives', (
+  testWidgets('thinking OFF strips thinking tags and hides indicator once visible text arrives', (
     tester,
   ) async {
     await tester.pumpWidget(
@@ -49,7 +49,7 @@ void main() {
               inReplyTo: 'x',
               buffer: '<think>internal reason</think>visible reply',
             ),
-            brief: true,
+            showThinking: false,
           ),
         ),
       ),
@@ -58,6 +58,58 @@ void main() {
     expect(find.text('Working…'), findsNothing);
     expect(find.textContaining('visible reply'), findsOneWidget);
     expect(find.textContaining('internal reason'), findsNothing);
+    expect(find.byKey(const Key('thinking-block')), findsNothing);
+  });
+
+  testWidgets('thinking ON shows the closed trace as a Thinking block', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Scaffold(
+          body: StreamingBubble(
+            streaming: StreamingMessage(
+              inReplyTo: 'x',
+              buffer: '<think>internal reason</think>visible reply',
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(find.byKey(const Key('thinking-block')), findsOneWidget);
+    expect(find.text('Thinking'), findsOneWidget);
+    expect(find.text('internal reason'), findsOneWidget);
+    expect(find.textContaining('visible reply'), findsOneWidget);
+    expect(find.textContaining('<think>'), findsNothing);
+  });
+
+  testWidgets('unterminated <think> while streaming: ON grows a Thinking block, '
+      'OFF hides it', (tester) async {
+    Future<void> pumpWith(bool showThinking) => tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: StreamingBubble(
+            streaming: const StreamingMessage(
+              inReplyTo: 'x',
+              buffer: 'Story end.\n\n<think>The user wants a sequel',
+            ),
+            showThinking: showThinking,
+          ),
+        ),
+      ),
+    );
+
+    await pumpWith(true);
+    expect(find.byKey(const Key('thinking-block')), findsOneWidget);
+    expect(find.text('The user wants a sequel'), findsOneWidget);
+    expect(find.textContaining('Story end.'), findsOneWidget);
+    expect(find.textContaining('<think>'), findsNothing);
+
+    await pumpWith(false);
+    expect(find.byKey(const Key('thinking-block')), findsNothing);
+    expect(find.textContaining('The user wants'), findsNothing);
+    expect(find.textContaining('Story end.'), findsOneWidget);
   });
 
   testWidgets('working turn with workingLabel shows interactive Stop button', (
@@ -69,7 +121,6 @@ void main() {
         home: Scaffold(
           body: StreamingBubble(
             streaming: const StreamingMessage(inReplyTo: 'x'),
-            brief: true,
             isWorking: true,
             workingLabel: 'Searching files…',
             onCancel: () => cancelled = true,
@@ -94,7 +145,6 @@ void main() {
         home: Scaffold(
           body: StreamingBubble(
             streaming: StreamingMessage(inReplyTo: 'x'),
-            brief: true,
             isWorking: true,
             workingLabel: 'Searching files…',
           ),
@@ -114,7 +164,6 @@ void main() {
         home: Scaffold(
           body: StreamingBubble(
             streaming: StreamingMessage(inReplyTo: 'x'),
-            brief: true,
             isWorking: true,
             workingLabel: 'Searching files…',
           ),
@@ -138,7 +187,6 @@ void main() {
               inReplyTo: 'x',
               buffer: 'Finished streaming text',
             ),
-            brief: true,
             isWorking: false,
             onCancel: () => cancelled = true,
           ),

@@ -35,6 +35,7 @@ class ChatViewModel extends ViewModel<ChatState> {
   StreamSubscription<SessionEvent>? _eventSub;
   StreamSubscription<ExtensionUiRequest>? _uiReqSub;
   StreamSubscription<Set<String>>? _uiOpenSub;
+  StreamSubscription<List<AgentActivityJob>>? _activitySub;
   StreamSubscription<Map<String, List<RoomInfo>>>? _roomsSub;
   StreamSubscription<ConnectionStatus>? _statusSub;
 
@@ -47,6 +48,7 @@ class ChatViewModel extends ViewModel<ChatState> {
   StreamingMessage? _streaming;
   bool _working = false;
   List<QueuedMsg> _queuedMessages = const [];
+  List<AgentActivityJob> _activity = const [];
   // Plan/57 — interactive extension_ui_requests awaiting an answer, in arrival
   // order; the newest is shown, older ones resurface once it resolves (several
   // can be open at once: parallel ask calls, plan review + ask, a sync replay).
@@ -73,6 +75,7 @@ class ChatViewModel extends ViewModel<ChatState> {
     _eventSub = _sync.events.listen(_onEvent);
     _uiReqSub = _sync.extensionUiRequestStream.listen(_onExtensionUiRequest);
     _uiOpenSub = _sync.extensionUiOpenStream.listen(_onExtensionUiOpen);
+    _activitySub = _sync.agentActivityStream.listen(_onActivity);
     _roomsSub = _conn.roomsStream.listen((_) => _recompute());
     _statusSub = _conn.statusStream.listen(_onStatus);
     // ignore: discarded_futures
@@ -183,6 +186,7 @@ class ChatViewModel extends ViewModel<ChatState> {
     _streaming = _sync.streaming;
     _working = _sync.isWorking;
     _queuedMessages = _sync.queuedMessages;
+    _activity = _sync.agentActivity;
     _msgsSub = _read.watchMessages(epk, roomId).listen(_onMessages);
     _runtimeSub = _read.watchRuntime(epk, roomId).listen(_onRuntime);
 
@@ -229,6 +233,11 @@ class ChatViewModel extends ViewModel<ChatState> {
 
   void _onQueued(List<QueuedMsg> messages) {
     _queuedMessages = messages;
+    _recompute();
+  }
+
+  void _onActivity(List<AgentActivityJob> jobs) {
+    _activity = jobs;
     _recompute();
   }
 
@@ -349,6 +358,7 @@ class ChatViewModel extends ViewModel<ChatState> {
       queuedMessages: _queuedMessages,
       pendingUiRequest: _uiRequests.lastOrNull,
       pendingUiError: _uiErrors[_uiRequests.lastOrNull?.id],
+      activity: _activity,
     );
   }
 
@@ -423,6 +433,7 @@ class ChatViewModel extends ViewModel<ChatState> {
     _eventSub?.cancel();
     _uiReqSub?.cancel();
     _uiOpenSub?.cancel();
+    _activitySub?.cancel();
     _roomsSub?.cancel();
     _statusSub?.cancel();
     super.dispose();

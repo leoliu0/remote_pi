@@ -1,7 +1,7 @@
 import 'dart:async';
 
 import 'package:app/domain/session_state.dart';
-import 'package:app/ui/chat/widgets/agent_markdown.dart';
+import 'package:app/ui/chat/widgets/thinking_block.dart';
 import 'package:app/ui/core/themes/themes.dart';
 import 'package:flutter/material.dart';
 
@@ -11,7 +11,10 @@ import 'package:flutter/material.dart';
 class StreamingBubble extends StatefulWidget {
   final StreamingMessage? streaming;
   final bool isWorking;
-  final bool brief;
+
+  /// Settings › "Show thinking traces": an open or closed `<think>` section
+  /// renders as a Thinking block (true) or is stripped (false).
+  final bool showThinking;
   final String? workingLabel;
   final VoidCallback? onCancel;
 
@@ -19,7 +22,7 @@ class StreamingBubble extends StatefulWidget {
     super.key,
     this.streaming,
     this.isWorking = true,
-    this.brief = false,
+    this.showThinking = true,
     this.workingLabel,
     this.onCancel,
   });
@@ -50,10 +53,11 @@ class _StreamingBubbleState extends State<StreamingBubble>
   @override
   Widget build(BuildContext context) {
     final raw = widget.streaming?.buffer ?? '';
-    final buffer = widget.brief
-        ? stripThinkingTrace(raw, isLiveStreaming: true)
-        : raw;
-    final hasVisibleText = buffer.isNotEmpty;
+    final hasVisibleText = AssistantContent.hasContent(
+      raw,
+      showThinking: widget.showThinking,
+      live: true,
+    );
     if (!hasVisibleText && !widget.isWorking) return const SizedBox.shrink();
     final showBanner = widget.isWorking && widget.workingLabel != null;
 
@@ -68,7 +72,8 @@ class _StreamingBubbleState extends State<StreamingBubble>
               label: widget.workingLabel!,
               onCancel: widget.onCancel,
             ),
-          if (hasVisibleText) AgentMarkdown(buffer),
+          if (hasVisibleText)
+            AssistantContent(raw, showThinking: widget.showThinking, live: true),
           if (showBanner && hasVisibleText)
             Padding(
               padding: const EdgeInsets.only(top: 8),
