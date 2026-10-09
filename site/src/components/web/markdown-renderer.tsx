@@ -15,10 +15,10 @@ export function MarkdownRenderer({ content, isStreaming }: MarkdownRendererProps
     setCopiedIndex(idx);
     setTimeout(() => setCopiedIndex(null), 2000);
   };
-  // Sanitize content: strip internal agent thinking blocks and collapse redundant whitespace
+  // Sanitize content and collapse redundant whitespace. `<think>` sections are
+  // split out before this (thinking-block.tsx, Settings → Show thinking traces).
   const sanitized = (content || "")
     .replace(/```thinking[\s\S]*?```/gi, "")
-    .replace(/<think>[\s\S]*?<\/think>/gi, "")
     .replace(/\r\n/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();

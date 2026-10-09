@@ -603,3 +603,11 @@ Existing stored duplicates are not purged by this fix.
 - Surface: `/web` chat composer, headless Chromium (900px wide, DPR 2) against `pnpm dev` with the temporary fake-transport page (deleted before build). Typed with Shift+Enter between lines.
 - Textarea heights: empty 31px, 1 line 31px, 4 lines 99px, 15 lines 240px (capped; overflowY auto, scrollHeight 349, caret line visible). Left icons and Send button bottoms stayed at the row bottom (898px) in every state. Enter sent all 15 lines as one user_message and the box went back to 31px, overflowY hidden (`2026-10-09-web-composer-{1,4,15,after-send}.png`).
 - `pnpm build` ok (the first run failed on a transient next/font/google lookup; the rerun was clean). Redeployed via `install-vps.sh`; live chunk `14dmz1hos3bc8.js` contains `overflowY`.
+
+### 2026-10-09 — Web: agent_activity panel + thinking traces
+
+- Surface: `/web` chat in headless Chromium against `pnpm dev`, temporary fake-transport page (deleted before build).
+- Activity: the captured omp running snapshot (pi-extension `activity.test.ts`, rebased to now) rendered `waiting on 3 jobs`, `└─ bg_1 sleep 20 · 6.0s`, `└─ AgentA AgentA · 2.2s`, `└─ AgentB Run sleep command and report echoed output · 2.2s` + `Running sleep then echo · 1 tools · 1.6k tok`. Times ticked +2.0s two seconds later. A follow-up snapshot replaced the list: `waiting on 1 job`, ✓ AgentA `1m 06s`, red ✗ AgentB `8.5s`. Header click collapses; `jobs: []` hides the panel (`2026-10-09-web-activity-{running,collapsed,finished}.png`).
+- Thinking: a history message with `<think>` showed a muted Thinking block clamped to 2 lines, expanding on click. A streaming unterminated `<think>` showed `Thinking…`. With the switch OFF both were stripped. The Settings switch defaults ON and persists `remotepi_show_thinking` across reloads (`2026-10-09-web-thinking-{on-collapsed,on-expanded,on-streaming,off,settings-on}.png`).
+- Checks: `pnpm test` 89/89, tsc clean, eslint 0 errors (2 pre-existing warnings), `pnpm build` ok.
+- Not verified: frames from a real omp session over the relay.

@@ -12,6 +12,7 @@ import { normalizeRelayUrl } from "./relay-config";
 import { toStandardB64, type PeerRecord, type RoomInfo } from "./session-list";
 import { toolOutcome, type ToolOutcome } from "./tool-output";
 import { parseExtensionUiRequest, type ExtensionUiRequest, type ExtensionUiResponseWire } from "./extension-ui";
+import { parseAgentActivity, type AgentActivityJob } from "./activity";
 
 /** The room a chat is bound to — built from a Home tile when it is opened. */
 export interface PairedSession {
@@ -249,6 +250,8 @@ export interface ChatClientEvents {
   onCompaction?: (summary: string, tokensBefore: number) => void;
   onRoomMeta?: (meta: { model?: string; thinking?: string; working?: boolean }) => void;
   onQueuedState?: (items: Array<{ id: string; text: string; editable?: boolean }>) => void;
+  /** Full `agent_activity` snapshot: replaces the panel's rows. */
+  onActivity?: (jobs: AgentActivityJob[]) => void;
 }
 
 export class RemotePiRelayClient {
@@ -442,6 +445,12 @@ export class RemotePiRelayClient {
           this.events.onQueuedState?.([]);
         }
         break;
+
+      case "agent_activity": {
+        const jobs = parseAgentActivity(msg);
+        if (jobs) this.events.onActivity?.(jobs);
+        break;
+      }
     }
   }
 

@@ -5,6 +5,7 @@ import type { RelayStatus } from "./relay-connection";
 import { RelayPicker } from "./relay-picker";
 import { peerLabel, type PeerRecord } from "./session-list";
 import { ToolDisplayMode } from "./quick-actions-modal";
+import { readShowThinking, writeShowThinking } from "./thinking";
 
 interface SettingsModalProps {
   onClose: () => void;
@@ -61,6 +62,7 @@ export function SettingsModal({
   const [toolDisplay, setToolDisplay] = useState<ToolDisplayMode>(() =>
     readChoice("remotepi_tool_display", TOOL_DISPLAYS, "brief"),
   );
+  const [showThinking, setShowThinking] = useState(readShowThinking);
 
   const handleSetToolDisplay = (mode: ToolDisplayMode) => {
     setToolDisplay(mode);
@@ -168,6 +170,26 @@ export function SettingsModal({
                 ))}
               </div>
             </div>
+
+            {/* Thinking traces (independent of the tool display mode) */}
+            <label className="flex items-center justify-between gap-3 cursor-pointer">
+              <div>
+                <div className="text-[#ccc] font-medium">Show thinking traces</div>
+                <div className="text-[#888] text-[11px] leading-relaxed">
+                  Show the agent&apos;s reasoning as a collapsible Thinking block.
+                </div>
+              </div>
+              <input
+                type="checkbox"
+                role="switch"
+                checked={showThinking}
+                onChange={(e) => {
+                  setShowThinking(e.target.checked);
+                  writeShowThinking(e.target.checked);
+                }}
+                className="w-4 h-4 accent-[#4fc3f7] cursor-pointer shrink-0"
+              />
+            </label>
           </div>
 
           <div className="border-t border-white/10" />

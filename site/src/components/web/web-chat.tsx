@@ -7,24 +7,16 @@ import {
   PeerPresence,
   RemotePiRelayClient,
 } from "./web-client";
-import { MarkdownRenderer } from "./markdown-renderer";
+import { AssistantContent } from "./thinking-block";
+import { readShowThinking, SHOW_THINKING_EVENT } from "./thinking";
+import { ActivityPanel } from "./activity-panel";
+import type { AgentActivityJob } from "./activity";
+import { BrailleSpinner } from "./braille-spinner";
 import type { RelayConnection } from "./relay-connection";
 import { workingLabel } from "./working-label";
 import { ToolFullCard, ToolPill } from "./tool-card";
 import { ExtensionUiPrompt } from "./extension-ui-prompt";
 import { applyExtensionUiRequest, type ExtensionUiResponseWire, type PendingPrompt } from "./extension-ui";
-
-// Same frames and cadence as the phone's working banner (streaming_bubble.dart).
-const BRAILLE_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-
-function BrailleSpinner() {
-  const [tick, setTick] = useState(0);
-  useEffect(() => {
-    const t = setInterval(() => setTick((n) => n + 1), 80);
-    return () => clearInterval(t);
-  }, []);
-  return <span aria-hidden className="w-3 inline-block">{BRAILLE_FRAMES[tick % BRAILLE_FRAMES.length]}</span>;
-}
 
 type ToolDisplay = "brief" | "full" | "hidden";
 
@@ -95,6 +87,13 @@ export function WebChat({
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
   const [pendingPrompt, setPendingPrompt] = useState<PendingPrompt | null>(null);
   const [queuedItems, setQueuedItems] = useState<Array<{ id: string; text: string; editable?: boolean }>>([]);
+  const [showThinking, setShowThinking] = useState(readShowThinking);
+  // Activity rows belong to the client (room) they came from, so switching
+  // sessions never shows the previous room's jobs.
+  const [activity, setActivity] = useState<{ client: RemotePiRelayClient | null; jobs: AgentActivityJob[] }>({
+    client: null,
+    jobs: [],
+  });
 
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const isInitialLoadRef = useRef(true);
@@ -148,7 +147,9 @@ export function WebChat({
   // Bind the chat client to this room; history arrives via session_sync, like the app.
   useEffect(() => {
     const handleStorageChange = () => setToolDisplay(readToolDisplay());
+    const handleShowThinkingChange = () => setShowThinking(readShowThinking());
     window.addEventListener("tool_display_changed", handleStorageChange);
+    window.addEventListener(SHOW_THINKING_EVENT, handleShowThinkingChange);
 
     client.connect({
       onPresenceChange: (p) => {
@@ -278,10 +279,15 @@ export function WebChat({
       onQueuedState: (items) => {
         setQueuedItems(items);
       },
+
+      onActivity: (jobs) => {
+        setActivity({ client, jobs });
+      },
     });
 
     return () => {
       window.removeEventListener("tool_display_changed", handleStorageChange);
+      window.removeEventListener(SHOW_THINKING_EVENT, handleShowThinkingChange);
       client.disconnect();
     };
   }, [client]);
@@ -548,7 +554,7 @@ export function WebChat({
               {/* ASSISTANT MESSAGE (Mobile Parity: Full-width Native Markdown) */}
               {m.role === "assistant" && (
                 <div className="w-full my-2 text-sm leading-relaxed select-text">
-                  <MarkdownRenderer content={m.text} isStreaming={m.isStreaming} />
+                  <AssistantContent text={m.text} isStreaming={m.isStreaming} showThinking={showThinking} />
                 </div>
               )}
 
@@ -654,6 +660,9 @@ export function WebChat({
           ))}
         </div>
       )}
+
+      {/* omp-style activity panel: running subagents and background jobs */}
+      <ActivityPanel jobs={activity.client === client ? activity.jobs : []} />
 
       {/* 5. COMPACT BOTTOM COMPOSER */}
       <div className="p-2 sm:px-4 sm:py-2 border-t border-white/10 bg-[#0a0c10]/95 backdrop-blur-md shrink-0">
