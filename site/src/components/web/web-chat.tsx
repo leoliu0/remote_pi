@@ -10,6 +10,9 @@ import {
 import { MarkdownRenderer } from "./markdown-renderer";
 import type { RelayConnection } from "./relay-connection";
 import { workingLabel } from "./working-label";
+import { ToolFullCard, ToolPill } from "./tool-card";
+import { ExtensionUiPrompt } from "./extension-ui-prompt";
+import { applyExtensionUiRequest, type ExtensionUiResponseWire, type PendingPrompt } from "./extension-ui";
 
 // Same frames and cadence as the phone's working banner (streaming_bubble.dart).
 const BRAILLE_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -90,6 +93,7 @@ export function WebChat({
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [toolDisplay, setToolDisplay] = useState<ToolDisplay>(readToolDisplay);
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
+  const [pendingPrompt, setPendingPrompt] = useState<PendingPrompt | null>(null);
   const [queuedItems, setQueuedItems] = useState<Array<{ id: string; text: string; editable?: boolean }>>([]);
 
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -143,6 +147,9 @@ export function WebChat({
       },
 
       onSessionHistory: (histMsgs) => {
+        // Prompts still open on the Pi are replayed right after the history,
+        // so one resolved while this tab was away must not linger.
+        setPendingPrompt(null);
         if (histMsgs.length > 0) {
           setMessages(histMsgs);
           requestAnimationFrame(() => {
@@ -233,23 +240,18 @@ export function WebChat({
         setTimeout(() => scrollToBottom(true), 50);
       },
 
-      onToolResult: (toolCallId, result, error) => {
+      onToolResult: (toolCallId, { output, isError }) => {
         setMessages((prev) =>
-          prev.map((m) => {
-            if (m.tool && m.tool.id === toolCallId) {
-              return {
-                ...m,
-                tool: {
-                  ...m.tool,
-                  status: error ? "error" : "done",
-                  error,
-                  output: typeof result === "string" ? result : JSON.stringify(result, null, 2),
-                },
-              };
-            }
-            return m;
-          })
+          prev.map((m) =>
+            m.tool && m.tool.id === toolCallId
+              ? { ...m, tool: { ...m.tool, status: isError ? "error" : "done", output } }
+              : m
+          )
         );
+      },
+
+      onExtensionUiRequest: (req) => {
+        setPendingPrompt((open) => applyExtensionUiRequest(open, req));
       },
 
       onCompaction: (summary, tokensBefore) => {
@@ -319,29 +321,20 @@ export function WebChat({
     client.sendMessage(text);
   };
 
-  const handleToolDecision = (toolCallId: string, decision: "allow" | "deny") => {
-    client.approveTool(toolCallId, decision);
-    setMessages((prev) =>
-      prev.map((m) => {
-        if (m.tool && m.tool.id === toolCallId) {
-          return {
-            ...m,
-            tool: {
-              ...m.tool,
-              status: decision === "allow" ? "done" : "denied",
-              output: decision === "allow" ? "Approved by user." : "Denied by user.",
-            },
-          };
-        }
-        return m;
-      })
-    );
-  };
-
   const handleCancelTurn = () => {
     if (activeStreamIdRef.current) {
       client.cancelTurn(activeStreamIdRef.current);
     }
+  };
+
+  const handlePromptRespond = (resp: ExtensionUiResponseWire): boolean => {
+    const sent = client.respondExtensionUi(resp);
+    setPendingPrompt((open) =>
+      open && open.request.id === resp.id
+        ? { ...open, error: sent ? null : "Not connected — check the link to Pi and retry." }
+        : open
+    );
+    return sent;
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -526,25 +519,6 @@ export function WebChat({
           }
 
           return visibleMessages.map((m, idx) => {
-          const toolStatus = m.tool?.status || "done";
-          const toolColor =
-            toolStatus === "pending"
-              ? "#00D4FF"
-              : toolStatus === "done"
-              ? "#6CD28A"
-              : toolStatus === "denied"
-              ? "#6B6B6B"
-              : "#E5484D";
-
-          const statusLabel =
-            toolStatus === "pending"
-              ? "RUNNING"
-              : toolStatus === "done"
-              ? "DONE"
-              : toolStatus === "denied"
-              ? "DENIED"
-              : "FAILED";
-
           return (
             <div key={`${m.id || m.timestamp}_${idx}`} className="w-full">
               {/* USER BUBBLE (Mobile Parity: Capped width, #1A1A1A pill) */}
@@ -568,176 +542,23 @@ export function WebChat({
                 </div>
               )}
 
-              {/* TOOL CALL CARD (Mobile Parity: ToolRequestCard with Status Border & Glow) */}
-              {/* TOOL CALL CARD (Mobile Parity: Brief Pill / Full Card) */}
+              {/* TOOL CALL (Mobile Parity: Brief Pill / Full Card) */}
               {m.role === "tool" && m.tool && toolDisplay !== "hidden" && (() => {
-                const toolKey = m.id || `${m.tool?.id || "tool"}_${m.timestamp}`;
-                const isExpanded = toolDisplay === "full" || expandedTools.has(toolKey);
-                const summary: string =
-                  typeof m.tool.command === "string" && m.tool.command
-                    ? m.tool.command
-                    : m.tool.args && typeof m.tool.args === "object"
-                    ? String(
-                        m.tool.args.path ||
-                          m.tool.args.pattern ||
-                          m.tool.args.query ||
-                          m.tool.args.command ||
-                          JSON.stringify(m.tool.args)
-                      )
-                    : "";
-                if (!isExpanded) {
-                  return (
-                    <div key={toolKey} className="my-1.5 max-w-[95%] sm:max-w-[90%]">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setExpandedTools((prev) => {
-                            const next = new Set(prev);
-                            next.add(toolKey);
-                            return next;
-                          });
-                        }}
-                        className="w-full text-left rounded-lg bg-[#050505] px-3 py-1.5 transition-all flex items-center justify-between gap-2 cursor-pointer group hover:bg-[#0f0f0f]"
-                        style={{
-                          border: `1px solid ${toolColor}55`,
-                        }}
-                      >
-                        <div className="flex items-center gap-2 min-w-0 font-mono text-xs">
-                          <span className="font-bold shrink-0" style={{ color: toolColor }}>
-                            &gt;_ {m.tool.tool.toUpperCase()}
-                          </span>
-                          {summary ? (
-                            <span className="text-[#A3A3A3] font-normal truncate text-[11px] max-w-[200px] sm:max-w-[420px]">
-                              {summary}
-                            </span>
-                          ) : (
-                            <span className="text-[#666] italic text-[11px]">
-                              {toolStatus === "pending" ? "waiting for approval…" : "completed"}
-                            </span>
-                          )}
-                        </div>
-                        <div className="flex items-center gap-2 shrink-0 font-mono text-xs">
-                          {toolStatus === "pending" && (
-                            <span className="text-[10px] text-[#E5B800] bg-[#E5B800]/15 px-1.5 py-0.5 rounded font-semibold">
-                              Action Required
-                            </span>
-                          )}
-                          <span className="font-bold text-xs" style={{ color: toolColor }}>
-                            {toolStatus === "done"
-                              ? "✓"
-                              : toolStatus === "error"
-                              ? "✗"
-                              : toolStatus === "denied"
-                              ? "⊘"
-                              : "⏳"}
-                          </span>
-                          <span className="text-[#666] group-hover:text-white transition-colors text-[10px]">
-                            ▾
-                          </span>
-                        </div>
-                      </button>
-                    </div>
-                  );
-                }
-
-                return (
-                  <div key={toolKey} className="my-2 max-w-[95%] sm:max-w-[90%]">
-                    <div
-                      className="rounded-xl bg-[#0A0A0A] overflow-hidden transition-all"
-                      style={{
-                        border: `1px solid ${toolColor}`,
-                        boxShadow: `0 0 16px ${toolColor}1F`,
-                      }}
-                    >
-                      {/* Tool Header */}
-                      <div
-                        className="px-3.5 py-2 bg-white/[0.02] border-b border-[#1A1A1A] flex items-center justify-between cursor-pointer"
-                        onClick={() => {
-                          if (toolDisplay === "brief") {
-                            setExpandedTools((prev) => {
-                              const next = new Set(prev);
-                              next.delete(toolKey);
-                              return next;
-                            });
-                          }
-                        }}
-                      >
-                        <div className="flex items-center gap-2 font-mono text-xs font-bold" style={{ color: toolColor }}>
-                          <span>&gt;_</span>
-                          <span className="tracking-wide uppercase">{m.tool.tool}</span>
-                          {m.tool.command && (
-                            <span className="text-[#8A8A8A] font-normal font-mono truncate max-w-[180px] sm:max-w-[360px]">
-                              {m.tool.command}
-                            </span>
-                          )}
-                        </div>
-
-                        <div className="flex items-center gap-2">
-                          {toolStatus === "pending" && (
-                            <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
-                              <button
-                                type="button"
-                                onClick={() => handleToolDecision(m.tool!.id, "allow")}
-                                className="px-2 py-0.5 bg-[#6CD28A] hover:bg-[#5bc078] text-[#000000] text-xs font-semibold rounded font-mono cursor-pointer transition-colors"
-                              >
-                                Approve
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => handleToolDecision(m.tool!.id, "deny")}
-                                className="px-2 py-0.5 bg-red-500/20 hover:bg-red-500/30 text-[#E5484D] text-xs font-semibold rounded border border-[#E5484D]/40 font-mono cursor-pointer transition-colors"
-                              >
-                                Deny
-                              </button>
-                            </div>
-                          )}
-
-                          <span className="text-[11px] font-mono font-bold tracking-wider" style={{ color: toolColor }}>
-                            {statusLabel}
-                          </span>
-                          {toolDisplay === "brief" && (
-                            <span className="text-[#888] text-[10px]">▲</span>
-                          )}
-                        </div>
-                      </div>
-
-                      {/* Tool Command / Args Box */}
-                      {m.tool.args && Object.keys(m.tool.args).length > 0 && !m.tool.command && (
-                        <div className="p-2.5 bg-[#050505] font-mono text-xs text-[#8A8A8A] border-b border-[#1A1A1A] overflow-x-auto">
-                          <pre className="text-white/80">{JSON.stringify(m.tool.args, null, 2)}</pre>
-                        </div>
-                      )}
-
-                      {/* Tool Diff / Output View */}
-                      {m.tool.diff && m.tool.diff.hunks && (
-                        <div className="p-3 bg-[#050505] font-mono text-xs overflow-x-auto space-y-0.5 border-t border-[#1A1A1A]">
-                          {m.tool.diff.hunks.map((line, i) => (
-                            <div
-                              key={i}
-                              className={`px-2 py-0.5 rounded ${
-                                line.startsWith("+")
-                                  ? "bg-[#6CD28A]/15 text-[#6CD28A] font-semibold"
-                                : line.startsWith("-")
-                                ? "bg-[#E5484D]/15 text-[#E5484D]"
-                                : "text-[#8A8A8A]"
-                            }`}
-                          >
-                            {line}
-                          </div>
-                        ))}
-                      </div>
-                    )}
-
-                    {/* Tool Output Result */}
-                    {m.tool.result !== undefined && m.tool.result !== null && (
-                      <div className="p-3 bg-[#050505] font-mono text-xs text-[#8A8A8A] whitespace-pre-wrap max-h-56 overflow-y-auto border-t border-[#1A1A1A]">
-                        {typeof m.tool.result === "string" ? m.tool.result : JSON.stringify(m.tool.result, null, 2)}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              );
-            })()}
+                const toolKey = m.id || `${m.tool.id || "tool"}_${m.timestamp}`;
+                const setExpanded = (expanded: boolean) =>
+                  setExpandedTools((prev) => {
+                    const next = new Set(prev);
+                    if (expanded) next.add(toolKey);
+                    else next.delete(toolKey);
+                    return next;
+                  });
+                if (toolDisplay === "full") return <ToolFullCard tool={m.tool} />;
+                return expandedTools.has(toolKey) ? (
+                  <ToolFullCard tool={m.tool} onCollapse={() => setExpanded(false)} />
+                ) : (
+                  <ToolPill tool={m.tool} onExpand={() => setExpanded(true)} />
+                );
+              })()}
 
               {/* COMPACTION MESSAGE (Mobile Parity: Pill with ModelBadge tokens) */}
               {m.role === "compaction" && (
@@ -770,6 +591,11 @@ export function WebChat({
           </div>
         )}
       </div>
+
+      {/* Plan/57 — interactive extension prompt (ask_user / plan review) */}
+      {pendingPrompt && (
+        <ExtensionUiPrompt key={pendingPrompt.request.id} prompt={pendingPrompt} onRespond={handlePromptRespond} />
+      )}
 
       {/* 3. FLOATING "SCROLL TO BOTTOM" BUTTON */}
       {showScrollBottom && (

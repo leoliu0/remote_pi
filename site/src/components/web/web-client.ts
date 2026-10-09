@@ -10,6 +10,8 @@ import {
 import type { InnerFrame, RelayConnection, RelayStatus } from "./relay-connection";
 import { normalizeRelayUrl } from "./relay-config";
 import { toStandardB64, type PeerRecord, type RoomInfo } from "./session-list";
+import { toolOutcome, type ToolOutcome } from "./tool-output";
+import { parseExtensionUiRequest, type ExtensionUiRequest, type ExtensionUiResponseWire } from "./extension-ui";
 
 /** The room a chat is bound to — built from a Home tile when it is opened. */
 export interface PairedSession {
@@ -34,10 +36,9 @@ export interface ToolCallData {
   tool: string;
   args?: Record<string, unknown> | null;
   command?: string;
+  /** Normalised result/error text (tool-output.ts `toolOutcome`); unset while running. */
   output?: string;
-  result?: unknown;
-  status: "pending" | "allowed" | "denied" | "done" | "error";
-  error?: string;
+  status: "pending" | "done" | "error";
   diff?: {
     file?: string;
     oldContent?: string;
@@ -199,7 +200,6 @@ export type RoomCommand =
   | { action: "send_message"; text: string }
   | { action: "queue_message"; text: string }
   | { action: "clear_queued"; targetId?: string }
-  | { action: "approve_tool"; toolCallId: string; decision: "allow" | "deny" }
   | { action: "cancel"; targetId: string }
   | { action: "sync" }
   | { action: "set_model"; model: string }
@@ -216,8 +216,6 @@ export function buildRoomCommand(cmd: RoomCommand): InnerFrame {
       return { type: "queued_message_set", id: `q_${now}`, text: cmd.text };
     case "clear_queued":
       return { type: "queued_message_clear", id: `cq_${now}`, target_id: cmd.targetId };
-    case "approve_tool":
-      return { type: "approve_tool", id: `dec_${now}`, tool_call_id: cmd.toolCallId, decision: cmd.decision };
     case "cancel":
       return { type: "cancel", id: `can_${now}`, target_id: cmd.targetId };
     case "sync":
@@ -244,7 +242,9 @@ export interface ChatClientEvents {
   onStreamingChunk?: (chunk: string, inReplyTo: string) => void;
   onAgentDone?: (inReplyTo: string) => void;
   onToolRequest?: (tool: ToolCallData) => void;
-  onToolResult?: (toolCallId: string, result: unknown, error?: string) => void;
+  onToolResult?: (toolCallId: string, outcome: ToolOutcome) => void;
+  /** Plan/57 — interactive prompt (ask_user / plan review) or its notify dismiss. */
+  onExtensionUiRequest?: (req: ExtensionUiRequest) => void;
   onSessionHistory?: (messages: WebChatMessage[]) => void;
   onCompaction?: (summary: string, tokensBefore: number) => void;
   onRoomMeta?: (meta: { model?: string; thinking?: string; working?: boolean }) => void;
@@ -305,6 +305,7 @@ export class RemotePiRelayClient {
       case "session_history":
         if (Array.isArray(msg.events)) {
           const historyMessages: WebChatMessage[] = [];
+          const historyTools = new Map<string, ToolCallData>();
           for (let i = 0; i < msg.events.length; i++) {
             const ev = msg.events[i];
             const eventId = (ev.id as string) || (ev.tool_call_id as string);
@@ -326,19 +327,29 @@ export class RemotePiRelayClient {
               });
             } else if (ev.type === "tool_request") {
               const toolCallId = (ev.tool_call_id as string) || eventId || `tc_${ts}_${i}`;
+              const tool: ToolCallData = {
+                id: toolCallId,
+                tool: ev.tool as string,
+                args: ev.args as Record<string, unknown>,
+                command: typeof ev.args?.command === "string" ? ev.args.command : undefined,
+                // No result yet in history → still running; the live tool_result completes it.
+                status: "pending",
+              };
+              historyTools.set(toolCallId, tool);
               historyMessages.push({
                 id: `hist-tool-${toolCallId}-${i}`,
                 role: "tool",
                 text: `${ev.tool}: ${JSON.stringify(ev.args || {})}`,
                 timestamp: ts,
-                tool: {
-                  id: toolCallId,
-                  tool: ev.tool as string,
-                  args: ev.args as Record<string, unknown>,
-                  command: typeof ev.args?.command === "string" ? ev.args.command : undefined,
-                  status: "done",
-                },
+                tool,
               });
+            } else if (ev.type === "tool_result") {
+              const tool = historyTools.get(ev.tool_call_id as string);
+              if (tool) {
+                const { output, isError } = toolOutcome(ev.result, ev.error);
+                tool.output = output;
+                tool.status = isError ? "error" : "done";
+              }
             } else if (ev.type === "compaction") {
               historyMessages.push({
                 id: eventId || `hist-comp-${ts}-${i}`,
@@ -397,8 +408,14 @@ export class RemotePiRelayClient {
       }
 
       case "tool_result":
-        this.events.onToolResult?.(msg.tool_call_id as string, msg.result, msg.error as string | undefined);
+        this.events.onToolResult?.(msg.tool_call_id as string, toolOutcome(msg.result, msg.error));
         break;
+
+      case "extension_ui_request": {
+        const req = parseExtensionUiRequest(msg);
+        if (req) this.events.onExtensionUiRequest?.(req);
+        break;
+      }
 
       case "compaction":
         this.events.onCompaction?.((msg.summary as string) || "Context compacted", (msg.tokens_before as number) || 0);
@@ -444,8 +461,12 @@ export class RemotePiRelayClient {
     this.send(buildRoomCommand({ action: "clear_queued", targetId }));
   }
 
-  public approveTool(toolCallId: string, decision: "allow" | "deny"): void {
-    this.send(buildRoomCommand({ action: "approve_tool", toolCallId, decision }));
+  /**
+   * Plan/57 — answer or cancel an extension prompt. Sent only on a live link
+   * (false otherwise) so a retry after reconnect never double-submits.
+   */
+  public respondExtensionUi(resp: ExtensionUiResponseWire): boolean {
+    return this.conn.sendInner(this.peer, this.session.roomId, { ...resp });
   }
 
   public cancelTurn(targetId: string): void {
