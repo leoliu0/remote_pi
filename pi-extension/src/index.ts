@@ -3016,7 +3016,10 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     const ev = event as Record<string, unknown> | undefined;
     const tcid = (ev?.toolCallId ?? ev?.id ?? ev?.tool_call_id) as string | undefined;
     const name = (ev?.toolName ?? ev?.name ?? ev?.tool) as string | undefined;
-    const args = (ev?.args ?? ev?.arguments) as unknown;
+    // omp emits `{toolName, toolCallId, input}`; other hosts use args/arguments.
+    // This event wins the race with tool_execution_start (later dupes are
+    // dropped), so missing `input` here blanked every tool card's args.
+    const args = (ev?.input ?? ev?.args ?? ev?.arguments) as unknown;
     if (tcid && name) _handleToolStart(tcid, name, args);
   });
 

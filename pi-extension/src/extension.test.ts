@@ -2901,6 +2901,40 @@ describe("tool visibility", () => {
     });
   });
 
+  // Live report 2026-10-10: every tool pill on web and phone read just
+  // "completed". omp emits `tool_call` first with the arguments under `input`
+  // ({type, toolName, toolCallId, input}); the handler only read args/arguments,
+  // sent an empty card, and dropped the later tool_execution_start as a dup.
+  test("omp tool_call (args under `input`) → tool_request carries the real args", async () => {
+    await _pairForTest("peer-omp-call");
+    const sendsBefore = relayRef.current!.send.mock.calls.length;
+    // One extension instance for both events, as in a real session: the
+    // duplicate guard is per instance.
+    const harness = captureEventHarness();
+
+    harness.handler("tool_call")({
+      type: "tool_call",
+      toolName: "bash",
+      toolCallId: "tc_omp",
+      input: { command: "sleep 30", i: "Waiting for sleep completion" },
+    });
+    harness.handler("tool_execution_start")({
+      type: "tool_execution_start",
+      toolCallId: "tc_omp",
+      toolName: "bash",
+      args: { command: "sleep 30", i: "Waiting for sleep completion" },
+    });
+
+    const requests = relayRef.current!.send.mock.calls.slice(sendsBefore)
+      .map((c) => decodeSentCt(c[0] as string))
+      .filter((d) => d.inner.type === "tool_request");
+    expect(requests).toHaveLength(1);
+    expect(requests[0]!.inner).toMatchObject({
+      tool_call_id: "tc_omp",
+      args: { command: "sleep 30", i: "Waiting for sleep completion" },
+    });
+  });
+
   test("tool_execution_start enriches edit args with numbered context hunks", async () => {
     await _pairForTest("peer-edit");
     const cwd = mkdtempSync(join(tmpdir(), "remote-pi-edit-"));
