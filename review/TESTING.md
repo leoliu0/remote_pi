@@ -694,3 +694,17 @@ Existing stored duplicates are not purged by this fix.
 
 - With "Show thinking traces" on, each trace now opens fully expanded (was clamped to 2 lines until clicked). The "Thinking" header still collapses it, and the trace text can be selected (it was inside a button before).
 - Throwaway page in headless Chromium: trace height 100px expanded by default, 40px after clicking the header, no page errors ([full](screens/2026-10-10-web-thinking-full-default.png), [collapsed](screens/2026-10-10-web-thinking-collapsed.png)). Site tests 128/128.
+
+### 2026-10-10 - Model and thinking on web/app match the omp footer
+
+- Report: the web tile showed `Claude Opus 5.5 · auto` while the terminal showed a different level. On uts, config.yml had `defaultThinkingLevel: auto` (from an earlier app pick) while Licensing ran `xhigh`.
+- Causes: (1) at relay start the extension forced config.yml's level onto the session (auto became a fixed `off` in the terminal), and `_autoSelected` then ignored every change made in the terminal; (2) in auto it sent the effective level instead of the footer's `auto`; (3) the first hello carried the session-file model id; (4) clients kept the leading `Claude `.
+- Fix ac3375b8: `model_meta.ts` with fixtures captured from omp 18.8.7. Scratch-session table (terminal footer vs value sent), 10 scenarios: startup, /effort low/off/auto, auto resolved, Ctrl+P switch while in auto, Shift+Tab, `omp -c` resume, `--thinking auto`, uts config-vs-xhigh. All match after the fix; 5 differed before. Extension 902 pass (2 known host-dependent), site 129, app 802.
+- Incident: the scratch `/model` picker briefly wrote `default: anthropic/claude-fable-5-1:high` to `~/.omp-shared/config.yml`; restored to `anthropic/claude-opus-5-5:high` (checked).
+
+### 2026-10-10 - Live web presence after the tunnel fix; user_message echo
+
+- Throwaway owner + scratch PC, isolated headless Chromium, real QR sign-in. 10/10 reloads Online with 0 `auth failed` in the relay journal (01:42:50-01:44:00Z). A clean stop, a restart and a SIGKILL+restart were each followed live within about 1 s; fresh reloads at 30 s and about 4.5 min showed Online. A replay of the pre-fix behaviour through the real tunnel: 14/20 rejected, and every surviving connection received the rooms snapshot. So Licensing showing Offline at 01:25 was that pre-fix rejection streak.
+- Found live: the extension echoes prompts as `user_message`; the web only handled `user_input`, so its own bubble stayed ⏳ and phone prompts never showed live. Fixed in bfffb35b; checked with the patched build against the live relay ([own prompt](screens/2026-10-10-web-live-local-fix-own-prompt-confirmed.png), [other device](screens/2026-10-10-web-live-local-fix-other-device-prompt.png); production before the fix: [missing](screens/2026-10-10-web-live-prod-before-fix-other-device-prompt-missing.png)).
+- Agents panel on the real page: [running](screens/2026-10-10-web-live-agents-panel-running.png), [closed by ×](screens/2026-10-10-web-live-agents-closed-by-x.png), [header toggle](screens/2026-10-10-web-live-agents-hidden-header-toggle.png).
+- App: session_history is authoritative, so a leaked live-only row is dropped (d2edf9a0; mutation check: a merge-everything variant fails the test).
