@@ -689,3 +689,8 @@ Existing stored duplicates are not purged by this fix.
 - Regression tests: `markdown-text.test.ts`, 10 tests. They were written first and failed because the module did not exist yet; now 10/10 pass.
 - Screenshots: `2026-10-10-web-md-{before,after}-{real-01..real-18,synthetic,streaming,mobile-synthetic}.png`.
 - Checks: `pnpm test` 126/126, tsc clean, eslint 0 problems on the touched files, `pnpm build` ok. Not deployed, not committed.
+
+### 2026-10-10 - Web: thinking traces shown in full when enabled
+
+- With "Show thinking traces" on, each trace now opens fully expanded (was clamped to 2 lines until clicked). The "Thinking" header still collapses it, and the trace text can be selected (it was inside a button before).
+- Throwaway page in headless Chromium: trace height 100px expanded by default, 40px after clicking the header, no page errors ([full](screens/2026-10-10-web-thinking-full-default.png), [collapsed](screens/2026-10-10-web-thinking-collapsed.png)). Site tests 128/128.
