@@ -670,3 +670,12 @@ Existing stored duplicates are not purged by this fix.
 - Close/reopen: the × in the column (or bottom panel) header hides it and stores `remotepi_agents_panel=closed`; at 1400px the chat widened to 1324px. The new header toggle (`Show agents panel`) shows a running-count badge (3) while closed. The panel stayed closed after a reload, and the toggle reopened it (`open`). Same behaviour at 800px with the bottom panel.
 - Screenshots: `2026-10-10-web-agents-panel-v2-{wide,narrow}-{running,expanded,finished,closed,reopened}.png`.
 - Checks: `pnpm test`, tsc, eslint (0 errors), `pnpm build`. Not deployed.
+
+### 2026-10-10 - Web "cannot connect": tunnel frames out of order
+
+- Symptom: the web sometimes failed to connect, or showed a live PC (uts `Licensing`, relay-authenticated since 01:22:38Z) as offline.
+- Evidence: relay log `auth failed ... unknown variant subscribe_rooms / rooms_check, expected hello or auth` from the site's proxy, 10x on 2026-10-10. Over HTTPS each frame was its own fire-and-forget POST to `/api/relay-tunnel`, so the subscription frames sent right after `auth` could overtake it.
+- Fix (86332bdc): `createOrderedPoster` sends POSTs one at a time. `ordered-poster.test.ts`: 2/2 fail with the old fire-and-forget behaviour, 2/2 pass with the fix.
+- Live A/B against the deployed tunnel (throwaway key, 20 connections, alternating): concurrent sends were rejected 3/10 times, sequential sends 0/10 (relay journal 01:36:00-01:37:40Z).
+- Deployed with 751e95be (live stream folding, single user-bubble id, Agents panel cards with close). Live chunk contains `remotepi_agents_panel`.
+- App 1.2.49 (Home opens on Online) installed on SM-S948B over USB; the phone was locked, so I couldn't check it on screen.
