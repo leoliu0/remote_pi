@@ -141,10 +141,13 @@ class _ThinkingBlockState extends State<ThinkingBlock> {
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
+    // Thinking must read as clearly secondary to the answer: a dimmer grey
+    // than the regular muted text, italic, and a size smaller.
+    final thinkingColor = colors.muted.withValues(alpha: 0.65);
     final mono = context.typo.mono.copyWith(
-      fontSize: 13.0,
+      fontSize: 12.5,
       height: 1.4,
-      color: colors.muted,
+      color: thinkingColor,
     );
     return Material(
       key: const Key('thinking-block'),
@@ -177,7 +180,7 @@ class _ThinkingBlockState extends State<ThinkingBlock> {
                   Icon(
                     _expanded ? Icons.expand_less : Icons.expand_more,
                     size: 14,
-                    color: colors.muted,
+                    color: thinkingColor,
                   ),
                 ],
               ),
@@ -187,7 +190,7 @@ class _ThinkingBlockState extends State<ThinkingBlock> {
                   widget.text,
                   maxLines: _expanded ? null : 2,
                   overflow: _expanded ? null : TextOverflow.ellipsis,
-                  style: mono,
+                  style: mono.copyWith(fontStyle: FontStyle.italic),
                 ),
               ],
             ],

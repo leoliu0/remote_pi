@@ -12,14 +12,14 @@ function ThinkingBlock({ text, open }: { text: string; open: boolean }) {
       type="button"
       onClick={() => setExpanded((e) => !e)}
       aria-expanded={expanded}
-      className="block w-full text-left my-2 pl-3 border-l-2 border-white/10 text-[#7A7A7A] hover:text-[#9A9A9A] cursor-pointer"
+      className="block w-full text-left my-2 pl-3 border-l-2 border-white/10 text-[#5A5A5A] hover:text-[#7A7A7A] cursor-pointer"
     >
       <div className="text-[11px] font-mono flex items-center gap-1.5">
         <span className="text-[10px]">{expanded ? "▾" : "▸"}</span>
         <span>{open ? "Thinking…" : "Thinking"}</span>
       </div>
       {text && (
-        <div className={`mt-1 text-[13px] italic whitespace-pre-wrap break-words ${expanded ? "" : "line-clamp-2"}`}>
+        <div className={`mt-1 text-[12.5px] italic whitespace-pre-wrap break-words ${expanded ? "" : "line-clamp-2"}`}>
           {text}
         </div>
       )}
