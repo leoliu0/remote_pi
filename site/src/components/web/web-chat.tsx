@@ -17,6 +17,16 @@ import { workingLabel } from "./working-label";
 import { ToolFullCard, ToolPill } from "./tool-card";
 import { ExtensionUiPrompt } from "./extension-ui-prompt";
 import { applyExtensionUiRequest, type ExtensionUiResponseWire, type PendingPrompt } from "./extension-ui";
+import {
+  HISTORY_IDLE,
+  buildComposerHistory,
+  historyHint,
+  historyKey,
+  recallNewer,
+  recallOlder,
+  type HistoryNav,
+  type Recall,
+} from "./composer-history";
 
 type ToolDisplay = "brief" | "full" | "hidden";
 
@@ -79,8 +89,9 @@ export function WebChat({
   }
   const [showScrollBottom, setShowScrollBottom] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
-  const [history, setHistory] = useState<string[]>([]);
-  const [historyIndex, setHistoryIndex] = useState(-1);
+  // Texts sent or queued from this tab; the rest of the Up/Down history is the chat's user messages.
+  const [localHistory, setLocalHistory] = useState<string[]>([]);
+  const [historyNav, setHistoryNav] = useState<HistoryNav>(HISTORY_IDLE);
   const [slashMenuOpen, setSlashMenuOpen] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [toolDisplay, setToolDisplay] = useState<ToolDisplay>(readToolDisplay);
@@ -108,6 +119,26 @@ export function WebChat({
     el.style.height = `${Math.min(el.scrollHeight, max)}px`;
     el.style.overflowY = el.scrollHeight > max ? "auto" : "hidden";
   }, [inputText]);
+  // A recall leaves the caret at the end of the recalled text, like the app.
+  const caretToEndRef = useRef(false);
+  useLayoutEffect(() => {
+    const el = inputRef.current;
+    if (!caretToEndRef.current || !el) return;
+    caretToEndRef.current = false;
+    el.setSelectionRange(el.value.length, el.value.length);
+    el.scrollTop = el.scrollHeight;
+  });
+  const composerHistory = useMemo(
+    () => buildComposerHistory(messages.filter((m) => m.role === "user").map((m) => m.text), localHistory),
+    [messages, localHistory]
+  );
+  const historyBar = historyHint(composerHistory, historyNav);
+  const applyRecall = (recall: Recall | null) => {
+    if (!recall) return;
+    setHistoryNav(recall.nav);
+    setInputText(recall.text);
+    caretToEndRef.current = true;
+  };
   // Built during render (no side effects in the constructor); the effect below
   // wires callbacks and subscribes it to the shared relay link.
   const client = useMemo(() => new RemotePiRelayClient(connection, session), [connection, session]);
@@ -300,12 +331,15 @@ export function WebChat({
     const text = inputText.trim();
     if (!text) return;
     client.queueMessage(text);
+    setLocalHistory((prev) => [...prev, text]);
+    setHistoryNav(HISTORY_IDLE);
     setInputText("");
   };
 
   const handleEditQueued = (item: { id: string; text: string }) => {
     client.clearQueuedMessage(item.id);
     setInputText(item.text);
+    setHistoryNav(HISTORY_IDLE);
     inputRef.current?.focus();
   };
 
@@ -329,8 +363,8 @@ export function WebChat({
     };
 
     setMessages((prev) => [...prev, userMsg]);
-    setHistory((prev) => [text, ...prev.filter((h) => h !== text)]);
-    setHistoryIndex(-1);
+    setLocalHistory((prev) => [...prev, text]);
+    setHistoryNav(HISTORY_IDLE);
     setInputText("");
     setSlashMenuOpen(false);
     // A new message starts a fresh Finished list (running rows stay).
@@ -373,20 +407,24 @@ export function WebChat({
       handleSendMessage();
       return;
     }
-    if (e.key === "ArrowUp" && inputText === "" && history.length > 0) {
-      e.preventDefault();
-      const nextIdx = Math.min(historyIndex + 1, history.length - 1);
-      setHistoryIndex(nextIdx);
-      setInputText(history[nextIdx] || "");
-      return;
-    }
 
-    if (e.key === "ArrowDown" && historyIndex >= 0) {
-      e.preventDefault();
-      const nextIdx = historyIndex - 1;
-      setHistoryIndex(nextIdx);
-      setInputText(nextIdx >= 0 ? history[nextIdx] : "");
-      return;
+    // Up/Down browse sent messages from the first/last line (input_bar.dart).
+    if (
+      (e.key === "ArrowUp" || e.key === "ArrowDown") &&
+      !(e.shiftKey || e.altKey || e.ctrlKey || e.metaKey || e.nativeEvent.isComposing)
+    ) {
+      const el = e.currentTarget;
+      const recall = historyKey(
+        e.key,
+        { text: el.value, selectionStart: el.selectionStart, selectionEnd: el.selectionEnd },
+        composerHistory,
+        historyNav
+      );
+      if (recall) {
+        e.preventDefault();
+        applyRecall(recall);
+        return;
+      }
     }
 
     if (e.key === "/" && inputText === "") {
@@ -656,6 +694,7 @@ export function WebChat({
               type="button"
               onClick={() => {
                 setInputText(`${item.cmd} `);
+                setHistoryNav(HISTORY_IDLE);
                 setSlashMenuOpen(false);
                 inputRef.current?.focus();
               }}
@@ -708,6 +747,36 @@ export function WebChat({
           </div>
         )}
 
+        {/* History n/N while browsing with Up/Down, like the app's InputBar */}
+        {historyBar && (
+          <div className="mb-1.5 px-2.5 py-1 rounded-lg bg-white/5 border border-white/10 flex items-center gap-2 font-mono text-[11px]">
+            <svg className="w-3.5 h-3.5 text-[#888]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+              <path d="M3 3v5h5" />
+              <path d="M12 7v5l4 2" />
+            </svg>
+            <span className="text-white font-semibold">{historyBar.label}</span>
+            <span className="flex-1" />
+            <button
+              type="button"
+              disabled={!historyBar.canGoOlder}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => applyRecall(recallOlder(composerHistory, historyNav, inputText))}
+              className="px-1.5 py-0.5 rounded text-[#4fc3f7] hover:bg-[#4fc3f7]/10 disabled:text-[#888]/30 disabled:hover:bg-transparent cursor-pointer disabled:cursor-default"
+            >
+              ↑ Older
+            </button>
+            <button
+              type="button"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => applyRecall(recallNewer(composerHistory, historyNav))}
+              className="px-1.5 py-0.5 rounded text-[#4fc3f7] font-semibold hover:bg-[#4fc3f7]/10 cursor-pointer"
+            >
+              ↓ {historyBar.newerLabel}
+            </button>
+          </div>
+        )}
+
         <div className="relative flex items-end gap-2 rounded-xl bg-black/60 border border-white/15 focus-within:border-[#4fc3f7]/60 focus-within:ring-1 focus-within:ring-[#4fc3f7]/60 px-2.5 py-1.5 transition-all">
           <div className="flex items-center gap-0.5 shrink-0">
             {/* Quick Actions icon visible when input is empty (matching Flutter) */}
@@ -748,7 +817,10 @@ export function WebChat({
             ref={inputRef}
             rows={1}
             value={inputText}
-            onChange={(e) => setInputText(e.target.value)}
+            onChange={(e) => {
+              setInputText(e.target.value);
+              setHistoryNav(HISTORY_IDLE);
+            }}
             onKeyDown={handleKeyDown}
             placeholder={
               isWorking

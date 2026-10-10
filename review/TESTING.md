@@ -628,3 +628,13 @@ Existing stored duplicates are not purged by this fix.
 - 800px: the column is hidden. The bottom panel showed `Agents · 3 running · 0 finished` with the rows; after `[]` it collapsed to `Agents · 0 running · 3 finished` and expanded on click to the Finished rows. After the next message it disappeared.
 - Screenshots: `2026-10-10-web-agents-side-{wide,narrow}-*.png`.
 - Checks: `pnpm test` 92/92, tsc clean, eslint 0 errors, `pnpm build` ok. Not deployed (live E2E in progress).
+
+### 2026-10-10 — Web composer: Up/Down message history (app parity)
+
+- Bug: Up recalled only the last message (Up needed an empty box) and history held only this tab's sends, so after a reload there was none. Now ported from the app's InputBar into `site/src/components/web/composer-history.ts`: history = chat user messages + local sends/queues, trimmed, consecutive duplicates collapsed; Up from the first line, Down from the last line while browsing; draft saved and restored; typing exits; `History n/N` bar with Older / Newer|Clear.
+- Surface: `/web` chat in headless Chromium (1000px, DPR 2) against `pnpm dev`, temporary fake-transport page seeding 3 earlier user messages (deleted).
+- Draft `my draft`, Up ×4: `third…` (History 1/3), `second…` (2/3), `first…` (3/3), stays at `first…` (3/3); caret at end each time. Down ×3: `second…`, `third…`, `my draft` (bar gone).
+- Up then typing ` EDITED`: bar gone, Down no longer recalls. 3-line draft: Up moved the caret line 3 → 2 → 1, only the next Up recalled `third…`; Down restored the 3-line draft. After sending `fourth…`, Up showed it as History 1/4 (no duplicate). Older/Newer/Clear buttons stepped and restored the empty draft.
+- Reload: Up ×3 walked `third…`, `second…`, `first…` from the replayed chat history. No page errors.
+- Screenshots: `2026-10-10-web-history-{0-draft,up1,up2,up3,down1,down2,down3,typed-exits,multiline-caret-first-line,after-send,reload-up3}.png`.
+- Checks: `pnpm test` 102/102 (10 new in `composer-history.test.ts`), tsc clean, eslint 0 errors (2 pre-existing warnings in web-chat.tsx), `pnpm build` ok. Not deployed, not committed.
