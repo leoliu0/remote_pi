@@ -107,10 +107,69 @@ export function jobElapsedMs(job: AgentActivityJob, now: number): number {
   return end - job.started_at;
 }
 
-/** `waiting on N job` / `waiting on N jobs`, N = running rows. */
-export function activityHeader(jobs: readonly AgentActivityJob[]): string {
-  const n = jobs.filter((j) => j.status === "running").length;
-  return `waiting on ${n} ${n === 1 ? "job" : "jobs"}`;
+/** Side column title: `Agents · 2 running`, or just `Agents` when nothing runs. */
+export function agentsHeader(board: AgentBoard): string {
+  return board.running.length > 0 ? `Agents · ${board.running.length} running` : "Agents";
+}
+
+/** Narrow-screen bottom panel header: `Agents · N running · M finished`. */
+export function agentsSummary(board: AgentBoard): string {
+  return `Agents · ${board.running.length} running · ${board.finished.length} finished`;
+}
+
+/** Expanded subagent row: `1 tools · 1589 tokens · $0.0160` (parts present only). */
+export function progressCounters(job: AgentActivityJob): string | null {
+  const p = job.progress;
+  const parts = [
+    p?.tool_count !== undefined ? `${p.tool_count} tools` : undefined,
+    p?.tokens !== undefined ? `${p.tokens} tokens` : undefined,
+    p?.cost !== undefined ? `$${p.cost.toFixed(4)}` : undefined,
+  ].filter((s): s is string => !!s);
+  return parts.length > 0 ? parts.join(" · ") : null;
+}
+
+// ── client-side retention (the persistent Agents tile) ──────────────────────
+// The extension drops finished rows ~5 s after they end and sends `[]` at
+// agent_end, so finished rows are kept here until the user's next message.
+
+export const FINISHED_MAX = 20;
+
+export interface AgentBoard {
+  /** Running rows, in snapshot order. */
+  running: AgentActivityJob[];
+  /** Finished rows, newest first, one per id, at most FINISHED_MAX. */
+  finished: AgentActivityJob[];
+}
+
+export const EMPTY_BOARD: AgentBoard = { running: [], finished: [] };
+
+/**
+ * Folds one full snapshot into the board. Rows the snapshot marks finished
+ * move to `finished` as last seen; rows that vanish while running move there
+ * as `done`, frozen at `now` (the last elapsed the user saw).
+ */
+export function applyActivitySnapshot(
+  board: AgentBoard,
+  jobs: readonly AgentActivityJob[],
+  now: number,
+): AgentBoard {
+  const running = jobs.filter((j) => j.status === "running");
+  const seen = new Set(jobs.map((j) => j.id));
+  const settled = [
+    ...jobs.filter((j) => j.status !== "running").map((j) => ({ ...j, ended_at: j.ended_at ?? now })),
+    ...board.running.filter((j) => !seen.has(j.id)).map((j) => ({ ...j, status: "done" as const, ended_at: now })),
+  ];
+  const fresh = new Set(settled.map((j) => j.id));
+  const runningIds = new Set(running.map((j) => j.id));
+  const finished = [...settled, ...board.finished.filter((j) => !fresh.has(j.id) && !runningIds.has(j.id))]
+    .sort((a, b) => (b.ended_at ?? 0) - (a.ended_at ?? 0))
+    .slice(0, FINISHED_MAX);
+  return { running, finished };
+}
+
+/** The user's next message starts a fresh list; running rows stay. */
+export function clearFinished(board: AgentBoard): AgentBoard {
+  return board.finished.length === 0 ? board : { running: board.running, finished: [] };
 }
 
 export interface ActivityLines {

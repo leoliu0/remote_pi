@@ -620,3 +620,11 @@ Existing stored duplicates are not purged by this fix.
 - Activity panel (`waiting on N jobs`, `└─ <id> <label> · <elapsed>`) and `Show thinking traces` switch on both clients; web composer auto-grows to ~10 lines.
 - Suites: extension 880 (+2 known host failures), app 797, site 89. Web deployed and live chunk verified. App `1.2.47+2058` CI-signed, checksum OK. Extension rebuilt on rosebery and uts.
 - UI smoke used recorded real frames through fake transports. Not verified end-to-end: phone install (unplugged) and a real session on phone/web; running omp sessions need a restart to load the new extension.
+
+### 2026-10-10 — Web: persistent Agents side column
+
+- Surface: `/web` chat in headless Chromium against `pnpm dev`, temporary fake-transport page (deleted). Ran at 1400px and 800px.
+- 1400px: right column `Agents` showed `No subagents or background jobs` when empty. With the captured running snapshot it showed `Agents · 3 running` and the same rows/spinner as the panel. Clicking AgentB showed its assignment and `1 tools · 1589 tokens · $0.0160`. A done/failed snapshot followed by `[]` left a `Finished` list, newest first: ✓ bg_1 10.2s (vanished while running), red ✗ AgentB 3.8s, ✓ AgentA 3.5s. Sending the next message cleared it back to the empty state.
+- 800px: the column is hidden. The bottom panel showed `Agents · 3 running · 0 finished` with the rows; after `[]` it collapsed to `Agents · 0 running · 3 finished` and expanded on click to the Finished rows. After the next message it disappeared.
+- Screenshots: `2026-10-10-web-agents-side-{wide,narrow}-*.png`.
+- Checks: `pnpm test` 92/92, tsc clean, eslint 0 errors, `pnpm build` ok. Not deployed (live E2E in progress).

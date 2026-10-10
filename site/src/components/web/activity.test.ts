@@ -1,6 +1,18 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { activityHeader, activityLines, formatElapsed, parseAgentActivity, type AgentActivityJob } from "./activity.ts";
+import {
+  EMPTY_BOARD,
+  FINISHED_MAX,
+  activityLines,
+  agentsHeader,
+  agentsSummary,
+  applyActivitySnapshot,
+  clearFinished,
+  formatElapsed,
+  parseAgentActivity,
+  progressCounters,
+  type AgentActivityJob,
+} from "./activity.ts";
 
 // Snapshot captured from a real omp run (pi-extension activity.test.ts): one
 // async `sleep 20` bash job, then one `task` call spawning AgentA/AgentB.
@@ -68,11 +80,65 @@ test("formatElapsed: tenths under a minute, else m + zero-padded s", () => {
   assert.equal(formatElapsed(-5), "0.0s");
 });
 
-test("header counts running rows only", () => {
-  const jobs = parseAgentActivity(RUNNING_FRAME)!;
-  assert.equal(activityHeader(jobs), "waiting on 3 jobs");
-  assert.equal(activityHeader(jobs.slice(0, 1)), "waiting on 1 job");
-  assert.equal(activityHeader([{ ...jobs[0], status: "done", ended_at: jobs[0].started_at + 1 }]), "waiting on 0 jobs");
+const running = (id: string, started_at = 0): AgentActivityJob => ({ id, kind: "subagent", label: id, status: "running", started_at });
+
+test("board: running rows that vanish move to finished as ✓ frozen at the vanishing snapshot", () => {
+  let board = applyActivitySnapshot(EMPTY_BOARD, parseAgentActivity(RUNNING_FRAME)!, SPAWN_MS + 2200);
+  assert.deepEqual(board.running.map((j) => j.id), ["bg_1", "AgentA", "AgentB"]);
+  assert.deepEqual(board.finished, []);
+  assert.equal(agentsHeader(board), "Agents · 3 running");
+  // agent_end: `[]` — everything still running settles as done at `now`.
+  board = applyActivitySnapshot(board, [], SPAWN_MS + 9000);
+  assert.deepEqual(board.running, []);
+  assert.deepEqual(board.finished.map((j) => [j.id, j.status, j.ended_at]), [
+    ["bg_1", "done", SPAWN_MS + 9000],
+    ["AgentA", "done", SPAWN_MS + 9000],
+    ["AgentB", "done", SPAWN_MS + 9000],
+  ]);
+  assert.equal(activityLines(board.finished[1], SPAWN_MS + 99_000).main, "└─ AgentA AgentA · 9.0s");
+  assert.equal(agentsHeader(board), "Agents");
+  assert.equal(agentsSummary(board), "Agents · 0 running · 3 finished");
+});
+
+test("board: explicit done/failed keep their status and ended_at; lingering repeats dedupe by id", () => {
+  let board = applyActivitySnapshot(EMPTY_BOARD, [running("A", 0), running("B", 0)], 1000);
+  const doneA = { ...running("A", 0), status: "done" as const, ended_at: 4000 };
+  const failedB = { ...running("B", 0), status: "failed" as const, ended_at: 5000 };
+  board = applyActivitySnapshot(board, [doneA, failedB], 5100);
+  board = applyActivitySnapshot(board, [doneA, failedB], 5600); // linger re-sent
+  board = applyActivitySnapshot(board, [], 11_000); // dropped after 5 s
+  assert.deepEqual(board.finished.map((j) => [j.id, j.status, j.ended_at]), [
+    ["B", "failed", 5000],
+    ["A", "done", 4000],
+  ]);
+  assert.equal(agentsSummary(board), "Agents · 0 running · 2 finished");
+  // A finished row reported without ended_at freezes at arrival.
+  board = applyActivitySnapshot(board, [{ ...running("C", 0), status: "cancelled" }], 12_000);
+  assert.deepEqual(board.finished[0], { ...running("C", 0), status: "cancelled", ended_at: 12_000 });
+  // An id that runs again leaves the finished list.
+  board = applyActivitySnapshot(board, [running("A", 13_000)], 13_000);
+  assert.deepEqual(board.running.map((j) => j.id), ["A"]);
+  assert.deepEqual(board.finished.map((j) => j.id), ["C", "B"]);
+});
+
+test("board: clear on send keeps running rows; finished capped at 20, newest first", () => {
+  let board = EMPTY_BOARD;
+  for (let i = 0; i < 25; i++) {
+    board = applyActivitySnapshot(board, [running(`J${i}`, i)], i * 10);
+  }
+  board = applyActivitySnapshot(board, [running("live", 300)], 300);
+  assert.equal(board.finished.length, FINISHED_MAX);
+  assert.equal(board.finished[0].id, "J24");
+  assert.equal(board.finished.at(-1)?.id, "J5");
+  const cleared = clearFinished(board);
+  assert.deepEqual(cleared, { running: board.running, finished: [] });
+  assert.equal(clearFinished(cleared), cleared);
+});
+
+test("progress counters for the expanded subagent row", () => {
+  const [, a, b] = parseAgentActivity(RUNNING_FRAME)!;
+  assert.equal(progressCounters(b), "1 tools · 1589 tokens · $0.0160");
+  assert.equal(progressCounters(a), null);
 });
 
 test("lines from the captured running example", () => {

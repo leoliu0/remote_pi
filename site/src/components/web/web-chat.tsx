@@ -9,8 +9,8 @@ import {
 } from "./web-client";
 import { AssistantContent } from "./thinking-block";
 import { readShowThinking, SHOW_THINKING_EVENT } from "./thinking";
-import { ActivityPanel } from "./activity-panel";
-import type { AgentActivityJob } from "./activity";
+import { AgentsBottomPanel, AgentsSideColumn } from "./activity-panel";
+import { EMPTY_BOARD, applyActivitySnapshot, clearFinished, type AgentBoard } from "./activity";
 import { BrailleSpinner } from "./braille-spinner";
 import type { RelayConnection } from "./relay-connection";
 import { workingLabel } from "./working-label";
@@ -88,11 +88,11 @@ export function WebChat({
   const [pendingPrompt, setPendingPrompt] = useState<PendingPrompt | null>(null);
   const [queuedItems, setQueuedItems] = useState<Array<{ id: string; text: string; editable?: boolean }>>([]);
   const [showThinking, setShowThinking] = useState(readShowThinking);
-  // Activity rows belong to the client (room) they came from, so switching
+  // The Agents board belongs to the client (room) it came from, so switching
   // sessions never shows the previous room's jobs.
-  const [activity, setActivity] = useState<{ client: RemotePiRelayClient | null; jobs: AgentActivityJob[] }>({
+  const [agents, setAgents] = useState<{ client: RemotePiRelayClient | null; board: AgentBoard }>({
     client: null,
-    jobs: [],
+    board: EMPTY_BOARD,
   });
 
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -111,6 +111,7 @@ export function WebChat({
   // Built during render (no side effects in the constructor); the effect below
   // wires callbacks and subscribes it to the shared relay link.
   const client = useMemo(() => new RemotePiRelayClient(connection, session), [connection, session]);
+  const agentBoard = agents.client === client ? agents.board : EMPTY_BOARD;
   // Synchronously position at the bottom before browser paints
   useLayoutEffect(() => {
     if (isInitialLoadRef.current && messages.length > 0 && scrollContainerRef.current) {
@@ -281,7 +282,10 @@ export function WebChat({
       },
 
       onActivity: (jobs) => {
-        setActivity({ client, jobs });
+        setAgents((prev) => ({
+          client,
+          board: applyActivitySnapshot(prev.client === client ? prev.board : EMPTY_BOARD, jobs, Date.now()),
+        }));
       },
     });
 
@@ -329,6 +333,8 @@ export function WebChat({
     setHistoryIndex(-1);
     setInputText("");
     setSlashMenuOpen(false);
+    // A new message starts a fresh Finished list (running rows stay).
+    setAgents((prev) => ({ ...prev, board: clearFinished(prev.board) }));
 
     // Auto-scroll to bottom immediately
     setTimeout(() => scrollToBottom(true), 50);
@@ -397,7 +403,8 @@ export function WebChat({
   };
 
   return (
-    <div className="flex flex-col h-screen max-w-5xl mx-auto w-full bg-[#08090d] border-x border-white/10 relative">
+    <div className="flex h-screen w-full max-w-5xl lg:max-w-[calc(64rem+300px)] mx-auto">
+    <div className="flex flex-col flex-1 min-w-0 bg-[#08090d] border-x border-white/10 relative">
       {/* 1. TOP APP BAR */}
       <div className="h-14 px-4 border-b border-white/10 bg-[#0a0c10]/95 backdrop-blur-md flex items-center justify-between shrink-0 z-20">
         <div className="flex items-center gap-3 min-w-0">
@@ -661,8 +668,8 @@ export function WebChat({
         </div>
       )}
 
-      {/* omp-style activity panel: running subagents and background jobs */}
-      <ActivityPanel jobs={activity.client === client ? activity.jobs : []} />
+      {/* Narrow screens: Agents panel above the composer (wide screens use the side column) */}
+      <AgentsBottomPanel board={agentBoard} />
 
       {/* 5. COMPACT BOTTOM COMPOSER */}
       <div className="p-2 sm:px-4 sm:py-2 border-t border-white/10 bg-[#0a0c10]/95 backdrop-blur-md shrink-0">
@@ -799,6 +806,9 @@ export function WebChat({
           </div>
         </div>
       </div>
+    </div>
+    {/* Wide screens: persistent Agents column */}
+    <AgentsSideColumn board={agentBoard} />
     </div>
   );
 }
