@@ -1388,6 +1388,140 @@ void main() {
       s.sync.dispose();
     });
 
+    test(
+      'session_history is authoritative: a live-only user row the PC history '
+      'lacks (leaked subagent assignment) is dropped; an unacked send stays',
+      () async {
+        final s = await setup();
+        final read = SessionReadRepository(_store);
+        final seen = <List<MessageRecord>>[];
+        final sub = read.watchMessages(s.epk, 'main').listen(seen.add);
+        addTearDown(sub.cancel);
+        addTearDown(s.conn.dispose);
+        addTearDown(s.sync.dispose);
+
+        // Live frames as the extension broadcasts them (index.ts `input`
+        // hook: `local_<uuid>` ids). The second is what an older extension
+        // leaked: the subagent's assignment, captured from the real
+        // AppHistoryCache subagent session (head only).
+        const leakedText =
+            'Complete assignment thoroughly:\n\n# Target\n`app/` '
+            '(`lib/data/sync/sync_service.dart`, the local message store, '
+            '`chat_viewmodel.dart`).';
+        for (final frame in const <Map<String, dynamic>>[
+          {
+            'type': 'user_input',
+            'id': 'local_7c1f0b52-3a8e-4d6b-9f2a-1e5d8c4b7a90',
+            'text': 'the model is not fully consistent in web and actual '
+                'terminal',
+          },
+          {
+            'type': 'tool_request',
+            'tool_call_id': 'toolu_01TpNuyLPpaeW2Ps7p9SiEiQ',
+            'tool': 'task',
+            'args': {
+              'i': 'Spawning model parity, app cache, live presence agents',
+            },
+          },
+          {
+            'type': 'user_input',
+            'id': 'local_3db78d1d-e4db-4d5e-887e-6331f0a1ebeb',
+            'text': leakedText,
+          },
+        ]) {
+          s.ch.push(ServerMessage.fromJson(frame));
+        }
+        await _settle();
+        expect(
+          messages(s.epk).where((r) => r.text == leakedText),
+          hasLength(1),
+          reason: 'precondition: the leaked live row is cached',
+        );
+
+        // A phone send the PC has not echoed yet (still `sending`).
+        await s.sync.sendMessage('just sent from the phone');
+        await _settle();
+
+        // Real session_history events: `_mapAgentMessagesToEvents` run over
+        // the main remote_pi omp session file around the turn that spawned
+        // the subagent (long `args`/`result` values cut, keys untouched).
+        // The fixed extension's history has no assignment user_input.
+        s.ch.push(
+          ServerMessage.fromJson(const {
+            'type': 'session_history',
+            'in_reply_to': 'sync1',
+            'session_started_at': 1790000000000,
+            'eos': true,
+            'truncated': true,
+            'events': [
+              {
+                'ts': 1791596318322,
+                'type': 'tool_result',
+                'tool_call_id': 'toolu_012vi28Vuv6A7GMyJJm3jLPC',
+                'result':
+                    '2d33608a test(review): ledger for tunnel ordering fix, '
+                    'live A/B\n\n\nWall time: 3.34 seconds',
+              },
+              {
+                'ts': 1791596415593,
+                'type': 'user_input',
+                'id': 'sync_1791596415593',
+                'text':
+                    'the model is not fully consistent in web and actual '
+                    'terminal',
+              },
+              {
+                'ts': 1791596415638,
+                'type': 'tool_request',
+                'tool_call_id': 'toolu_01TpNuyLPpaeW2Ps7p9SiEiQ',
+                'tool': 'task',
+                'args': {
+                  'i':
+                      'Spawning model parity, app cache, live presence agents',
+                },
+              },
+              {
+                'ts': 1791596479396,
+                'type': 'tool_result',
+                'tool_call_id': 'toolu_01TpNuyLPpaeW2Ps7p9SiEiQ',
+                'result': 'Spawned 3 background agents using task.',
+              },
+            ],
+          }),
+        );
+        await _settle();
+
+        final rows = messages(s.epk);
+        expect(
+          rows.where((r) => r.text == leakedText),
+          isEmpty,
+          reason: 'history is the whole truth: the phantom bubble is gone',
+        );
+        expect(
+          rows.map((r) => (r.role, r.id, r.pending)).toList(),
+          [
+            (MsgRole.tool, 'toolu_012vi28Vuv6A7GMyJJm3jLPC', false),
+            (MsgRole.user, 'sync_1791596415593', false),
+            (MsgRole.tool, 'toolu_01TpNuyLPpaeW2Ps7p9SiEiQ', false),
+            (MsgRole.user, rows.last.id, true),
+          ],
+          reason: 'history rows replace the live copies (no local_ dupes); '
+              'only the unacked send survives, after history',
+        );
+        expect(rows.last.text, 'just sent from the phone');
+        // The chat list renders exactly the committed rows.
+        expect(
+          seen.last.map((r) => r.toChatMessage()).whereType<UserMsg>().map(
+                (m) => m.text,
+              ),
+          [
+            'the model is not fully consistent in web and actual terminal',
+            'just sent from the phone',
+          ],
+        );
+      },
+    );
+
     test('UserInput echo deduplicates against existing message with identical text', () async {
       final s = await setup();
       // History populated a message with a sync_ timestamp ID
