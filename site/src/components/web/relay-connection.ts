@@ -10,6 +10,7 @@
 // byte pipe that never sees the owner key.
 
 import { base64ToBytes, bytesToBase64, signWithOwner, type OwnerIdentity } from "./mesh";
+import { createOrderedPoster } from "./ordered-poster";
 import { toWsRelayUrl } from "./relay-config";
 import { toStandardB64 } from "./session-list";
 
@@ -44,16 +45,23 @@ function openTunnelSocket(wsUrl: string): RelaySocket {
   const id = randomId("tun");
   const source = new EventSource(`/api/relay-tunnel?${new URLSearchParams({ id, url: wsUrl })}`);
   let closed = false;
+  // Frames must reach the relay in order (`auth` before subscriptions), so
+  // each POST waits for the previous one.
+  const post = createOrderedPoster(
+    (frame) =>
+      fetch("/api/relay-tunnel", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, frame }),
+      }),
+    () => finish(),
+  );
   const socket: RelaySocket = {
     onopen: null,
     onmessage: null,
     onclose: null,
     send: (frame) => {
-      void fetch("/api/relay-tunnel", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id, frame }),
-      }).catch(() => finish());
+      if (!closed) post(frame);
     },
     close: () => finish(),
   };
