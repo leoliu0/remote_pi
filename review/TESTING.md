@@ -714,3 +714,9 @@ Existing stored duplicates are not purged by this fix.
 - Symptom: during deploys the site returned no response (curl 000) for over a minute; user saw "the site has problem".
 - Cause: `remote-pi-site.service` used the default 90 s TimeoutStopSec, and Next's graceful stop waits for open connections. Browser relay tunnels (SSE) never close by themselves, so each stop hung until SIGKILL (02:06:25 -> 02:07:44Z).
 - Fix: `TimeoutStopSec=5` in the unit written by `site/scripts/install-vps.sh`, applied to the live unit. Timed restart: stop 02:09:29.28, ready 02:09:35.06Z (5.8 s). Browsers reconnect on their own.
+
+### 2026-10-10 - Thinking traces easier to read (web + app)
+
+- User: the thinking trace font is too small and too dark.
+- Web: 12.5px #5A5A5A became 13.5px #8A8A8A with relaxed line height (body is 14px #E0E0E0); header 12px. App: `muted` at 65% alpha, 12.5pt became `muted2` (#8A8A8A), 14pt (body 15pt). Still italic and grey, so it stays apart from the answer ([web](screens/2026-10-10-web-thinking-readable.png), throwaway page in isolated headless Chromium).
+- App chat tests 246 pass, analyzer clean; site 129 pass.

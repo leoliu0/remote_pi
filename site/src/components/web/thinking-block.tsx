@@ -12,18 +12,18 @@ import { splitThinking, stripThinking } from "./thinking";
 function ThinkingBlock({ text, open }: { text: string; open: boolean }) {
   const [expanded, setExpanded] = useState(true);
   return (
-    <div className="my-2 pl-3 border-l-2 border-white/10 text-[#5A5A5A]">
+    <div className="my-2 pl-3 border-l-2 border-white/15 text-[#8A8A8A]">
       <button
         type="button"
         onClick={() => setExpanded((e) => !e)}
         aria-expanded={expanded}
-        className="text-[11px] font-mono flex items-center gap-1.5 hover:text-[#7A7A7A] cursor-pointer"
+        className="text-[12px] font-mono flex items-center gap-1.5 hover:text-[#B0B0B0] cursor-pointer"
       >
-        <span className="text-[10px]">{expanded ? "▾" : "▸"}</span>
+        <span className="text-[11px]">{expanded ? "▾" : "▸"}</span>
         <span>{open ? "Thinking…" : "Thinking"}</span>
       </button>
       {text && (
-        <div className={`mt-1 text-[12.5px] italic whitespace-pre-wrap break-words select-text ${expanded ? "" : "line-clamp-2"}`}>
+        <div className={`mt-1 text-[13.5px] leading-relaxed italic whitespace-pre-wrap break-words select-text ${expanded ? "" : "line-clamp-2"}`}>
           {text}
         </div>
       )}

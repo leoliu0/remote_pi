@@ -141,12 +141,12 @@ class _ThinkingBlockState extends State<ThinkingBlock> {
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
-    // Thinking must read as clearly secondary to the answer: a dimmer grey
-    // than the regular muted text, italic, and a size smaller.
-    final thinkingColor = colors.muted.withValues(alpha: 0.65);
+    // Thinking reads as secondary to the answer: mid grey and italic, one
+    // step smaller than the body text, but still easy to read.
+    final thinkingColor = colors.muted2;
     final mono = context.typo.mono.copyWith(
-      fontSize: 12.5,
-      height: 1.4,
+      fontSize: 14.0,
+      height: 1.45,
       color: thinkingColor,
     );
     return Material(
