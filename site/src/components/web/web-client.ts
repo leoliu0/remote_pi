@@ -6,13 +6,13 @@ import {
   verifyMeshEnvelope,
   type OwnerIdentity,
   type VerifiedMesh,
-} from "./mesh";
+} from "./mesh.ts";
 import type { InnerFrame, RelayConnection, RelayStatus } from "./relay-connection";
-import { normalizeRelayUrl } from "./relay-config";
-import { toStandardB64, type PeerRecord, type RoomInfo } from "./session-list";
-import { toolOutcome, type ToolOutcome } from "./tool-output";
-import { parseExtensionUiRequest, type ExtensionUiRequest, type ExtensionUiResponseWire } from "./extension-ui";
-import { parseAgentActivity, type AgentActivityJob } from "./activity";
+import { normalizeRelayUrl } from "./relay-config.ts";
+import { toStandardB64, type PeerRecord, type RoomInfo } from "./session-list.ts";
+import { chatEventFromFrame, type ChatEvent } from "./chat-stream.ts";
+import { parseExtensionUiRequest, type ExtensionUiRequest, type ExtensionUiResponseWire } from "./extension-ui.ts";
+import { parseAgentActivity, type AgentActivityJob } from "./activity.ts";
 
 /** The room a chat is bound to — built from a Home tile when it is opened. */
 export interface PairedSession {
@@ -198,7 +198,7 @@ export function peersFromMesh(mesh: VerifiedMesh | null): PeerRecord[] {
 // ── room commands (inner messages the Pi accepts) ────────────────────────────
 
 export type RoomCommand =
-  | { action: "send_message"; text: string }
+  | { action: "send_message"; id: string; text: string }
   | { action: "queue_message"; text: string }
   | { action: "clear_queued"; targetId?: string }
   | { action: "cancel"; targetId: string }
@@ -212,7 +212,7 @@ export function buildRoomCommand(cmd: RoomCommand): InnerFrame {
   const now = Date.now();
   switch (cmd.action) {
     case "send_message":
-      return { type: "user_message", id: `cli_${now}`, text: cmd.text };
+      return { type: "user_message", id: cmd.id, text: cmd.text };
     case "queue_message":
       return { type: "queued_message_set", id: `q_${now}`, text: cmd.text };
     case "clear_queued":
@@ -239,15 +239,10 @@ export function buildRoomCommand(cmd: RoomCommand): InnerFrame {
 /** Callbacks a chat view registers when it binds a client to its room. */
 export interface ChatClientEvents {
   onPresenceChange?: (presence: PeerPresence) => void;
-  onMessage?: (msg: WebChatMessage) => void;
-  onStreamingChunk?: (chunk: string, inReplyTo: string) => void;
-  onAgentDone?: (inReplyTo: string) => void;
-  onToolRequest?: (tool: ToolCallData) => void;
-  onToolResult?: (toolCallId: string, outcome: ToolOutcome) => void;
+  /** Chat timeline frames (history, user, chunks, tools, final text), folded by chat-stream.ts. */
+  onChatEvent?: (event: ChatEvent) => void;
   /** Plan/57 — interactive prompt (ask_user / plan review) or its notify dismiss. */
   onExtensionUiRequest?: (req: ExtensionUiRequest) => void;
-  onSessionHistory?: (messages: WebChatMessage[]) => void;
-  onCompaction?: (summary: string, tokensBefore: number) => void;
   onRoomMeta?: (meta: { model?: string; thinking?: string; working?: boolean }) => void;
   onQueuedState?: (items: Array<{ id: string; text: string; editable?: boolean }>) => void;
   /** Full `agent_activity` snapshot: replaces the panel's rows. */
@@ -303,115 +298,17 @@ export class RemotePiRelayClient {
   }
 
   private handleServerMessage(msg: Record<string, unknown>): void {
-    const type = msg.type;
-    switch (type) {
-      case "session_history":
-        if (Array.isArray(msg.events)) {
-          const historyMessages: WebChatMessage[] = [];
-          const historyTools = new Map<string, ToolCallData>();
-          for (let i = 0; i < msg.events.length; i++) {
-            const ev = msg.events[i];
-            const eventId = (ev.id as string) || (ev.tool_call_id as string);
-            const ts = (ev.ts as number) || Date.now();
-            if (ev.type === "user_input") {
-              historyMessages.push({
-                id: eventId || `hist-user-${ts}-${i}`,
-                role: "user",
-                text: (ev.text as string) || "",
-                timestamp: ts,
-                status: "sent",
-              });
-            } else if (ev.type === "agent_message") {
-              historyMessages.push({
-                id: eventId || `hist-asst-${ts}-${i}`,
-                role: "assistant",
-                text: (ev.text as string) || "",
-                timestamp: ts,
-              });
-            } else if (ev.type === "tool_request") {
-              const toolCallId = (ev.tool_call_id as string) || eventId || `tc_${ts}_${i}`;
-              const tool: ToolCallData = {
-                id: toolCallId,
-                tool: ev.tool as string,
-                args: ev.args as Record<string, unknown>,
-                command: typeof ev.args?.command === "string" ? ev.args.command : undefined,
-                // No result yet in history → still running; the live tool_result completes it.
-                status: "pending",
-              };
-              historyTools.set(toolCallId, tool);
-              historyMessages.push({
-                id: `hist-tool-${toolCallId}-${i}`,
-                role: "tool",
-                text: `${ev.tool}: ${JSON.stringify(ev.args || {})}`,
-                timestamp: ts,
-                tool,
-              });
-            } else if (ev.type === "tool_result") {
-              const tool = historyTools.get(ev.tool_call_id as string);
-              if (tool) {
-                const { output, isError } = toolOutcome(ev.result, ev.error);
-                tool.output = output;
-                tool.status = isError ? "error" : "done";
-              }
-            } else if (ev.type === "compaction") {
-              historyMessages.push({
-                id: eventId || `hist-comp-${ts}-${i}`,
-                role: "compaction",
-                text: (ev.summary as string) || "Context compacted",
-                timestamp: ts,
-                tokensBefore: ev.tokens_before as number,
-              });
-            }
-          }
-          this.events.onSessionHistory?.(historyMessages);
-        }
-        break;
-
-      case "user_input":
-        this.events.onMessage?.({
-          id: (msg.id as string) || `user-${Date.now()}`,
-          role: "user",
-          text: (msg.text as string) || "",
-          timestamp: Date.now(),
-          status: "sent",
-        });
-        break;
-
+    const chat = chatEventFromFrame(msg, Date.now());
+    if (chat) this.events.onChatEvent?.(chat);
+    switch (msg.type) {
       case "agent_chunk":
+      case "tool_request":
         this.events.onPresenceChange?.("working");
-        this.events.onStreamingChunk?.((msg.delta as string) || "", (msg.in_reply_to as string) || "");
         break;
 
       case "agent_message":
-        this.events.onPresenceChange?.("online");
-        this.events.onMessage?.({
-          id: `asst-${Date.now()}`,
-          role: "assistant",
-          text: (msg.text as string) || "",
-          timestamp: Date.now(),
-        });
-        break;
-
       case "agent_done":
         this.events.onPresenceChange?.("online");
-        this.events.onAgentDone?.((msg.in_reply_to as string) || "");
-        break;
-
-      case "tool_request": {
-        const args = msg.args && typeof msg.args === "object" ? (msg.args as Record<string, unknown>) : undefined;
-        this.events.onPresenceChange?.("working");
-        this.events.onToolRequest?.({
-          id: msg.tool_call_id as string,
-          tool: msg.tool as string,
-          args,
-          command: typeof args?.command === "string" ? args.command : undefined,
-          status: "pending",
-        });
-        break;
-      }
-
-      case "tool_result":
-        this.events.onToolResult?.(msg.tool_call_id as string, toolOutcome(msg.result, msg.error));
         break;
 
       case "extension_ui_request": {
@@ -419,10 +316,6 @@ export class RemotePiRelayClient {
         if (req) this.events.onExtensionUiRequest?.(req);
         break;
       }
-
-      case "compaction":
-        this.events.onCompaction?.((msg.summary as string) || "Context compacted", (msg.tokens_before as number) || 0);
-        break;
 
       case "room_meta_updated":
       case "room_meta":
@@ -458,8 +351,16 @@ export class RemotePiRelayClient {
     this.send(buildRoomCommand({ action: "sync" }));
   }
 
-  public sendMessage(text: string): void {
-    this.send(buildRoomCommand({ action: "send_message", text }));
+  /**
+   * Sends `text` and returns the optimistic bubble for it. Both carry the same
+   * id, so the Pi's `user_input` echo (and a history resync) confirms that
+   * bubble instead of adding a second one.
+   */
+  public sendMessage(text: string): WebChatMessage {
+    const now = Date.now();
+    const id = `cli_${now}`;
+    this.send(buildRoomCommand({ action: "send_message", id, text }));
+    return { id, role: "user", text, timestamp: now, status: "sending" };
   }
 
   public queueMessage(text: string): void {

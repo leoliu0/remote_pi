@@ -2,7 +2,6 @@
 
 import { useState, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import {
-  WebChatMessage,
   PairedSession,
   PeerPresence,
   RemotePiRelayClient,
@@ -10,7 +9,15 @@ import {
 import { AssistantContent } from "./thinking-block";
 import { readShowThinking, SHOW_THINKING_EVENT } from "./thinking";
 import { AgentsBottomPanel, AgentsSideColumn } from "./activity-panel";
-import { EMPTY_BOARD, applyActivitySnapshot, clearFinished, type AgentBoard } from "./activity";
+import {
+  EMPTY_BOARD,
+  applyActivitySnapshot,
+  clearFinished,
+  readAgentsPanelOpen,
+  writeAgentsPanelOpen,
+  type AgentBoard,
+} from "./activity";
+import { EMPTY_CHAT, applyChatEvent, type ChatState } from "./chat-stream";
 import { BrailleSpinner } from "./braille-spinner";
 import type { RelayConnection } from "./relay-connection";
 import { workingLabel } from "./working-label";
@@ -76,7 +83,9 @@ export function WebChat({
   onOpenQuickActions,
   onOpenSettings,
 }: WebChatProps) {
-  const [messages, setMessages] = useState<WebChatMessage[]>([]);
+  // Live frames fold into the timeline in history order (chat-stream.ts).
+  const [chat, setChat] = useState<ChatState>(EMPTY_CHAT);
+  const messages = chat.messages;
   const [inputText, setInputText] = useState("");
   const [isWorking, setIsWorking] = useState(roomPresence === "working");
   const [presence, setPresence] = useState<PeerPresence>(roomPresence);
@@ -105,6 +114,12 @@ export function WebChat({
     client: null,
     board: EMPTY_BOARD,
   });
+  // Agents panel open/closed (side column and bottom panel), persisted.
+  const [agentsOpen, setAgentsOpenState] = useState(readAgentsPanelOpen);
+  const setAgentsOpen = (open: boolean) => {
+    setAgentsOpenState(open);
+    writeAgentsPanelOpen(open);
+  };
 
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const isInitialLoadRef = useRef(true);
@@ -189,123 +204,49 @@ export function WebChat({
         setIsWorking(p === "working");
       },
 
-      onSessionHistory: (histMsgs) => {
-        // Prompts still open on the Pi are replayed right after the history,
-        // so one resolved while this tab was away must not linger.
-        setPendingPrompt(null);
-        if (histMsgs.length > 0) {
-          setMessages(histMsgs);
-          requestAnimationFrame(() => {
-            if (scrollContainerRef.current) {
-              scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight;
+      onChatEvent: (event) => {
+        const now = Date.now();
+        setChat((prev) => applyChatEvent(prev, event, now));
+        const el = scrollContainerRef.current;
+        const nearBottom = !!el && el.scrollHeight - el.scrollTop - el.clientHeight <= 120;
+        switch (event.type) {
+          case "history":
+            // Prompts still open on the Pi are replayed right after the history,
+            // so one resolved while this tab was away must not linger.
+            setPendingPrompt(null);
+            if (event.messages.length > 0) {
+              requestAnimationFrame(() => {
+                if (scrollContainerRef.current) {
+                  scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight;
+                }
+              });
             }
-          });
-        }
-      },
-
-      onMessage: (msg) => {
-        setMessages((prev) => {
-          // If message with same id exists, update it; otherwise append
-          const exists = prev.some((m) => m.id === msg.id);
-          if (exists) {
-            return prev.map((m) => (m.id === msg.id ? { ...m, ...msg } : m));
-          }
-          return [...prev, msg];
-        });
-
-        // Increment unread count if user is scrolled up
-        if (scrollContainerRef.current) {
-          const { scrollTop, scrollHeight, clientHeight } = scrollContainerRef.current;
-          if (scrollHeight - scrollTop - clientHeight > 120) {
-            setUnreadCount((c) => c + 1);
-          } else {
+            break;
+          case "user":
+            // Count it as unread when scrolled up, else follow it.
+            if (!el) break;
+            if (nearBottom) setTimeout(() => scrollToBottom(true), 50);
+            else setUnreadCount((c) => c + 1);
+            break;
+          case "chunk":
+            activeStreamIdRef.current = event.replyTo;
+            setIsWorking(true);
+            if (nearBottom) scrollToBottom(true);
+            break;
+          case "done":
+            setIsWorking(false);
+            activeStreamIdRef.current = null;
             setTimeout(() => scrollToBottom(true), 50);
-          }
+            break;
+          case "tool_request":
+            setIsWorking(true);
+            setTimeout(() => scrollToBottom(true), 50);
+            break;
         }
-      },
-
-      onStreamingChunk: (delta, inReplyTo) => {
-        activeStreamIdRef.current = inReplyTo;
-        setIsWorking(true);
-        setMessages((prev) => {
-          const streamMsgId = `stream-${inReplyTo}`;
-          const existingIdx = prev.findIndex((m) => m.id === streamMsgId);
-          if (existingIdx >= 0) {
-            const updated = [...prev];
-            updated[existingIdx] = {
-              ...updated[existingIdx],
-              text: updated[existingIdx].text + delta,
-              isStreaming: true,
-            };
-            return updated;
-          } else {
-            return [
-              ...prev,
-              {
-                id: streamMsgId,
-                role: "assistant",
-                text: delta,
-                timestamp: Date.now(),
-                isStreaming: true,
-              },
-            ];
-          }
-        });
-
-        // Auto-scroll if near bottom
-        if (scrollContainerRef.current) {
-          const { scrollTop, scrollHeight, clientHeight } = scrollContainerRef.current;
-          if (scrollHeight - scrollTop - clientHeight <= 120) {
-            scrollToBottom(true);
-          }
-        }
-      },
-
-      onAgentDone: (inReplyTo) => {
-        setIsWorking(false);
-        activeStreamIdRef.current = null;
-        setMessages((prev) =>
-          prev.map((m) => (m.id === `stream-${inReplyTo}` ? { ...m, isStreaming: false } : m))
-        );
-        setTimeout(() => scrollToBottom(true), 50);
-      },
-
-      onToolRequest: (tool) => {
-        setIsWorking(true);
-        const toolMsg: WebChatMessage = {
-          id: `tool-${tool.id}`,
-          role: "tool",
-          text: `${tool.tool}: ${tool.command || JSON.stringify(tool.args || {})}`,
-          timestamp: Date.now(),
-          tool,
-        };
-        setMessages((prev) => [...prev, toolMsg]);
-        setTimeout(() => scrollToBottom(true), 50);
-      },
-
-      onToolResult: (toolCallId, { output, isError }) => {
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.tool && m.tool.id === toolCallId
-              ? { ...m, tool: { ...m.tool, status: isError ? "error" : "done", output } }
-              : m
-          )
-        );
       },
 
       onExtensionUiRequest: (req) => {
         setPendingPrompt((open) => applyExtensionUiRequest(open, req));
-      },
-
-      onCompaction: (summary, tokensBefore) => {
-        const compMsg: WebChatMessage = {
-          id: `comp-${Date.now()}`,
-          role: "compaction",
-          text: summary,
-          timestamp: Date.now(),
-          tokensBefore,
-        };
-        setMessages((prev) => [...prev, compMsg]);
       },
 
       onQueuedState: (items) => {
@@ -348,21 +289,13 @@ export function WebChat({
     setQueuedItems((prev) => prev.filter((q) => q.id !== id));
   };
 
-  // Send message over WebSocket
   const handleSendMessage = () => {
     const text = inputText.trim();
     if (!text) return;
 
-    // Optimistically add user message to list
-    const userMsg: WebChatMessage = {
-      id: `cli_${Date.now()}`,
-      role: "user",
-      text,
-      timestamp: Date.now(),
-      status: "sending",
-    };
-
-    setMessages((prev) => [...prev, userMsg]);
+    // Send, then show the optimistic bubble; it shares the frame's id, so the echo confirms it.
+    const userMsg = client.sendMessage(text);
+    setChat((prev) => applyChatEvent(prev, { type: "user", message: userMsg }, userMsg.timestamp));
     setLocalHistory((prev) => [...prev, text]);
     setHistoryNav(HISTORY_IDLE);
     setInputText("");
@@ -372,9 +305,6 @@ export function WebChat({
 
     // Auto-scroll to bottom immediately
     setTimeout(() => scrollToBottom(true), 50);
-
-    // Send to WebSocket
-    client.sendMessage(text);
   };
 
   const handleCancelTurn = () => {
@@ -500,6 +430,25 @@ export function WebChat({
         {/* Top Actions */}
         {/* Top Actions matching Flutter ChatTopBar */}
         <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={() => setAgentsOpen(!agentsOpen)}
+            aria-pressed={agentsOpen}
+            className={`relative p-2 rounded-lg transition-colors cursor-pointer ${
+              agentsOpen ? "text-[#4fc3f7] hover:bg-[#4fc3f7]/10" : "text-[#888] hover:text-white hover:bg-white/10"
+            }`}
+            title={agentsOpen ? "Hide agents panel" : "Show agents panel"}
+          >
+            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <rect x="3" y="4" width="18" height="16" rx="2" />
+              <line x1="15" y1="4" x2="15" y2="20" />
+            </svg>
+            {agentBoard.running.length > 0 && (
+              <span className="absolute -top-0.5 -right-0.5 min-w-4 h-4 px-1 rounded-full bg-[#4fc3f7] text-[#04222e] text-[10px] font-bold flex items-center justify-center tabular-nums">
+                {agentBoard.running.length}
+              </span>
+            )}
+          </button>
           <button
             type="button"
             onClick={onOpenQuickActions}
@@ -708,7 +657,7 @@ export function WebChat({
       )}
 
       {/* Narrow screens: Agents panel above the composer (wide screens use the side column) */}
-      <AgentsBottomPanel board={agentBoard} />
+      {agentsOpen && <AgentsBottomPanel board={agentBoard} onClose={() => setAgentsOpen(false)} />}
 
       {/* 5. COMPACT BOTTOM COMPOSER */}
       <div className="p-2 sm:px-4 sm:py-2 border-t border-white/10 bg-[#0a0c10]/95 backdrop-blur-md shrink-0">
@@ -880,7 +829,7 @@ export function WebChat({
       </div>
     </div>
     {/* Wide screens: persistent Agents column */}
-    <AgentsSideColumn board={agentBoard} />
+    {agentsOpen && <AgentsSideColumn board={agentBoard} onClose={() => setAgentsOpen(false)} />}
     </div>
   );
 }

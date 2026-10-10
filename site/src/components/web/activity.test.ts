@@ -1,16 +1,19 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  AGENTS_PANEL_KEY,
   EMPTY_BOARD,
   FINISHED_MAX,
-  activityLines,
-  agentsHeader,
+  agentRowView,
   agentsSummary,
   applyActivitySnapshot,
   clearFinished,
+  formatCost,
   formatElapsed,
+  formatTokens,
   parseAgentActivity,
-  progressCounters,
+  readAgentsPanelOpen,
+  writeAgentsPanelOpen,
   type AgentActivityJob,
 } from "./activity.ts";
 
@@ -86,7 +89,6 @@ test("board: running rows that vanish move to finished as ✓ frozen at the vani
   let board = applyActivitySnapshot(EMPTY_BOARD, parseAgentActivity(RUNNING_FRAME)!, SPAWN_MS + 2200);
   assert.deepEqual(board.running.map((j) => j.id), ["bg_1", "AgentA", "AgentB"]);
   assert.deepEqual(board.finished, []);
-  assert.equal(agentsHeader(board), "Agents · 3 running");
   // agent_end: `[]` — everything still running settles as done at `now`.
   board = applyActivitySnapshot(board, [], SPAWN_MS + 9000);
   assert.deepEqual(board.running, []);
@@ -95,8 +97,7 @@ test("board: running rows that vanish move to finished as ✓ frozen at the vani
     ["AgentA", "done", SPAWN_MS + 9000],
     ["AgentB", "done", SPAWN_MS + 9000],
   ]);
-  assert.equal(activityLines(board.finished[1], SPAWN_MS + 99_000).main, "└─ AgentA AgentA · 9.0s");
-  assert.equal(agentsHeader(board), "Agents");
+  assert.equal(agentRowView(board.finished[1], SPAWN_MS + 99_000).elapsed, "9.0s");
   assert.equal(agentsSummary(board), "Agents · 0 running · 3 finished");
 });
 
@@ -135,31 +136,76 @@ test("board: clear on send keeps running rows; finished capped at 20, newest fir
   assert.equal(clearFinished(cleared), cleared);
 });
 
-test("progress counters for the expanded subagent row", () => {
-  const [, a, b] = parseAgentActivity(RUNNING_FRAME)!;
-  assert.equal(progressCounters(b), "1 tools · 1589 tokens · $0.0160");
-  assert.equal(progressCounters(a), null);
-});
-
-test("lines from the captured running example", () => {
+test("row view from the captured running example", () => {
   const [bash, a, b] = parseAgentActivity(RUNNING_FRAME)!;
   const now = SPAWN_MS + 2200;
-  assert.deepEqual(activityLines(bash, now), { main: "└─ bg_1 sleep 20 · 6.0s", sub: null });
-  assert.deepEqual(activityLines(a, now), { main: "└─ AgentA AgentA · 2.2s", sub: null });
-  assert.deepEqual(activityLines(b, now), {
-    main: "└─ AgentB Run sleep command and report echoed output · 2.2s",
-    sub: "Running sleep then echo · 1 tools · 1.6k tok",
+  assert.deepEqual(agentRowView(bash, now), {
+    name: "bg_1", badge: "bash", summary: "sleep 20", activity: null, elapsed: "6.0s", chips: [],
   });
-  // Without detail the sub line is `<tool> <tool_args>`.
-  assert.equal(activityLines({ ...b, detail: undefined }, now).sub, "bash sleep 8 && echo beta · 1 tools · 1.6k tok");
+  // A label that only repeats the id is not shown twice.
+  assert.deepEqual(agentRowView(a, now), {
+    name: "AgentA", badge: "subagent", summary: null, activity: null, elapsed: "2.2s", chips: [],
+  });
+  assert.deepEqual(agentRowView(b, now), {
+    name: "AgentB",
+    badge: "subagent",
+    summary: "Run sleep command and report echoed output",
+    activity: "Running sleep then echo",
+    elapsed: "2.2s",
+    chips: [
+      { label: "tools", value: "1" },
+      { label: "tokens", value: "1.6k" },
+      { label: "cost", value: "$0.016" },
+    ],
+  });
+  // Without detail the activity is `<tool> <tool_args>`; finished rows show none.
+  assert.equal(agentRowView({ ...b, detail: undefined }, now).activity, "bash sleep 8 && echo beta");
+  assert.equal(agentRowView({ ...b, status: "done", ended_at: now }, now).activity, null);
 });
 
-test("finished rows freeze at ended_at", () => {
+test("finished rows freeze at ended_at; jobs badge with their type", () => {
   const done: AgentActivityJob = {
     id: "bg_1", kind: "bash", label: "sleep 4", command: "sleep 4", status: "done",
     started_at: 1791581796129, ended_at: 1791581800156,
   };
-  assert.equal(activityLines(done, done.ended_at! + 90_000).main, "└─ bg_1 sleep 4 · 4.0s");
+  assert.equal(agentRowView(done, done.ended_at! + 90_000).elapsed, "4.0s");
   const job: AgentActivityJob = { id: "j1", kind: "job", label: "index", job_type: "index", status: "failed", started_at: 0, ended_at: 125_000 };
-  assert.deepEqual(activityLines(job, 999_999), { main: "└─ j1 index · 2m 05s", sub: null });
+  assert.deepEqual(agentRowView(job, 999_999), {
+    name: "j1", badge: "index", summary: "index", activity: null, elapsed: "2m 05s", chips: [],
+  });
+  assert.equal(agentRowView({ ...job, job_type: undefined }, 0).badge, "job");
+});
+
+test("token and cost chips", () => {
+  assert.equal(formatTokens(950), "950");
+  assert.equal(formatTokens(1589), "1.6k");
+  assert.equal(formatTokens(2_340_000), "2.3M");
+  assert.equal(formatCost(0.01604), "$0.016");
+  assert.equal(formatCost(1.5), "$1.50");
+});
+
+test("open/closed preference: default open, persisted as open/closed", () => {
+  const store = new Map<string, string>();
+  const g = globalThis as { localStorage?: unknown };
+  const saved = g.localStorage;
+  g.localStorage = {
+    getItem: (k: string) => store.get(k) ?? null,
+    setItem: (k: string, v: string) => void store.set(k, v),
+  };
+  try {
+    assert.equal(readAgentsPanelOpen(), true);
+    writeAgentsPanelOpen(false);
+    assert.equal(store.get(AGENTS_PANEL_KEY), "closed");
+    assert.equal(readAgentsPanelOpen(), false);
+    writeAgentsPanelOpen(true);
+    assert.equal(store.get(AGENTS_PANEL_KEY), "open");
+    assert.equal(readAgentsPanelOpen(), true);
+    store.set(AGENTS_PANEL_KEY, "garbage");
+    assert.equal(readAgentsPanelOpen(), true);
+  } finally {
+    g.localStorage = saved;
+  }
+  // No storage (SSR / blocked): open, and writing does not throw.
+  assert.equal(readAgentsPanelOpen(), true);
+  writeAgentsPanelOpen(false);
 });

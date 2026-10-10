@@ -107,25 +107,81 @@ export function jobElapsedMs(job: AgentActivityJob, now: number): number {
   return end - job.started_at;
 }
 
-/** Side column title: `Agents · 2 running`, or just `Agents` when nothing runs. */
-export function agentsHeader(board: AgentBoard): string {
-  return board.running.length > 0 ? `Agents · ${board.running.length} running` : "Agents";
-}
-
 /** Narrow-screen bottom panel header: `Agents · N running · M finished`. */
 export function agentsSummary(board: AgentBoard): string {
   return `Agents · ${board.running.length} running · ${board.finished.length} finished`;
 }
 
-/** Expanded subagent row: `1 tools · 1589 tokens · $0.0160` (parts present only). */
-export function progressCounters(job: AgentActivityJob): string | null {
+/** `950`, `1.6k`, `2.3M`. */
+export function formatTokens(n: number): string {
+  if (n < 1000) return String(n);
+  if (n < 1_000_000) return `${(n / 1000).toFixed(1)}k`;
+  return `${(n / 1_000_000).toFixed(1)}M`;
+}
+
+/** `$0.016` under a dollar, else `$1.23`. */
+export function formatCost(cost: number): string {
+  return `$${cost.toFixed(cost < 1 ? 3 : 2)}`;
+}
+
+export interface AgentChip {
+  label: "tools" | "tokens" | "cost";
+  value: string;
+}
+
+/** Everything one Agents card shows, as plain data. */
+export interface AgentRowView {
+  /** Job id: `AgentB`, `bg_1`. */
+  name: string;
+  /** `subagent`, `bash`, or the omp job type. */
+  badge: string;
+  /** Description (subagent) or command line (bash); null when it would only repeat the name. */
+  summary: string | null;
+  /** Running subagents: what it is doing now (intent, else `<tool> <args>`). */
+  activity: string | null;
+  elapsed: string;
+  /** Subagent progress chips, present parts only. */
+  chips: AgentChip[];
+}
+
+export function agentRowView(job: AgentActivityJob, now: number): AgentRowView {
   const p = job.progress;
-  const parts = [
-    p?.tool_count !== undefined ? `${p.tool_count} tools` : undefined,
-    p?.tokens !== undefined ? `${p.tokens} tokens` : undefined,
-    p?.cost !== undefined ? `$${p.cost.toFixed(4)}` : undefined,
-  ].filter((s): s is string => !!s);
-  return parts.length > 0 ? parts.join(" · ") : null;
+  const raw =
+    job.kind === "bash" ? job.command ?? job.label : job.kind === "subagent" ? job.description ?? job.label : job.label;
+  const doing = job.detail ?? (p?.tool ? [p.tool, p.tool_args].filter(Boolean).join(" ") : undefined);
+  const chips: AgentChip[] = [];
+  if (job.kind === "subagent" && p) {
+    if (p.tool_count !== undefined) chips.push({ label: "tools", value: String(p.tool_count) });
+    if (p.tokens !== undefined) chips.push({ label: "tokens", value: formatTokens(p.tokens) });
+    if (p.cost !== undefined) chips.push({ label: "cost", value: formatCost(p.cost) });
+  }
+  return {
+    name: job.id,
+    badge: job.kind === "job" ? job.job_type ?? "job" : job.kind,
+    summary: raw && raw !== job.id ? raw : null,
+    activity: job.kind === "subagent" && job.status === "running" ? doing ?? null : null,
+    elapsed: formatElapsed(jobElapsedMs(job, now)),
+    chips,
+  };
+}
+
+// ── open/closed preference (side column and bottom panel share it) ──────────
+
+export const AGENTS_PANEL_KEY = "remotepi_agents_panel";
+
+/** Default open; only an explicit `closed` hides the panel. */
+export function readAgentsPanelOpen(): boolean {
+  try {
+    return localStorage.getItem(AGENTS_PANEL_KEY) !== "closed";
+  } catch {
+    return true;
+  }
+}
+
+export function writeAgentsPanelOpen(open: boolean): void {
+  try {
+    localStorage.setItem(AGENTS_PANEL_KEY, open ? "open" : "closed");
+  } catch {}
 }
 
 // ── client-side retention (the persistent Agents tile) ──────────────────────
@@ -172,22 +228,3 @@ export function clearFinished(board: AgentBoard): AgentBoard {
   return board.finished.length === 0 ? board : { running: board.running, finished: [] };
 }
 
-export interface ActivityLines {
-  main: string;
-  /** Subagents only: what it is doing now, plus tool/token counters. */
-  sub: string | null;
-}
-
-export function activityLines(job: AgentActivityJob, now: number): ActivityLines {
-  const what = job.kind === "bash" ? job.command ?? job.label : job.label;
-  const main = `└─ ${job.id} ${what} · ${formatElapsed(jobElapsedMs(job, now))}`;
-  if (job.kind !== "subagent") return { main, sub: null };
-  const p = job.progress;
-  const doing = job.detail ?? (p?.tool ? [p.tool, p.tool_args].filter(Boolean).join(" ") : undefined);
-  const parts = [
-    doing,
-    p?.tool_count !== undefined ? `${p.tool_count} tools` : undefined,
-    p?.tokens !== undefined ? `${(p.tokens / 1000).toFixed(1)}k tok` : undefined,
-  ].filter((s): s is string => !!s);
-  return { main, sub: parts.length > 0 ? parts.join(" · ") : null };
-}
