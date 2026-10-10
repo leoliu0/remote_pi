@@ -23,6 +23,7 @@ import { slashMenuItems } from "./slash-commands";
 import { BrailleSpinner } from "./braille-spinner";
 import type { RelayConnection } from "./relay-connection";
 import { workingLabel } from "./working-label";
+import { modelThinkingText } from "./session-list";
 import { ToolFullCard, ToolPill } from "./tool-card";
 import { ExtensionUiPrompt } from "./extension-ui-prompt";
 import { applyExtensionUiRequest, type ExtensionUiResponseWire, type PendingPrompt } from "./extension-ui";
@@ -52,6 +53,9 @@ interface WebChatProps {
   connection: RelayConnection;
   /** This room's state from the relay's room/presence frames (Home's source of truth). */
   roomPresence: PeerPresence;
+  /** Room meta model/thinking (relay frames, Home's source), shown like the Home tile. */
+  model?: string | null;
+  thinking?: string | null;
   onDisconnect: () => void;
   onOpenSessionInfo: () => void;
   onOpenQuickActions: () => void;
@@ -80,6 +84,8 @@ export function WebChat({
   session,
   connection,
   roomPresence,
+  model,
+  thinking,
   onDisconnect,
   onOpenSessionInfo,
   onOpenQuickActions,
@@ -374,6 +380,8 @@ export function WebChat({
     setTimeout(() => setCopiedId(null), 2000);
   };
 
+  const modelThinking = modelThinkingText(model, thinking);
+
   return (
     <div className="flex h-screen w-full max-w-5xl lg:max-w-[calc(64rem+300px)] mx-auto">
     <div className="flex flex-col flex-1 min-w-0 bg-[#08090d] border-x border-white/10 relative">
@@ -427,6 +435,14 @@ export function WebChat({
                   {isWorking ? "working…" : presence}
                 </span>
               </div>
+              {modelThinking && (
+                <>
+                  <span className="text-[#444]">&bull;</span>
+                  <span className="truncate text-[11px] text-[#4fc3f7]" title={modelThinking}>
+                    {modelThinking}
+                  </span>
+                </>
+              )}
             </div>
           </div>
         </div>

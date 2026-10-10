@@ -309,6 +309,8 @@ export default function WebPage() {
             session={activeSession}
             connection={connection}
             roomPresence={roomPresence}
+            model={activeRoom?.model ?? activeSession?.model}
+            thinking={activeRoom?.thinking ?? activeSession?.thinking}
             onDisconnect={handleCloseChat}
             onOpenSessionInfo={() => setShowSessionInfo(true)}
             onOpenQuickActions={() => setShowQuickActions(true)}

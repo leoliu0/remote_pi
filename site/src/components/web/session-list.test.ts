@@ -8,6 +8,8 @@ import {
   filterItems,
   forgetPeer,
   formatModelName,
+  modelRowLabel,
+  modelThinkingText,
   homeCounts,
   homeItems,
   isRoomInLiveSet,
@@ -20,6 +22,8 @@ import {
   peerLabel,
   roomDisplayName,
   roomKey,
+  THINKING_LABELS,
+  thinkingLabel,
   tileStatus,
   tileSubtitle,
   toStandardB64,
@@ -373,6 +377,39 @@ describe("Home derivations", () => {
     const items = homeItems(peers, state());
     const tile = { ...items[1], room: { ...items[1].room, model: "Claude Opus 5.5", thinking: "auto" } };
     assert.deepEqual(tileSubtitle(tile), { text: "Opus 5.5 · auto", accented: true });
+  });
+
+  it("thinking labels match the omp footer exactly", () => {
+    // omp's footer (xCl in ~/.local/bin/omp): off → "off", auto → "auto",
+    // otherwise the text after the icon in the theme's `thinking.<level>`
+    // symbol (nerd + ascii presets: min/low/med/high/xhi/max).
+    assert.deepEqual(THINKING_LABELS, {
+      off: "off",
+      minimal: "min",
+      low: "low",
+      medium: "med",
+      high: "high",
+      xhigh: "xhi",
+      max: "max",
+      auto: "auto",
+    });
+    assert.equal(thinkingLabel("xhigh"), "xhi");
+    assert.equal(thinkingLabel("future-level"), "future-level");
+    // Production 02:38:53: footer "Opus 5.5 · xhi" while the tile said "xhigh".
+    const items = homeItems(peers, state());
+    const tile = { ...items[1], room: { ...items[1].room, model: "Claude Opus 5.5", thinking: "xhigh" } };
+    assert.deepEqual(tileSubtitle(tile), { text: "Opus 5.5 · xhi", accented: true });
+  });
+
+  it("chat header and Quick Actions show the footer's model label", () => {
+    // room_meta as production sent it: model "Claude Opus 5.5", thinking "xhigh".
+    assert.equal(modelThinkingText("Claude Opus 5.5", "xhigh"), "Opus 5.5 · xhi");
+    assert.equal(modelThinkingText("Claude Opus 5.5", null), "Opus 5.5");
+    assert.equal(modelThinkingText(null, "medium"), "med");
+    assert.equal(modelThinkingText(undefined, undefined), null);
+    assert.equal(modelThinkingText("", ""), null);
+    assert.equal(modelRowLabel("Claude Opus 5.5"), "Opus 5.5");
+    assert.equal(modelRowLabel(null), "Unknown model");
   });
 
   it("forgetPeer removes a revoked PC everywhere", () => {

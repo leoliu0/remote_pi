@@ -103,17 +103,27 @@ export interface HomeItem {
 /** Same debounce the app uses before committing `working: false`. */
 export const WORKING_OFF_DEBOUNCE_MS = 350;
 
-/** Wire thinking levels → compact tile labels (also the set of valid levels). */
-const THINKING_LABELS: Record<string, string> = {
+/**
+ * Wire thinking levels → the omp footer's labels (also the set of valid
+ * levels). The footer spells out off/auto and otherwise shows the text after
+ * the icon in the theme's `thinking.<level>` symbol (nerd/ascii presets).
+ * Mirrors the app's `thinkingLabel` (session_tile.dart).
+ */
+export const THINKING_LABELS: Readonly<Record<string, string>> = {
   auto: "auto",
   off: "off",
   minimal: "min",
   low: "low",
   medium: "med",
   high: "high",
-  xhigh: "xhigh",
+  xhigh: "xhi",
   max: "max",
 };
+
+/** Footer label for a wire thinking level; unknown levels pass through. */
+export function thinkingLabel(level: string): string {
+  return Object.hasOwn(THINKING_LABELS, level) ? THINKING_LABELS[level] : level;
+}
 
 // ── epk + keys ───────────────────────────────────────────────────────────────
 
@@ -703,15 +713,25 @@ function truncate(name: string, max = 24): string {
   return name.length <= max ? name : `${name.substring(0, max - 3)}…`;
 }
 
+/** `model · thinking` in the omp footer's labels (tile subtitle, chat header); null when neither is known. */
+export function modelThinkingText(rawModel?: string | null, rawThinking?: string | null): string | null {
+  const model = rawModel ? formatModelName(rawModel) : null;
+  const thinking = rawThinking ? thinkingLabel(rawThinking) : null;
+  if (model && thinking) return `${truncate(model, 20)} · ${thinking}`;
+  if (model) return truncate(model);
+  return thinking;
+}
+
+/** Quick Actions model row: the footer's model label (app: `_ModelRow`). */
+export function modelRowLabel(rawModel?: string | null): string {
+  return (rawModel && formatModelName(rawModel)) || "Unknown model";
+}
+
 /** Subtitle: `model · thinking`, falling back to the pairing age. */
 export function tileSubtitle(item: HomeItem, now: number = Date.now()): { text: string; accented: boolean } {
-  const { room, peer } = item;
-  const model = room.model ? formatModelName(room.model) : null;
-  const thinking = room.thinking ? THINKING_LABELS[room.thinking] ?? room.thinking : null;
-  if (model && thinking) return { text: `${truncate(model, 20)} · ${thinking}`, accented: true };
-  if (model) return { text: truncate(model), accented: true };
-  if (thinking) return { text: thinking, accented: true };
-  return { text: `Last paired: ${relativeTime(peer.pairedAt, now)}`, accented: false };
+  const text = modelThinkingText(item.room.model, item.room.thinking);
+  if (text) return { text, accented: true };
+  return { text: `Last paired: ${relativeTime(item.peer.pairedAt, now)}`, accented: false };
 }
 
 export function relativeTime(iso: string, now: number = Date.now()): string {

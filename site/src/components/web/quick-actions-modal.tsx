@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { thinkingChoices, type ModelsCatalogue, type RoomAction, type WireModel } from "./web-client";
+import { modelRowLabel, thinkingLabel } from "./session-list";
 
 export type ToolDisplayMode = "brief" | "full" | "hidden";
 
@@ -17,17 +18,6 @@ interface QuickActionsModalProps {
   onLoadModels: () => Promise<ModelsCatalogue>;
   onSetToolDisplay: (mode: ToolDisplayMode) => void;
 }
-
-const THINKING_LABELS: Record<string, string> = {
-  auto: "auto",
-  off: "off",
-  minimal: "min",
-  low: "low",
-  medium: "med",
-  high: "high",
-  xhigh: "xh",
-  max: "max",
-};
 
 const modelKey = (m: Pick<WireModel, "provider" | "id">) => `${m.provider}/${m.id}`;
 
@@ -73,7 +63,7 @@ export function QuickActionsModal({
     { id: "hidden", label: "Hidden", desc: "Chat only" },
   ];
 
-  const currentModelName = selectedModel?.name ?? activeModel ?? "Unknown model";
+  const currentModelName = modelRowLabel(selectedModel?.name ?? activeModel);
   const currentModelTag = selectedModel?.provider ?? "";
 
   return (
@@ -226,7 +216,7 @@ export function QuickActionsModal({
             <div className="text-[#888] mb-1.5 uppercase tracking-wider text-[10px] flex items-center justify-between">
               <span>Thinking</span>
               <span className="text-[10px] text-[#4fc3f7] font-semibold">
-                {selectedThinking}
+                {thinkingLabel(selectedThinking)}
               </span>
             </div>
             <div className="grid grid-cols-4 sm:grid-cols-8 gap-1">
@@ -245,7 +235,7 @@ export function QuickActionsModal({
                       : "bg-white/[0.02] border-white/10 text-[#888] hover:text-white hover:bg-white/5"
                   }`}
                 >
-                  {THINKING_LABELS[level] ?? level}
+                  {thinkingLabel(level)}
                 </button>
               ))}
             </div>

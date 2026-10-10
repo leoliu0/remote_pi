@@ -289,10 +289,10 @@ String _tileSubtitle(RoomInfo? room, PeerRecord peer) {
   final model = hasModel ? formatModelName(rawModel) : null;
   final thinking = room?.thinking;
   if (model != null && thinking != null) {
-    return '${_truncateModel(model, 20)} · ${_thinkingLabel(thinking)}';
+    return '${_truncateModel(model, 20)} · ${thinkingLabel(thinking)}';
   }
   if (model != null) return _truncateModel(model);
-  if (thinking != null) return _thinkingLabel(thinking);
+  if (thinking != null) return thinkingLabel(thinking);
   return 'Last paired: ${_relativeTime(peer.pairedAt)}';
 }
 
@@ -368,14 +368,18 @@ String formatModelName(String raw) {
   return formatted;
 }
 
-String _thinkingLabel(ThinkingLevel level) => switch (level) {
+/// The omp footer's label for [level]: off/auto spelled out, the rest the text
+/// after the icon in the theme's `thinking.<level>` symbol (nerd/ascii
+/// presets). Shared by the Home tile and Quick Actions; mirrors the site's
+/// `THINKING_LABELS` (site/src/components/web/session-list.ts).
+String thinkingLabel(ThinkingLevel level) => switch (level) {
       ThinkingLevel.auto => 'auto',
       ThinkingLevel.off => 'off',
       ThinkingLevel.minimal => 'min',
       ThinkingLevel.low => 'low',
       ThinkingLevel.medium => 'med',
       ThinkingLevel.high => 'high',
-      ThinkingLevel.xhigh => 'xhigh',
+      ThinkingLevel.xhigh => 'xhi',
       ThinkingLevel.max => 'max',
     };
 

@@ -10,6 +10,7 @@ import 'package:app/ui/chat/quick_actions/viewmodels/quick_actions_viewmodel.dar
 import 'package:app/ui/chat/quick_actions/widgets/dismiss_on_session_change.dart';
 import 'package:app/ui/chat/quick_actions/widgets/model_picker_sheet.dart';
 import 'package:app/ui/chat/viewmodels/chat_viewmodel.dart';
+import 'package:app/ui/home/widgets/session_tile.dart' show formatModelName, thinkingLabel;
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:provider/provider.dart';
@@ -444,9 +445,9 @@ class _ActionTile extends StatelessWidget {
 }
 
 class _ModelRow extends StatelessWidget {
-  /// Display label — `WireModel.name` when the catalogue is loaded,
-  /// otherwise the `room_meta.model` string. `null` falls back to the
-  /// generic placeholder. Reads cheap so the picker can lazy-load.
+  /// Raw label — `WireModel.name` when the catalogue is loaded, otherwise
+  /// the `room_meta.model` string — shown through [formatModelName] like the
+  /// Home tile and the omp footer. `null` falls back to the placeholder.
   final String? currentLabel;
   final bool busy;
   final VoidCallback onTap;
@@ -459,7 +460,8 @@ class _ModelRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
-    final label = currentLabel ?? (busy ? 'Switching…' : 'Choose a model');
+    final raw = currentLabel;
+    final label = raw != null ? formatModelName(raw) : (busy ? 'Switching…' : 'Choose a model');
     return InkWell(
       key: const Key('qa-model-row'),
       onTap: busy ? null : onTap,
@@ -586,19 +588,6 @@ class _ThinkingSegmented extends StatelessWidget {
     this.levels,
   });
 
-  // Short label shown in the segmented buttons. Matches the SDK's
-  // ThinkingLevel order (off → max).
-  static const _labels = <ThinkingLevel, String>{
-    ThinkingLevel.auto: 'auto',
-    ThinkingLevel.off: 'off',
-    ThinkingLevel.minimal: 'min',
-    ThinkingLevel.low: 'low',
-    ThinkingLevel.medium: 'med',
-    ThinkingLevel.high: 'high',
-    ThinkingLevel.xhigh: 'xh',
-    ThinkingLevel.max: 'max',
-  };
-
   @override
   Widget build(BuildContext context) {
     final shown = [
@@ -616,7 +605,7 @@ class _ThinkingSegmented extends StatelessWidget {
             Expanded(
               child: _SegButton(
                 key: Key('qa-thinking-${level.wire}'),
-                label: _labels[level]!,
+                label: thinkingLabel(level),
                 selected: current == level,
                 disabled: disabled,
                 onTap: () => onPick(level),

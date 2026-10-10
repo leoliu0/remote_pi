@@ -320,6 +320,38 @@ void main() {
     expect(find.byKey(const Key('qa-thinking-low')), findsOneWidget);
   });
 
+  testWidgets('model row and thinking chips use the omp footer labels',
+      (tester) async {
+    // Production: the catalogue's current model is the registry name
+    // "Claude Opus 5.5"; the omp footer shows "Opus 5.5 · xhi".
+    await _openSheet(
+      tester,
+      currentModel: const WireModel(
+        id: 'claude-opus-5-5',
+        name: 'Claude Opus 5.5',
+        provider: 'anthropic',
+        reasoning: true,
+        contextWindow: 0,
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('qa-model-row')),
+        matching: find.text('Opus 5.5'),
+      ),
+      findsOneWidget,
+    );
+    expect(find.text('Claude Opus 5.5'), findsNothing);
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('qa-thinking-xhigh')),
+        matching: find.text('xhi'),
+      ),
+      findsOneWidget,
+    );
+  });
+
   test('QuickActionsState equality covers idle + busy', () {
     expect(const QuickActionsIdle(), const QuickActionsIdle());
     expect(

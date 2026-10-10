@@ -140,7 +140,7 @@ void main() {
     expect(find.text('Gemini 2.5 Pro'), findsOneWidget);
   });
 
-  testWidgets('xhigh thinking labels as xhigh and normalizes raw model id', (tester) async {
+  testWidgets('xhigh thinking labels as xhi (omp footer) and normalizes raw model id', (tester) async {
     await tester.pumpWidget(
       _wrap(
         SessionTile(
@@ -157,7 +157,22 @@ void main() {
         ),
       ),
     );
-    expect(find.text('GPT 4o · xhigh'), findsOneWidget);
+    expect(find.text('GPT 4o · xhi'), findsOneWidget);
+  });
+
+  test('thinkingLabel matches the omp footer for every level', () {
+    // omp footer (xCl in ~/.local/bin/omp): off/auto spelled out, the rest
+    // are the text after the icon in `thinking.<level>` (nerd/ascii presets).
+    expect({for (final l in ThinkingLevel.values) l.wire: thinkingLabel(l)}, {
+      'auto': 'auto',
+      'off': 'off',
+      'minimal': 'min',
+      'low': 'low',
+      'medium': 'med',
+      'high': 'high',
+      'xhigh': 'xhi',
+      'max': 'max',
+    });
   });
 
   test('formatModelName handles various model id formats', () {
