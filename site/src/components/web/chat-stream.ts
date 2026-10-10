@@ -249,7 +249,11 @@ export function chatEventFromFrame(frame: Record<string, unknown>, now: number):
   switch (frame.type) {
     case "session_history":
       return Array.isArray(frame.events) ? { type: "history", messages: historyMessages(frame.events, now) } : null;
+    // The Pi echoes a client's prompt as `user_message` (pi-extension
+    // _echoUserMessage) and a terminal prompt as `user_input`; both confirm the
+    // optimistic bubble by id or add the other device's row, as in the app.
     case "user_input":
+    case "user_message":
       return {
         type: "user",
         message: {

@@ -353,7 +353,7 @@ export class RemotePiRelayClient {
 
   /**
    * Sends `text` and returns the optimistic bubble for it. Both carry the same
-   * id, so the Pi's `user_input` echo (and a history resync) confirms that
+   * id, so the Pi's `user_message` echo (and a history resync) confirms that
    * bubble instead of adding a second one.
    */
   public sendMessage(text: string): WebChatMessage {

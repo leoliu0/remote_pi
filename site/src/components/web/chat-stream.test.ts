@@ -189,6 +189,34 @@ test("a steer splits the segment; the next turn starts a fresh one", () => {
   assert.equal(state.messages.find((m) => m.id === "cli_steer")?.status, "sent", "echo confirms the optimistic row in place");
 });
 
+// Captured live 2026-10-10 from the scratch omp room (pi-extension
+// _echoUserMessage): the Pi echoes a client's prompt back as `user_message`,
+// not `user_input`. The web ignored it, so its own bubble stayed ⏳ and prompts
+// sent from the phone never appeared live. The app treats both types alike
+// (protocol.dart: 'user_input' || 'user_message' => UserInput).
+const LIVE_ECHO = {
+  type: "user_message",
+  id: "cli_1791597415713",
+  text: "Spawn exactly ONE subagent with the task tool, named SleepCheck. Its assignment: run `sleep 25` in bash, then reply 'slept'. Wait for it, then answer 'done' in one word.",
+};
+
+test("a user_message echo confirms this tab's optimistic bubble in place", () => {
+  let state = apply(EMPTY_CHAT, {
+    type: "user",
+    message: { id: LIVE_ECHO.id, role: "user", text: LIVE_ECHO.text, timestamp: 1, status: "sending" },
+  });
+  state = replay([LIVE_ECHO, { type: "agent_done", in_reply_to: LIVE_ECHO.id }, { type: "agent_message", in_reply_to: LIVE_ECHO.id, text: "done" }], state);
+  assert.deepEqual(shown(state.messages), [`user:${LIVE_ECHO.text}`, "assistant:done"]);
+  assert.equal(state.messages[0].status, "sent");
+});
+
+test("a user_message echo of another device's prompt adds its user row", () => {
+  const state = replay([LIVE_ECHO, chunk("done", LIVE_ECHO.id), { type: "agent_done", in_reply_to: LIVE_ECHO.id }]);
+  assert.deepEqual(shown(state.messages), [`user:${LIVE_ECHO.text}`, "assistant:done"]);
+  assert.equal(state.messages[0].id, LIVE_ECHO.id);
+  assert.equal(state.messages[0].status, "sent");
+});
+
 test("a turn's chunks never land in the previous turn's bubble", () => {
   const SECOND = "cli_1791600009999";
   const { messages } = replay([

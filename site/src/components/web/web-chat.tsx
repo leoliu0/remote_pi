@@ -438,6 +438,7 @@ export function WebChat({
               agentsOpen ? "text-[#4fc3f7] hover:bg-[#4fc3f7]/10" : "text-[#888] hover:text-white hover:bg-white/10"
             }`}
             title={agentsOpen ? "Hide agents panel" : "Show agents panel"}
+            aria-label={agentsOpen ? "Hide agents panel" : "Show agents panel"}
           >
             <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <rect x="3" y="4" width="18" height="16" rx="2" />
