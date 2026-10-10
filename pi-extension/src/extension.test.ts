@@ -2935,6 +2935,119 @@ describe("tool visibility", () => {
     });
   });
 
+  // Live E2E 2026-10-10 (omp 18.8.7): the working banner read 'Executing
+  // wait…' and Brief pills showed the command, not the intent. omp's
+  // tool_call `input` and tool_execution_start `args` both have `i` stripped;
+  // only the streamed toolCall (toolcall_end / assistant message_end) carries
+  // it in `arguments`. Real event order captured from omp below.
+  test("omp toolcall_end args carry `i` → tool_request keeps the intent after a stripped tool_call", async () => {
+    await _pairForTest("peer-omp-intent");
+    const sendsBefore = relayRef.current!.send.mock.calls.length;
+    const harness = captureEventHarness();
+
+    harness.handler("message_update")({
+      type: "message_update",
+      assistantMessageEvent: {
+        type: "toolcall_end",
+        contentIndex: 0,
+        toolCall: { type: "toolCall", id: "tc_intent", name: "bash", arguments: { command: "sleep 1", i: "Waiting for sleep" } },
+      },
+    });
+    harness.handler("tool_call")({
+      type: "tool_call",
+      toolName: "bash",
+      toolCallId: "tc_intent",
+      input: { command: "sleep 1" },
+    });
+    harness.handler("tool_execution_start")({
+      type: "tool_execution_start",
+      toolCallId: "tc_intent",
+      toolName: "bash",
+      args: { command: "sleep 1" },
+      intent: "Waiting for sleep",
+    });
+
+    const requests = relayRef.current!.send.mock.calls.slice(sendsBefore)
+      .map((c) => decodeSentCt(c[0] as string))
+      .filter((d) => d.inner.type === "tool_request");
+    expect(requests).toHaveLength(1);
+    expect(requests[0]!.inner).toMatchObject({
+      tool_call_id: "tc_intent",
+      tool: "bash",
+      args: { command: "sleep 1", i: "Waiting for sleep" },
+    });
+  });
+
+  // omp delivers queued message_update events late; a live run saw tool_call
+  // first, then the assistant message_end, then tool_execution_start (with a
+  // top-level `intent`), and toolcall_end only after that.
+  test("omp tool_call before any full-args event → single tool_request still carries `i`", async () => {
+    await _pairForTest("peer-omp-intent-late");
+    const sendsBefore = relayRef.current!.send.mock.calls.length;
+    const harness = captureEventHarness();
+
+    harness.handler("tool_call")({
+      type: "tool_call",
+      toolName: "bash",
+      toolCallId: "tc_late",
+      input: { command: "echo hello" },
+    });
+    harness.handler("message_end")({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "tc_late", name: "bash", arguments: { command: "echo hello", i: "Echoing hello" }, intent: "Echoing hello" }],
+      },
+    });
+    // Emitted as soon as the full args are known, before execution starts.
+    const sendsAtMessageEnd = relayRef.current!.send.mock.calls.length;
+    harness.handler("tool_execution_start")({
+      type: "tool_execution_start",
+      toolCallId: "tc_late",
+      toolName: "bash",
+      args: { command: "echo hello" },
+      intent: "Echoing hello",
+    });
+    harness.handler("message_update")({
+      type: "message_update",
+      assistantMessageEvent: {
+        type: "toolcall_end",
+        contentIndex: 0,
+        toolCall: { type: "toolCall", id: "tc_late", name: "bash", arguments: { command: "echo hello", i: "Echoing hello" } },
+      },
+    });
+
+    const sent = relayRef.current!.send.mock.calls.slice(sendsBefore).map((c) => decodeSentCt(c[0] as string));
+    const requests = sent.filter((d) => d.inner.type === "tool_request");
+    expect(requests).toHaveLength(1);
+    expect(sent.slice(0, sendsAtMessageEnd - sendsBefore).filter((d) => d.inner.type === "tool_request")).toHaveLength(1);
+    expect(requests[0]!.inner).toMatchObject({
+      tool_call_id: "tc_late",
+      args: { command: "echo hello", i: "Echoing hello" },
+    });
+  });
+
+  test("tool_execution_start `intent` fills `i` when no streamed args were seen", async () => {
+    await _pairForTest("peer-omp-intent-exec");
+    const sendsBefore = relayRef.current!.send.mock.calls.length;
+    const harness = captureEventHarness();
+
+    harness.handler("tool_call")({ type: "tool_call", toolName: "wait", toolCallId: "tc_exec", input: {} });
+    harness.handler("tool_execution_start")({
+      type: "tool_execution_start",
+      toolCallId: "tc_exec",
+      toolName: "wait",
+      args: {},
+      intent: "Waiting for jobs",
+    });
+
+    const requests = relayRef.current!.send.mock.calls.slice(sendsBefore)
+      .map((c) => decodeSentCt(c[0] as string))
+      .filter((d) => d.inner.type === "tool_request");
+    expect(requests).toHaveLength(1);
+    expect(requests[0]!.inner).toMatchObject({ tool_call_id: "tc_exec", tool: "wait", args: { i: "Waiting for jobs" } });
+  });
+
   test("tool_execution_start enriches edit args with numbered context hunks", async () => {
     await _pairForTest("peer-edit");
     const cwd = mkdtempSync(join(tmpdir(), "remote-pi-edit-"));

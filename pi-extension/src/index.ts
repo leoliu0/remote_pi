@@ -2929,9 +2929,20 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   });
 
   const _emittedToolRequests = new Set<string>();
+  // omp strips the intent `i` from tool_call `input` and tool_execution_start
+  // `args`; only the streamed toolCall (message_update toolcall_end, assistant
+  // message_end) keeps it in `arguments`. Remembered per call id and merged
+  // into the tool_request so banners and Brief pills show the intent.
+  const _streamedToolArgs = new Map<string, Record<string, unknown>>();
+  // A tool_call that arrived before any full-args event (omp delivers queued
+  // message_update events late). Held until the streamed args or
+  // tool_execution_start's `intent` arrive: clients keep the first
+  // tool_request per id, so emitting early would lose `i` for good.
+  const _heldToolCalls = new Map<string, { name: string; args: unknown }>();
 
-  const _handleToolStart = (toolCallId?: string, toolName?: string, args?: unknown) => {
+  const _handleToolStart = (toolCallId?: string, toolName?: string, args?: unknown, intent?: unknown) => {
     if (!toolCallId || typeof toolCallId !== "string" || !toolName || typeof toolName !== "string") return;
+    _heldToolCalls.delete(toolCallId);
     if (_emittedToolRequests.has(toolCallId)) return;
     _emittedToolRequests.add(toolCallId);
     if (!_anyPeerActive()) return;
@@ -2943,19 +2954,33 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
       _broadcastToActive({ type: "agent_chunk", in_reply_to: _currentTurnId ?? "turn", delta: "</think>" });
     }
     if (_streamPhase !== null) _streamPhase = "tool";
+    const merged: Record<string, unknown> = {
+      ..._streamedToolArgs.get(toolCallId),
+      ...((args && typeof args === "object") ? args as Record<string, unknown> : {}),
+    };
+    if (typeof intent === "string" && intent && merged.i === undefined) merged.i = intent;
     _broadcastToActive({
       type: "tool_request",
       tool_call_id: toolCallId,
       tool: toolName,
-      args: _enrichToolArgs(toolName, (args && typeof args === "object") ? args as Record<string, unknown> : {}),
+      args: _enrichToolArgs(toolName, merged),
     });
+  };
+
+  const _rememberStreamedToolCall = (call: unknown) => {
+    if (!call || typeof call !== "object" || !("id" in call) || !("arguments" in call)) return;
+    const { id, arguments: fullArgs } = call;
+    if (typeof id !== "string" || !fullArgs || typeof fullArgs !== "object") return;
+    _streamedToolArgs.set(id, fullArgs as Record<string, unknown>);
+    const held = _heldToolCalls.get(id);
+    if (held) _handleToolStart(id, held.name, held.args, "intent" in call ? call.intent : undefined);
   };
 
   pi.on("message_update", (event) => {
     if (fromSubagent()) return;
-    if (!_anyPeerActive() || !_currentTurnId) return;
     const ae = event.assistantMessageEvent as Record<string, unknown> | undefined;
-    if (!ae) return;
+    if (ae?.type === "toolcall_end") _rememberStreamedToolCall(ae.toolCall);
+    if (!_anyPeerActive() || !_currentTurnId || !ae) return;
     const turnId = _currentTurnId;
     const emit = (delta: string) =>
       _broadcastToActive({ type: "agent_chunk", in_reply_to: turnId, delta });
@@ -3017,10 +3042,15 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     const tcid = (ev?.toolCallId ?? ev?.id ?? ev?.tool_call_id) as string | undefined;
     const name = (ev?.toolName ?? ev?.name ?? ev?.tool) as string | undefined;
     // omp emits `{toolName, toolCallId, input}`; other hosts use args/arguments.
-    // This event wins the race with tool_execution_start (later dupes are
-    // dropped), so missing `input` here blanked every tool card's args.
+    // The first emission wins (later dupes are dropped), so missing `input`
+    // here blanked every tool card's args. omp's `input` lacks `i`: emit only
+    // once the streamed args are known, else hold until they (or
+    // tool_execution_start's `intent`) arrive.
     const args = (ev?.input ?? ev?.args ?? ev?.arguments) as unknown;
-    if (tcid && name) _handleToolStart(tcid, name, args);
+    if (!tcid || !name) return;
+    const hasIntent = !!args && typeof args === "object" && "i" in args;
+    if (hasIntent || _streamedToolArgs.has(tcid)) _handleToolStart(tcid, name, args);
+    else if (!_emittedToolRequests.has(tcid)) _heldToolCalls.set(tcid, { name, args });
   });
 
   const _activeToolArgs = new Map<string, unknown>();
@@ -3028,12 +3058,14 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   pi.on("tool_execution_start", (event) => {
     if (fromSubagent()) return;
     _activeToolArgs.set(event.toolCallId, event.args);
-    _handleToolStart(event.toolCallId, event.toolName, event.args);
+    _handleToolStart(event.toolCallId, event.toolName, event.args, "intent" in event ? event.intent : undefined);
   });
 
   pi.on("tool_execution_end", (event) => {
     if (fromSubagent()) return;
     _emittedToolRequests.delete(event.toolCallId);
+    _streamedToolArgs.delete(event.toolCallId);
+    _heldToolCalls.delete(event.toolCallId);
     const rawArgs = _activeToolArgs.get(event.toolCallId);
     _activeToolArgs.delete(event.toolCallId);
     // An async bash / detached task just registered a background job.
@@ -3082,6 +3114,10 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
       if (typeof m.content === "string") {
         inlinedContent = _inlineLocalMarkdownImages(m.content);
       } else if (Array.isArray(m.content)) {
+        // Full arguments (with `i`) for tool calls whose tool_call was held.
+        for (const block of m.content) {
+          if (block && typeof block === "object" && "type" in block && block.type === "toolCall") _rememberStreamedToolCall(block);
+        }
         inlinedContent = m.content.map((block) => {
           if (block && typeof block === "object" && (block as Record<string, unknown>).type === "text" && typeof (block as Record<string, unknown>).text === "string") {
             return { ...(block as Record<string, unknown>), text: _inlineLocalMarkdownImages((block as Record<string, unknown>).text as string) };
@@ -3139,6 +3175,8 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     // omp drops settled subagent/job rows when the main run ends.
     _activity.clearFinished();
     _refreshActivity();
+    _streamedToolArgs.clear();
+    _heldToolCalls.clear();
     for (const steer of _pendingSteers) {
       _broadcastToActive({ type: "steer_consumed", id: steer.id });
     }
