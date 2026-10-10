@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { EMPTY_CHAT, applyChatEvent, chatEventFromFrame, historyMessages, type ChatEvent, type ChatState } from "./chat-stream.ts";
+import { EMPTY_CHAT, applyChatEvent, cancelTargetId, chatEventFromFrame, historyMessages, type ChatEvent, type ChatState } from "./chat-stream.ts";
 import type { WebChatMessage } from "./web-client.ts";
 
 const TURN = "cli_1791600000000";
@@ -242,4 +242,89 @@ test("final text with nothing streamed (reload mid-turn) is added once", () => {
   state = replay([{ type: "session_history", events: TURN_HISTORY }], state);
   state = replay([{ type: "agent_message", in_reply_to: TURN, text: "Done: bg_5 finished cleanly." }], state);
   assert.deepEqual(shown(state.messages), shown(historyMessages(TURN_HISTORY, 0)));
+});
+
+// ── frames the app shows that the web used to drop ─────────────────────────
+
+// pi-extension index.ts:3073-3076 (provider error mid-turn).
+test("an error frame stops the turn and shows `⚠ code: message`, as the app does", () => {
+  const state = replay([
+    { type: "user_input", id: TURN, text: "Run the checks" },
+    chunk("Partial"),
+    { type: "error", in_reply_to: TURN, code: "provider_error", message: "rate limited" },
+  ]);
+  assert.deepEqual(shown(state.messages), ["user:Run the checks", "assistant:Partial", "assistant:⚠ provider_error: rate limited"]);
+  assert.equal(state.messages[1].isStreaming, false);
+  assert.equal(state.cursor.openId, null);
+  // index.ts:2495-2499 — no in_reply_to; still visible.
+  const unpaired = replay([{ type: "error", code: "unknown_peer", message: "Peer not paired — re-scan QR" }]);
+  assert.deepEqual(shown(unpaired.messages), ["assistant:⚠ unknown_peer: Peer not paired — re-scan QR"]);
+});
+
+// index.ts:5747 — `cancelled` echoes the cancel's target_id.
+test("cancelled closes the stream and drops only an unconfirmed bubble for its target", () => {
+  const pending: WebChatMessage = { id: "cli_9", role: "user", text: "never echoed", timestamp: 1, status: "sending" };
+  let state = replay([{ type: "user_input", id: TURN, text: "Run the checks" }, chunk("Working on it")]);
+  state = apply(state, { type: "user", message: pending });
+  state = replay([{ type: "cancelled", in_reply_to: "can_1", target_id: "cli_9" }], state);
+  assert.deepEqual(shown(state.messages), ["user:Run the checks", "assistant:Working on it"]);
+  assert.equal(state.messages[1].isStreaming, false);
+  // A confirmed prompt stays: cancel is stop-generation, not delete-history.
+  state = replay([{ type: "cancelled", in_reply_to: "can_2", target_id: TURN }], state);
+  assert.deepEqual(shown(state.messages), ["user:Run the checks", "assistant:Working on it"]);
+});
+
+// index.ts:1982 — the Pi says goodbye mid-turn.
+test("bye stops the open segment streaming", () => {
+  const state = replay([chunk("Half an answer"), { type: "bye", reason: "shutdown" }]);
+  assert.equal(state.messages[0].isStreaming, false);
+  assert.equal(state.cursor.openId, null);
+});
+
+// index.ts:741-746 (live echo) and index.ts:6538-6546 (history) carry `images: WireImage[]`.
+test("user images from the echo and from history reach the bubble", () => {
+  const images = [{ data: "iVBORw0KGgo=", mime: "image/png" }];
+  const live = replay([{ type: "user_message", id: "app_1", text: "what is this?", images }]);
+  assert.deepEqual(live.messages[0].image, { data: "iVBORw0KGgo=", mime: "image/png" });
+  const hist = historyMessages([{ ts: 1, type: "user_input", id: "app_1", text: "", images }], 0);
+  assert.deepEqual(hist[0].image, { data: "iVBORw0KGgo=", mime: "image/png" });
+  // Text-only frames carry no `images` key and get no image.
+  assert.equal(replay([{ type: "user_input", id: "t", text: "hi" }]).messages[0].image, undefined);
+});
+
+test("an echo without images keeps the image of the bubble it confirms", () => {
+  const image = { data: "iVBORw0KGgo=", mime: "image/png" };
+  let state = apply(EMPTY_CHAT, { type: "user", message: { id: "app_1", role: "user", text: "x", timestamp: 1, status: "sending", image } });
+  state = replay([{ type: "user_message", id: "app_1", text: "x" }], state);
+  assert.deepEqual(state.messages[0].image, image);
+  assert.equal(state.messages[0].status, "sent");
+});
+
+// index.ts:6653-6655 — a result whose request fell outside the history window.
+test("a tool_result without its request still shows, as an unknown tool", () => {
+  const hist = historyMessages([{ ts: 1, type: "tool_result", tool_call_id: "toolu_0", result: "ok" }], 0);
+  assert.deepEqual(shown(hist), ["tool:toolu_0:done"]);
+  assert.equal(hist[0].tool?.tool, "unknown");
+  const live = replay([chunk("text"), toolResult("toolu_x", "late")]);
+  assert.deepEqual(shown(live.messages), ["assistant:text", "tool:toolu_x:done"]);
+  assert.equal(live.cursor.openId, null);
+});
+
+test("a history resync keeps sends the Pi has not recorded yet", () => {
+  let state = apply(EMPTY_CHAT, { type: "user", message: { id: "cli_5", role: "user", text: "still sending", timestamp: 1, status: "sending" } });
+  state = replay([{ type: "session_history", events: TURN_HISTORY.slice(0, 2) }], state);
+  assert.deepEqual(shown(state.messages).slice(-1), ["user:still sending"]);
+  // Once history holds it (same text), the pending copy is not kept twice.
+  state = replay(
+    [{ type: "session_history", events: [...TURN_HISTORY.slice(0, 2), { ts: 3, type: "user_input", id: "pi_7", text: "still sending" }] }],
+    state
+  );
+  assert.deepEqual(shown(state.messages).filter((s) => s === "user:still sending"), ["user:still sending"]);
+});
+
+test("Stop targets the running turn even before any text streamed (app cancelTargetId)", () => {
+  const state = replay([{ type: "user_input", id: TURN, text: "Run the checks" }, toolRequest("toolu_1", "bash", { command: "ls" })]);
+  assert.equal(cancelTargetId(state, true), TURN);
+  assert.equal(cancelTargetId(EMPTY_CHAT, true), "working");
+  assert.equal(cancelTargetId(state, false), null);
 });

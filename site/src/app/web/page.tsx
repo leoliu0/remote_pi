@@ -2,18 +2,20 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  buildRoomCommand,
   loadCachedRooms,
   loadOwnerIdentity,
   loadVerifiedMesh,
   PairedSession,
+  parseModelsList,
   peersFromMesh,
   PeerPresence,
+  requestRoomAction,
   saveCachedRooms,
   saveOwnerSeed,
   signOut,
   syncMesh,
-  type RoomCommand,
+  type ModelsCatalogue,
+  type RoomAction,
 } from "@/components/web/web-client";
 import type { OwnerIdentity } from "@/components/web/mesh";
 import type { WebLoginPayload } from "@/components/web/web-login-crypto";
@@ -40,7 +42,7 @@ import { HomeView } from "@/components/web/home-view";
 import { SignInScreen } from "@/components/web/sign-in-screen";
 import { WebChat } from "@/components/web/web-chat";
 import { SessionInfoModal } from "@/components/web/session-info-modal";
-import { QuickActionsModal } from "@/components/web/quick-actions-modal";
+import { QuickActionsModal, type ToolDisplayMode } from "@/components/web/quick-actions-modal";
 import { SettingsModal } from "@/components/web/settings-modal";
 
 type View = "boot" | "signin" | "home" | "chat";
@@ -60,6 +62,8 @@ export default function WebPage() {
   const [showSessionInfo, setShowSessionInfo] = useState(false);
   const [showQuickActions, setShowQuickActions] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  // A failed quick action (action_error / timeout), shown like the app's snackbar.
+  const [actionError, setActionError] = useState<string | null>(null);
 
   // Control frames and debounce timers need the latest state synchronously.
   const roomsRef = useRef(rooms);
@@ -219,25 +223,38 @@ export default function WebPage() {
     setView("home");
   };
 
-  const handleQuickAction = (action: string, payload?: string) => {
-    if (!activeSession || !connection) return;
-    const send = (cmd: RoomCommand) =>
-      connection.sendInner(activeSession.remoteEpk, activeSession.roomId, buildRoomCommand(cmd));
-    if (action === "set_model" && payload) {
-      send({ action: "set_model", model: payload });
-    } else if (action === "set_thinking" && payload) {
-      send({ action: "set_thinking", thinking: payload });
-    } else if (action === "compact") {
-      send({ action: "compact" });
-    } else if (action === "new_session") {
-      send({ action: "new_session" });
-    } else if (action === "set_tool_display" && payload) {
-      try {
-        localStorage.setItem("remotepi_tool_display", payload);
-        window.dispatchEvent(new Event("tool_display_changed"));
-      } catch {}
-    }
+  const activeEpk = activeSession?.remoteEpk;
+  const activeRoomId = activeSession?.roomId;
+  const runAction = useCallback(
+    (cmd: RoomAction) =>
+      connection && activeEpk && activeRoomId
+        ? requestRoomAction(connection, activeEpk, activeRoomId, cmd)
+        : Promise.reject(new Error("Not connected")),
+    [connection, activeEpk, activeRoomId],
+  );
+
+  const handleQuickAction = (cmd: RoomAction) => {
+    runAction(cmd).catch((err: unknown) => setActionError(err instanceof Error ? err.message : String(err)));
   };
+
+  const loadModels = useCallback(
+    (): Promise<ModelsCatalogue> =>
+      runAction({ action: "list_models" }).then((frame) => parseModelsList(frame) ?? { models: [], current: null }),
+    [runAction],
+  );
+
+  const handleSetToolDisplay = (mode: ToolDisplayMode) => {
+    try {
+      localStorage.setItem("remotepi_tool_display", mode);
+      window.dispatchEvent(new Event("tool_display_changed"));
+    } catch {}
+  };
+
+  useEffect(() => {
+    if (!actionError) return;
+    const timer = window.setTimeout(() => setActionError(null), 6000);
+    return () => window.clearTimeout(timer);
+  }, [actionError]);
 
   if (view === "boot" || !relayUrl) {
     return (
@@ -310,7 +327,18 @@ export default function WebPage() {
           activeThinking={activeRoom?.thinking ?? activeSession?.thinking}
           onClose={() => setShowQuickActions(false)}
           onAction={handleQuickAction}
+          onLoadModels={loadModels}
+          onSetToolDisplay={handleSetToolDisplay}
         />
+      )}
+
+      {actionError && (
+        <div
+          role="alert"
+          className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[60] max-w-md px-4 py-2.5 rounded-xl bg-red-950/90 border border-red-500/40 text-red-200 text-xs font-mono shadow-2xl"
+        >
+          Action failed: {actionError}
+        </div>
       )}
 
       {showSettings && (

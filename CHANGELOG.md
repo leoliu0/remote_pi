@@ -32,6 +32,9 @@ and 27 (see [`plan/`](plan/) directory for design history).
 - Eliminated vertical gaps and leaked reasoning traces in mobile chat by filtering empty assistant turns and stripping unclosed `<think>` blocks in finalized messages.
 - Added authentic terminal Braille spinner (`⠋⠙⠹...`), text shimmer wave animation, and inline interactive `[■ Stop]` cancel button to the mobile working indicator.
 - Added global rooms discovery to relay (`all_rooms`) for empty-peer checks and updated web client relay bridge connection handling.
+- Web client: `error`, `cancelled` and `bye` frames now stop the working state and close the streamed reply; `error` shows a `⚠ code: message` row as the app does. Stop works before any text has streamed.
+- Web client: images on `user_message`/`user_input` (live and in history) render in the user bubble. A `tool_result` whose request is outside the history window shows as an `unknown` tool. A resync keeps sends that have not been confirmed yet.
+- Web client: the slash menu lists the Pi's `skills_list`. Quick actions load the Pi's real models (`list_models` → `models_list`), send `model_set` with the picked provider and id, offer each model's `thinking_levels`, and show `action_error`/timeout failures instead of dropping them.
 ### Added
 
 #### Owner-key sync (plan/23)

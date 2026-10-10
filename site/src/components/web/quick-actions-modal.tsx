@@ -1,17 +1,35 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { thinkingChoices, type ModelsCatalogue, type RoomAction, type WireModel } from "./web-client";
 
 export type ToolDisplayMode = "brief" | "full" | "hidden";
 
 interface QuickActionsModalProps {
+  /** Display name from the relay's room meta, shown until `list_models` answers. */
   activeModel?: string;
   activeThinking?: string;
   toolDisplay?: ToolDisplayMode;
   onClose: () => void;
-  onAction: (action: string, payload?: string) => void;
-  onSetToolDisplay?: (mode: ToolDisplayMode) => void;
+  /** Sends a typed action; failures surface through the page (app: snackbar). */
+  onAction: (action: RoomAction) => void;
+  /** `list_models` → the Pi's real catalogue (app: QuickActionsViewModel.loadModels). */
+  onLoadModels: () => Promise<ModelsCatalogue>;
+  onSetToolDisplay: (mode: ToolDisplayMode) => void;
 }
+
+const THINKING_LABELS: Record<string, string> = {
+  auto: "auto",
+  off: "off",
+  minimal: "min",
+  low: "low",
+  medium: "med",
+  high: "high",
+  xhigh: "xh",
+  max: "max",
+};
+
+const modelKey = (m: Pick<WireModel, "provider" | "id">) => `${m.provider}/${m.id}`;
 
 export function QuickActionsModal({
   activeModel,
@@ -19,87 +37,44 @@ export function QuickActionsModal({
   toolDisplay = "brief",
   onClose,
   onAction,
+  onLoadModels,
   onSetToolDisplay,
 }: QuickActionsModalProps) {
-  const normalizeModel = (m?: string) => {
-    if (!m) return "google/gemini-3.7-flash";
-    const lower = m.toLowerCase();
-    if (lower.includes("gemini 3.7") || lower.includes("gemini-3.7") || lower.includes("flash")) {
-      return "google/gemini-3.7-flash";
-    }
-    if (lower.includes("gemini 2.5") || lower.includes("gemini-2.5") || lower.includes("pro")) {
-      return "google/gemini-2.5-pro";
-    }
-    if (lower.includes("3.7") || lower.includes("3-7") || lower.includes("sonnet 3.7")) {
-      return "anthropic/claude-3-7-sonnet";
-    }
-    if (lower.includes("3.5") || lower.includes("3-5") || lower.includes("sonnet")) {
-      return "anthropic/claude-3-5-sonnet";
-    }
-    if (lower.includes("o3") || lower.includes("o3-mini")) {
-      return "openai/o3-mini";
-    }
-    if (lower.includes("gpt-4") || lower.includes("4o")) {
-      return "openai/gpt-4o";
-    }
-    if (lower.includes("qwen")) {
-      return "qwen/qwen-2.5-72b";
-    }
-    if (lower.includes("deepseek") || lower.includes("r1")) {
-      return "deepseek/deepseek-r1";
-    }
-    return m;
-  };
-
-  const normalizeThinking = (t?: string) => {
-    if (!t) return "medium";
-    const lower = t.toLowerCase();
-    if (lower === "min" || lower === "minimal") return "minimal";
-    if (lower === "low") return "low";
-    if (lower === "med" || lower === "medium") return "medium";
-    if (lower === "high") return "high";
-    if (lower === "x" || lower === "xhigh" || lower === "extra-high") return "xhigh";
-    if (lower === "off" || lower === "none" || lower === "0") return "off";
-    return "medium";
-  };
-
-  const [selectedModel, setSelectedModel] = useState(normalizeModel(activeModel));
-  const [selectedThinking, setSelectedThinking] = useState(normalizeThinking(activeThinking));
+  const [catalogue, setCatalogue] = useState<ModelsCatalogue | null>(null);
+  const [modelsError, setModelsError] = useState<string | null>(null);
+  const [selectedModel, setSelectedModel] = useState<WireModel | null>(null);
+  const [selectedThinking, setSelectedThinking] = useState(activeThinking);
   const [selectedToolDisplay, setSelectedToolDisplay] = useState<ToolDisplayMode>(toolDisplay);
   const [showModelPicker, setShowModelPicker] = useState(false);
 
-  const models = [
-    { id: "google/gemini-3.7-flash", name: "Gemini 3.7 Flash", tag: "Default", provider: "Google" },
-    { id: "google/gemini-2.5-pro", name: "Gemini 2.5 Pro", tag: "Deep Reasoning", provider: "Google" },
-    { id: "anthropic/claude-3-7-sonnet", name: "Claude 3.7 Sonnet", tag: "Hybrid", provider: "Anthropic" },
-    { id: "anthropic/claude-3-5-sonnet", name: "Claude 3.5 Sonnet", tag: "Coding", provider: "Anthropic" },
-    { id: "openai/gpt-4o", name: "GPT-4o", tag: "OpenAI", provider: "OpenAI" },
-    { id: "openai/o3-mini", name: "o3-mini", tag: "Reasoning", provider: "OpenAI" },
-    { id: "deepseek/deepseek-r1", name: "DeepSeek R1", tag: "Reasoning", provider: "DeepSeek" },
-    { id: "qwen/qwen-2.5-72b", name: "Qwen 2.5 72B", tag: "Fast", provider: "Qwen" },
-  ];
+  useEffect(() => {
+    let alive = true;
+    onLoadModels().then(
+      (result) => {
+        if (!alive) return;
+        setCatalogue(result);
+        setSelectedModel((picked) => picked ?? result.current);
+      },
+      (err: unknown) => {
+        if (alive) setModelsError(err instanceof Error ? err.message : String(err));
+      }
+    );
+    return () => {
+      alive = false;
+    };
+  }, [onLoadModels]);
 
-  const thinkingLevels = [
-    { id: "auto", label: "auto" },
-    { id: "off", label: "off" },
-    { id: "minimal", label: "min" },
-    { id: "low", label: "low" },
-    { id: "medium", label: "med" },
-    { id: "high", label: "high" },
-    { id: "xhigh", label: "xh" },
-    { id: "max", label: "max" },
-  ];
+  const thinkingLevels = thinkingChoices(selectedModel);
+  // A model without the thinking surface greys the row out, as in the app.
+  const thinkingDisabled = selectedModel?.reasoning === false;
   const toolDisplayOptions: Array<{ id: ToolDisplayMode; label: string; desc: string }> = [
     { id: "brief", label: "Brief", desc: "Compact pill" },
     { id: "full", label: "Full", desc: "Expanded card" },
     { id: "hidden", label: "Hidden", desc: "Chat only" },
   ];
 
-  const currentModelObj = models.find((m) => m.id === selectedModel) || {
-    id: selectedModel,
-    name: selectedModel,
-    tag: "Custom",
-  };
+  const currentModelName = selectedModel?.name ?? activeModel ?? "Unknown model";
+  const currentModelTag = selectedModel?.provider ?? "";
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-150">
@@ -124,7 +99,7 @@ export function QuickActionsModal({
           <button
             type="button"
             onClick={() => {
-              onAction("compact");
+              onAction({ action: "compact" });
               onClose();
             }}
             className="w-full p-3 rounded-xl bg-white/[0.02] hover:bg-white/5 border border-white/10 text-left transition-all flex items-center justify-between group cursor-pointer"
@@ -152,7 +127,7 @@ export function QuickActionsModal({
             type="button"
             onClick={() => {
               if (confirm("Start a new session?\n\nThis clears the Pi-side conversation history. The current thread cannot be resumed.")) {
-                onAction("new_session");
+                onAction({ action: "new_session" });
                 onClose();
               }
             }}
@@ -199,23 +174,28 @@ export function QuickActionsModal({
               >
                 <div className="flex items-center gap-2.5 min-w-0">
                   <span className="w-2.5 h-2.5 rounded-full bg-[#4fc3f7] shrink-0" />
-                  <span className="font-medium text-white text-xs truncate">{currentModelObj.name}</span>
+                  <span className="font-medium text-white text-xs truncate">{currentModelName}</span>
                 </div>
-                <span className="text-[10px] px-2 py-0.5 rounded bg-[#4fc3f7]/15 text-[#4fc3f7] font-semibold shrink-0">
-                  {currentModelObj.tag}
-                </span>
+                {currentModelTag && (
+                  <span className="text-[10px] px-2 py-0.5 rounded bg-[#4fc3f7]/15 text-[#4fc3f7] font-semibold shrink-0">
+                    {currentModelTag}
+                  </span>
+                )}
               </button>
             ) : (
               <div className="grid grid-cols-1 gap-1.5 max-h-44 overflow-y-auto pr-1 animate-in fade-in">
-                {models.map((m) => {
-                  const isSelected = selectedModel === m.id;
+                {modelsError && <div className="p-2 text-red-300">Couldn&apos;t load models: {modelsError}</div>}
+                {!modelsError && !catalogue && <div className="p-2 text-[#888]">Loading models…</div>}
+                {catalogue && catalogue.models.length === 0 && <div className="p-2 text-[#888]">The Pi reported no models.</div>}
+                {catalogue?.models.map((m) => {
+                  const isSelected = selectedModel !== null && modelKey(selectedModel) === modelKey(m);
                   return (
                     <button
-                      key={m.id}
+                      key={modelKey(m)}
                       type="button"
                       onClick={() => {
-                        setSelectedModel(m.id);
-                        onAction("set_model", m.id);
+                        setSelectedModel(m);
+                        onAction({ action: "set_model", provider: m.provider, modelId: m.id });
                         setShowModelPicker(false);
                       }}
                       className={`w-full p-2 rounded-xl border flex items-center justify-between transition-all cursor-pointer ${
@@ -229,7 +209,8 @@ export function QuickActionsModal({
                         <span className="font-medium text-xs truncate">{m.name}</span>
                       </div>
                       <span className="text-[10px] px-1.5 py-0.2 rounded bg-white/10 text-[#888] shrink-0 ml-2">
-                        {m.tag}
+                        {m.provider}
+                        {m.reasoning ? " · reasoning" : ""}
                       </span>
                     </button>
                   );
@@ -249,21 +230,22 @@ export function QuickActionsModal({
               </span>
             </div>
             <div className="grid grid-cols-4 sm:grid-cols-8 gap-1">
-              {thinkingLevels.map((t) => (
+              {thinkingLevels.map((level) => (
                 <button
-                  key={t.id}
+                  key={level}
                   type="button"
+                  disabled={thinkingDisabled}
                   onClick={() => {
-                    setSelectedThinking(t.id);
-                    onAction("set_thinking", t.id);
+                    setSelectedThinking(level);
+                    onAction({ action: "set_thinking", thinking: level });
                   }}
-                  className={`py-1.5 px-0.5 text-center rounded-lg border text-[11px] font-mono transition-all cursor-pointer ${
-                    selectedThinking === t.id
+                  className={`py-1.5 px-0.5 text-center rounded-lg border text-[11px] font-mono transition-all cursor-pointer disabled:cursor-not-allowed disabled:opacity-40 ${
+                    selectedThinking === level
                       ? "bg-[#4fc3f7]/20 border-[#4fc3f7]/50 text-[#4fc3f7] font-bold"
                       : "bg-white/[0.02] border-white/10 text-[#888] hover:text-white hover:bg-white/5"
                   }`}
                 >
-                  {t.label}
+                  {THINKING_LABELS[level] ?? level}
                 </button>
               ))}
             </div>
@@ -289,8 +271,7 @@ export function QuickActionsModal({
                   type="button"
                   onClick={() => {
                     setSelectedToolDisplay(opt.id);
-                    if (onSetToolDisplay) onSetToolDisplay(opt.id);
-                    onAction("set_tool_display", opt.id);
+                    onSetToolDisplay(opt.id);
                   }}
                   className={`py-1.5 px-1.5 text-center rounded-lg border text-xs transition-all cursor-pointer ${
                     selectedToolDisplay === opt.id

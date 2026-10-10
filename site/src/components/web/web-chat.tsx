@@ -5,6 +5,7 @@ import {
   PairedSession,
   PeerPresence,
   RemotePiRelayClient,
+  type WireSkill,
 } from "./web-client";
 import { AssistantContent } from "./thinking-block";
 import { readShowThinking, SHOW_THINKING_EVENT } from "./thinking";
@@ -17,7 +18,8 @@ import {
   writeAgentsPanelOpen,
   type AgentBoard,
 } from "./activity";
-import { EMPTY_CHAT, applyChatEvent, type ChatState } from "./chat-stream";
+import { EMPTY_CHAT, applyChatEvent, cancelTargetId, type ChatState } from "./chat-stream";
+import { slashMenuItems } from "./slash-commands";
 import { BrailleSpinner } from "./braille-spinner";
 import type { RelayConnection } from "./relay-connection";
 import { workingLabel } from "./working-label";
@@ -108,6 +110,8 @@ export function WebChat({
   const [pendingPrompt, setPendingPrompt] = useState<PendingPrompt | null>(null);
   const [queuedItems, setQueuedItems] = useState<Array<{ id: string; text: string; editable?: boolean }>>([]);
   const [showThinking, setShowThinking] = useState(readShowThinking);
+  // `skills_list` from the Pi: listed in the slash menu after the commands.
+  const [skills, setSkills] = useState<WireSkill[]>([]);
   // The Agents board belongs to the client (room) it came from, so switching
   // sessions never shows the previous room's jobs.
   const [agents, setAgents] = useState<{ client: RemotePiRelayClient | null; board: AgentBoard }>({
@@ -165,7 +169,6 @@ export function WebChat({
       isInitialLoadRef.current = false;
     }
   }, [messages]);
-  const activeStreamIdRef = useRef<string | null>(null);
 
   // Scroll detection for "Scroll to bottom" button
   const handleScroll = () => {
@@ -223,19 +226,18 @@ export function WebChat({
             }
             break;
           case "user":
+          case "error":
             // Count it as unread when scrolled up, else follow it.
             if (!el) break;
             if (nearBottom) setTimeout(() => scrollToBottom(true), 50);
             else setUnreadCount((c) => c + 1);
             break;
           case "chunk":
-            activeStreamIdRef.current = event.replyTo;
             setIsWorking(true);
             if (nearBottom) scrollToBottom(true);
             break;
           case "done":
             setIsWorking(false);
-            activeStreamIdRef.current = null;
             setTimeout(() => scrollToBottom(true), 50);
             break;
           case "tool_request":
@@ -248,6 +250,8 @@ export function WebChat({
       onExtensionUiRequest: (req) => {
         setPendingPrompt((open) => applyExtensionUiRequest(open, req));
       },
+
+      onSkills: setSkills,
 
       onQueuedState: (items) => {
         setQueuedItems(items);
@@ -307,10 +311,10 @@ export function WebChat({
     setTimeout(() => scrollToBottom(true), 50);
   };
 
+  // Stop works whenever the Pi is working, as in the app (not only once text streams).
   const handleCancelTurn = () => {
-    if (activeStreamIdRef.current) {
-      client.cancelTurn(activeStreamIdRef.current);
-    }
+    const target = cancelTargetId(chat, isWorking);
+    if (target) client.cancelTurn(target);
   };
 
   const handlePromptRespond = (resp: ExtensionUiResponseWire): boolean => {
@@ -536,7 +540,15 @@ export function WebChat({
               {m.role === "user" && (
                 <div className="flex justify-end mb-3">
                   <div className="max-w-[340px] sm:max-w-[420px] rounded-2xl rounded-tr-sm bg-[#1A1A1A] border border-[#262626] px-4 py-2.5 text-white text-sm shadow-xs select-text">
-                    <div className="whitespace-pre-wrap font-mono text-sm leading-relaxed">{m.text}</div>
+                    {m.image && (
+                      // eslint-disable-next-line @next/next/no-img-element -- inline base64 from the Pi, not an optimizable URL
+                      <img
+                        src={`data:${m.image.mime};base64,${m.image.data}`}
+                        alt="Attached image"
+                        className="mb-2 max-h-64 max-w-full rounded-lg"
+                      />
+                    )}
+                    {m.text && <div className="whitespace-pre-wrap font-mono text-sm leading-relaxed">{m.text}</div>}
                     <div className="mt-1 text-[10px] text-[#8A8A8A] text-right font-mono flex items-center justify-end gap-1.5">
                       <span>{new Date(m.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
                       {m.status === "sending" && <span className="text-[#6B6B6B]">⏳</span>}
@@ -630,15 +642,9 @@ export function WebChat({
 
       {/* 4. SLASH COMMAND MENU OVERLAY */}
       {slashMenuOpen && (
-        <div className="absolute left-4 right-4 bottom-24 bg-[#0e1117] border border-white/15 rounded-xl shadow-2xl overflow-hidden z-20 font-mono text-xs">
-          <div className="p-2 bg-white/5 border-b border-white/10 text-[#888]">Available Commands</div>
-          {[
-            { cmd: "/init", desc: "Initialize workspace rules and AGENTS.md" },
-            { cmd: "/plan", desc: "Generate architecture and task breakdown" },
-            { cmd: "/clear", desc: "Clear active timeline mirror" },
-            { cmd: "/model", desc: "Switch reasoning model" },
-            { cmd: "/help", desc: "Show Remote Pi command guide" },
-          ].map((item) => (
+        <div className="absolute left-4 right-4 bottom-24 max-h-80 overflow-y-auto bg-[#0e1117] border border-white/15 rounded-xl shadow-2xl z-20 font-mono text-xs">
+          <div className="p-2 bg-white/5 border-b border-white/10 text-[#888]">Commands &amp; Skills</div>
+          {slashMenuItems(skills).map((item) => (
             <button
               key={item.cmd}
               type="button"
@@ -651,7 +657,10 @@ export function WebChat({
               className="w-full text-left px-3 py-2 hover:bg-[#4fc3f7]/15 flex items-center justify-between text-white cursor-pointer transition-colors"
             >
               <span className="text-[#4fc3f7] font-semibold">{item.cmd}</span>
-              <span className="text-[#888]">{item.desc}</span>
+              <span className="text-[#888] truncate ml-3">
+                {item.category === "Skill" && <span className="mr-1.5 text-[#4fc3f7]/80">Skill</span>}
+                {item.desc}
+              </span>
             </button>
           ))}
         </div>

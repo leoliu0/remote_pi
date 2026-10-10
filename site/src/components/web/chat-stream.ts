@@ -45,7 +45,13 @@ export type ChatEvent =
   | { type: "final"; replyTo: string; text: string }
   | { type: "tool_request"; tool: ToolCallData }
   | { type: "tool_result"; toolCallId: string; outcome: ToolOutcome }
-  | { type: "compaction"; summary: string; tokensBefore: number };
+  | { type: "compaction"; summary: string; tokensBefore: number }
+  /** `error`: the turn stops and a `⚠ code: message` row is shown, as in the app. */
+  | { type: "error"; code: string; message: string }
+  /** `cancelled`: the turn stops; an unconfirmed bubble for `targetId` is dropped. */
+  | { type: "cancelled"; targetId: string }
+  /** `bye`: the Pi went away mid-turn; the open segment stops streaming. */
+  | { type: "bye"; reason: string };
 
 const IDLE_CURSOR: StreamCursor = { replyTo: null, openId: null, segmentIds: [], segmentsAtLastTool: 0, seq: 0 };
 
@@ -54,6 +60,25 @@ export const EMPTY_CHAT: ChatState = { messages: [], cursor: IDLE_CURSOR };
 /** Visible answer text: thinking removed, whitespace collapsed. */
 function plainText(text: string): string {
   return stripThinking(text).replace(/\s+/g, " ").trim();
+}
+
+/** The first `images` entry of a user frame (`WireImage {data, mime}`), as the app keeps it. */
+function firstImage(images: unknown): WebChatMessage["image"] {
+  if (!Array.isArray(images)) return undefined;
+  const img = images[0] as Record<string, unknown> | undefined;
+  if (!img || typeof img.data !== "string" || typeof img.mime !== "string" || !img.data) return undefined;
+  return { data: img.data, mime: img.mime };
+}
+
+/** A `tool_result` with no `tool_request` on screen still shows, as an `unknown` tool (app parity). */
+function orphanToolMessage(id: string, toolCallId: string, outcome: ToolOutcome, timestamp: number): WebChatMessage {
+  return {
+    id,
+    role: "tool",
+    text: "unknown",
+    timestamp,
+    tool: { id: toolCallId, tool: "unknown", status: outcome.isError ? "error" : "done", output: outcome.output },
+  };
 }
 
 function closeSegment(state: ChatState): ChatState {
@@ -131,9 +156,17 @@ function applyFinal(state: ChatState, replyTo: string, text: string, now: number
 
 export function applyChatEvent(state: ChatState, event: ChatEvent, now: number): ChatState {
   switch (event.type) {
-    case "history":
+    case "history": {
       if (event.messages.length === 0) return state;
-      return { messages: event.messages, cursor: { ...IDLE_CURSOR, seq: state.cursor.seq } };
+      // Sends the Pi has not put in its history yet stay at the end, as in the app.
+      const pending = state.messages.filter(
+        (m) =>
+          m.role === "user" &&
+          m.status === "sending" &&
+          !event.messages.some((h) => h.role === "user" && (h.id === m.id || h.text === m.text))
+      );
+      return { messages: [...event.messages, ...pending], cursor: { ...IDLE_CURSOR, seq: state.cursor.seq } };
+    }
 
     case "user": {
       const { message } = event;
@@ -171,6 +204,10 @@ export function applyChatEvent(state: ChatState, event: ChatEvent, now: number):
 
     case "tool_result": {
       const { output, isError } = event.outcome;
+      if (!state.messages.some((m) => m.tool && m.tool.id === event.toolCallId)) {
+        const s = closeSegment(state);
+        return { ...s, messages: [...s.messages, orphanToolMessage(`tool-${event.toolCallId}`, event.toolCallId, event.outcome, now)] };
+      }
       return {
         ...state,
         messages: state.messages.map((m) =>
@@ -192,6 +229,29 @@ export function applyChatEvent(state: ChatState, event: ChatEvent, now: number):
       };
       return { ...s, messages: [...s.messages, message] };
     }
+
+    case "error": {
+      const s = closeSegment(state);
+      const message: WebChatMessage = {
+        id: `err-${now}-${s.cursor.seq}`,
+        role: "assistant",
+        text: `⚠ ${event.code}: ${event.message}`,
+        timestamp: now,
+      };
+      return { messages: [...s.messages, message], cursor: { ...s.cursor, seq: s.cursor.seq + 1 } };
+    }
+
+    case "cancelled": {
+      // Stop, not delete: only a bubble the Pi never confirmed goes away.
+      const s = closeSegment(state);
+      return {
+        ...s,
+        messages: s.messages.filter((m) => !(m.role === "user" && m.status === "sending" && m.id === event.targetId)),
+      };
+    }
+
+    case "bye":
+      return closeSegment(state);
   }
 }
 
@@ -217,7 +277,15 @@ export function historyMessages(events: unknown[], now: number): WebChatMessage[
     const eventId = (ev.id as string) || (ev.tool_call_id as string);
     const ts = (ev.ts as number) || now;
     if (ev.type === "user_input") {
-      out.push({ id: eventId || `hist-user-${ts}-${i}`, role: "user", text: (ev.text as string) || "", timestamp: ts, status: "sent" });
+      const image = firstImage(ev.images);
+      out.push({
+        id: eventId || `hist-user-${ts}-${i}`,
+        role: "user",
+        text: (ev.text as string) || "",
+        timestamp: ts,
+        status: "sent",
+        ...(image ? { image } : {}),
+      });
     } else if (ev.type === "agent_message") {
       out.push({ id: eventId || `hist-asst-${ts}-${i}`, role: "assistant", text: (ev.text as string) || "", timestamp: ts });
     } else if (ev.type === "tool_request") {
@@ -225,11 +293,15 @@ export function historyMessages(events: unknown[], now: number): WebChatMessage[
       tools.set(tool.id, tool);
       out.push({ id: `hist-tool-${tool.id}-${i}`, role: "tool", text: `${ev.tool}: ${JSON.stringify(ev.args || {})}`, timestamp: ts, tool });
     } else if (ev.type === "tool_result") {
-      const tool = tools.get(ev.tool_call_id as string);
+      const toolCallId = (ev.tool_call_id as string) || `tc_${ts}_${i}`;
+      const tool = tools.get(toolCallId);
+      const outcome = toolOutcome(ev.result, ev.error);
       if (tool) {
-        const { output, isError } = toolOutcome(ev.result, ev.error);
-        tool.output = output;
-        tool.status = isError ? "error" : "done";
+        tool.output = outcome.output;
+        tool.status = outcome.isError ? "error" : "done";
+      } else {
+        // Its request fell outside the history window: show it anyway, as the app does.
+        out.push(orphanToolMessage(`hist-tool-${toolCallId}-${i}`, toolCallId, outcome, ts));
       }
     } else if (ev.type === "compaction") {
       out.push({
@@ -253,7 +325,8 @@ export function chatEventFromFrame(frame: Record<string, unknown>, now: number):
     // _echoUserMessage) and a terminal prompt as `user_input`; both confirm the
     // optimistic bubble by id or add the other device's row, as in the app.
     case "user_input":
-    case "user_message":
+    case "user_message": {
+      const image = firstImage(frame.images);
       return {
         type: "user",
         message: {
@@ -262,8 +335,10 @@ export function chatEventFromFrame(frame: Record<string, unknown>, now: number):
           text: (frame.text as string) || "",
           timestamp: now,
           status: "sent",
+          ...(image ? { image } : {}),
         },
       };
+    }
     case "agent_chunk":
       return { type: "chunk", replyTo: (frame.in_reply_to as string) || "", delta: (frame.delta as string) || "" };
     case "agent_done":
@@ -280,7 +355,29 @@ export function chatEventFromFrame(frame: Record<string, unknown>, now: number):
         summary: (frame.summary as string) || "Context compacted",
         tokensBefore: (frame.tokens_before as number) || 0,
       };
+    case "error":
+      return {
+        type: "error",
+        code: typeof frame.code === "string" && frame.code ? frame.code : "error",
+        message: typeof frame.message === "string" ? frame.message : "",
+      };
+    case "cancelled":
+      return { type: "cancelled", targetId: typeof frame.target_id === "string" ? frame.target_id : "" };
+    case "bye":
+      return { type: "bye", reason: typeof frame.reason === "string" ? frame.reason : "" };
     default:
       return null;
   }
+}
+
+/**
+ * What the Stop button cancels while the Pi is working: the turn's user
+ * message id, else `"working"` (the app's ChatViewModel.cancelTargetId).
+ * The Pi aborts the running turn whatever the id; it only echoes it back in
+ * `cancelled.target_id`.
+ */
+export function cancelTargetId(state: ChatState, working: boolean): string | null {
+  if (!working) return null;
+  const lastUser = state.messages.findLast((m) => m.role === "user");
+  return lastUser?.id ?? state.cursor.replyTo ?? "working";
 }

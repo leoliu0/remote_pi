@@ -203,13 +203,18 @@ export type RoomCommand =
   | { action: "clear_queued"; targetId?: string }
   | { action: "cancel"; targetId: string }
   | { action: "sync" }
-  | { action: "set_model"; model: string }
+  | { action: "list_models" }
+  | { action: "set_model"; provider: string; modelId: string }
   | { action: "set_thinking"; thinking: string }
   | { action: "compact" }
   | { action: "new_session" };
 
+// Keeps action ids unique within one millisecond: replies are matched by id.
+let actionSeq = 0;
+
 export function buildRoomCommand(cmd: RoomCommand): InnerFrame {
   const now = Date.now();
+  const actionId = `act_${now}_${++actionSeq}`;
   switch (cmd.action) {
     case "send_message":
       return { type: "user_message", id: cmd.id, text: cmd.text };
@@ -221,17 +226,155 @@ export function buildRoomCommand(cmd: RoomCommand): InnerFrame {
       return { type: "cancel", id: `can_${now}`, target_id: cmd.targetId };
     case "sync":
       return { type: "session_sync", id: `sync_${now}`, limit: 1000 };
-    case "set_model": {
-      const [provider, modelId] = cmd.model.includes("/") ? cmd.model.split("/") : ["google", cmd.model];
-      return { type: "model_set", id: `act_${now}`, provider, model_id: modelId };
-    }
+    case "list_models":
+      return { type: "list_models", id: actionId };
+    case "set_model":
+      return { type: "model_set", id: actionId, provider: cmd.provider, model_id: cmd.modelId };
     case "set_thinking":
-      return { type: "thinking_set", id: `act_${now}`, level: cmd.thinking };
+      return { type: "thinking_set", id: actionId, level: cmd.thinking };
     case "compact":
-      return { type: "session_compact", id: `act_${now}` };
+      return { type: "session_compact", id: actionId };
     case "new_session":
-      return { type: "session_new", id: `act_${now}` };
+      return { type: "session_new", id: actionId };
   }
+}
+
+// ── typed actions (quick actions sheet; the app's ActionsRepository) ────────
+
+/** One `models_list` row (pi-extension protocol/types.ts `WireModel`). */
+export interface WireModel {
+  id: string;
+  name: string;
+  provider: string;
+  reasoning: boolean;
+  context_window: number;
+  vision: boolean;
+  thinking_levels?: string[];
+}
+
+export interface ModelsCatalogue {
+  models: WireModel[];
+  current: WireModel | null;
+}
+
+function parseWireModel(raw: unknown): WireModel | null {
+  if (!raw || typeof raw !== "object") return null;
+  const m = raw as Record<string, unknown>;
+  if (typeof m.id !== "string" || typeof m.provider !== "string") return null;
+  return {
+    id: m.id,
+    name: typeof m.name === "string" && m.name ? m.name : m.id,
+    provider: m.provider,
+    reasoning: m.reasoning === true,
+    context_window: typeof m.context_window === "number" ? m.context_window : 0,
+    vision: m.vision === true,
+    ...(Array.isArray(m.thinking_levels)
+      ? { thinking_levels: m.thinking_levels.filter((l): l is string => typeof l === "string") }
+      : {}),
+  };
+}
+
+/** `models_list` → the picker's catalogue (`current` is the model the Pi uses now). */
+export function parseModelsList(frame: Record<string, unknown>): ModelsCatalogue | null {
+  if (frame.type !== "models_list" || !Array.isArray(frame.models)) return null;
+  return {
+    models: frame.models.map(parseWireModel).filter((m): m is WireModel => m !== null),
+    current: parseWireModel(frame.current),
+  };
+}
+
+const ALL_THINKING_LEVELS = ["auto", "off", "minimal", "low", "medium", "high", "xhigh", "max"];
+
+/**
+ * Thinking levels the sheet offers for `model`: its `thinking_levels` when the
+ * Pi sent them, else every level (app QuickActionsViewModel.supportedThinkingLevels).
+ */
+export function thinkingChoices(model: WireModel | null): string[] {
+  const levels = model?.thinking_levels;
+  return levels && levels.length > 0 ? levels : ALL_THINKING_LEVELS;
+}
+
+/**
+ * The reply a typed action waits for: `action_ok` / `models_list`, or the
+ * failure an `action_error` (or an `error` for `list_models`) carries.
+ */
+export type ActionReply =
+  | { inReplyTo: string; ok: true; frame: Record<string, unknown> }
+  | { inReplyTo: string; ok: false; error: string };
+
+export function actionReplyFromFrame(frame: Record<string, unknown>): ActionReply | null {
+  const inReplyTo = typeof frame.in_reply_to === "string" ? frame.in_reply_to : null;
+  if (!inReplyTo) return null;
+  switch (frame.type) {
+    case "action_ok":
+    case "models_list":
+      return { inReplyTo, ok: true, frame };
+    case "action_error":
+      return { inReplyTo, ok: false, error: typeof frame.error === "string" && frame.error ? frame.error : "action failed" };
+    case "error":
+      return { inReplyTo, ok: false, error: typeof frame.message === "string" && frame.message ? frame.message : String(frame.code ?? "error") };
+    default:
+      return null;
+  }
+}
+
+/** Same budget as the app's ActionsRepository. */
+export const ACTION_TIMEOUT_MS = 15_000;
+
+/** The typed actions the quick actions sheet sends. */
+export type RoomAction = Extract<RoomCommand, { action: "list_models" | "set_model" | "set_thinking" | "compact" | "new_session" }>;
+
+/**
+ * Sends one typed action to `(peer, room)` and resolves with its reply frame,
+ * or rejects with the Pi's error text (`action_error`), "timeout", or
+ * "Not connected" — never silently, so the UI can surface every failure.
+ */
+export function requestRoomAction(
+  conn: Pick<RelayConnection, "onInner" | "sendInner">,
+  peer: string,
+  room: string,
+  cmd: RoomAction,
+  timeoutMs = ACTION_TIMEOUT_MS
+): Promise<Record<string, unknown>> {
+  const frame = buildRoomCommand(cmd);
+  const id = frame.id as string;
+  const wantPeer = toStandardB64(peer);
+  const { promise, resolve, reject } = Promise.withResolvers<Record<string, unknown>>();
+  const timer = setTimeout(() => {
+    unsubscribe();
+    reject(new Error("timeout"));
+  }, timeoutMs);
+  const unsubscribe = conn.onInner((fromPeer, fromRoom, inner) => {
+    if (toStandardB64(fromPeer) !== wantPeer || fromRoom !== room) return;
+    const reply = actionReplyFromFrame(inner);
+    if (!reply || reply.inReplyTo !== id) return;
+    unsubscribe();
+    clearTimeout(timer);
+    if (reply.ok) resolve(reply.frame);
+    else reject(new Error(reply.error));
+  });
+  if (!conn.sendInner(peer, room, frame)) {
+    unsubscribe();
+    clearTimeout(timer);
+    reject(new Error("Not connected"));
+  }
+  return promise;
+}
+
+/** `skills_list` → the Pi's live skills, for the slash menu. */
+export interface WireSkill {
+  name: string;
+  description: string;
+}
+
+export function parseSkillsList(frame: Record<string, unknown>): WireSkill[] | null {
+  if (frame.type !== "skills_list" || !Array.isArray(frame.skills)) return null;
+  return frame.skills.flatMap((raw) => {
+    if (!raw || typeof raw !== "object") return [];
+    const s = raw as Record<string, unknown>;
+    if (typeof s.name !== "string" || !s.name) return [];
+    return [{ name: s.name, description: typeof s.description === "string" ? s.description : "" }];
+  });
 }
 
 // ── chat client bound to one (PC, room) over the shared relay link ──────────
@@ -243,7 +386,8 @@ export interface ChatClientEvents {
   onChatEvent?: (event: ChatEvent) => void;
   /** Plan/57 — interactive prompt (ask_user / plan review) or its notify dismiss. */
   onExtensionUiRequest?: (req: ExtensionUiRequest) => void;
-  onRoomMeta?: (meta: { model?: string; thinking?: string; working?: boolean }) => void;
+  /** `skills_list` (sent after every session_sync): the Pi's skills for the slash menu. */
+  onSkills?: (skills: WireSkill[]) => void;
   onQueuedState?: (items: Array<{ id: string; text: string; editable?: boolean }>) => void;
   /** Full `agent_activity` snapshot: replaces the panel's rows. */
   onActivity?: (jobs: AgentActivityJob[]) => void;
@@ -306,28 +450,37 @@ export class RemotePiRelayClient {
         this.events.onPresenceChange?.("working");
         break;
 
+      // A prompt echo starts the turn (app: UserInput → _setWorking(true));
+      // a steer joins the running turn instead.
+      case "user_input":
+      case "user_message":
+        if (msg.streaming_behavior !== "steer") this.events.onPresenceChange?.("working");
+        break;
+
+      // The turn is over: `error` and `cancelled` stop it like `agent_done`
+      // (app: _setWorking(false)); `bye` means the Pi itself went away.
       case "agent_message":
       case "agent_done":
+      case "error":
+      case "cancelled":
         this.events.onPresenceChange?.("online");
         break;
+
+      case "bye":
+        this.events.onPresenceChange?.("offline");
+        break;
+
+      case "skills_list": {
+        const skills = parseSkillsList(msg);
+        if (skills) this.events.onSkills?.(skills);
+        break;
+      }
 
       case "extension_ui_request": {
         const req = parseExtensionUiRequest(msg);
         if (req) this.events.onExtensionUiRequest?.(req);
         break;
       }
-
-      case "room_meta_updated":
-      case "room_meta":
-        if (msg.meta && typeof msg.meta === "object") {
-          const meta = msg.meta as Record<string, unknown>;
-          this.events.onRoomMeta?.({
-            model: typeof meta.model === "string" ? meta.model : undefined,
-            thinking: typeof meta.thinking === "string" ? meta.thinking : undefined,
-            working: typeof meta.working === "boolean" ? meta.working : undefined,
-          });
-        }
-        break;
 
       case "queued_message_state":
         if (Array.isArray(msg.items)) {
