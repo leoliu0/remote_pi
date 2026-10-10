@@ -943,3 +943,119 @@ async fn rooms_check_reflects_updated_model() {
         "rooms_check must show updated model"
     );
 }
+
+/// Reads frames from `ws` until one with `type == ty` arrives (1 s cap).
+async fn recv_type(ws: &mut common::WsStream, ty: &str) -> serde_json::Value {
+    let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(1);
+    loop {
+        let msg = tokio::time::timeout_at(deadline, ws.next())
+            .await
+            .unwrap_or_else(|_| panic!("timed out waiting for {ty}"))
+            .unwrap()
+            .unwrap();
+        let Ok(text) = msg.to_text() else { continue };
+        let v: serde_json::Value = serde_json::from_str(text).unwrap();
+        if v["type"] == ty {
+            return v;
+        }
+    }
+}
+
+/// Live defect 2026-10-10 (D1): the phone and every /web tab share the owner
+/// key. When one of those devices disconnected, the relay dropped the room
+/// subscriptions of *every* device of that owner, so the remaining tab got no
+/// `room_meta_updated` / `room_announced` until it reconnected. Subscriptions
+/// belong to a connection: one device leaving must not affect another.
+#[tokio::test]
+async fn owner_device_disconnect_keeps_other_device_room_subscription() {
+    let port = start_relay().await;
+    let sk_pi = random_key();
+    let sk_owner = random_key();
+    use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
+    let peer_pi = B64.encode(sk_pi.verifying_key().to_bytes());
+
+    let (mut ws_pi, _) = connect_and_auth_with_key(port, &sk_pi).await; // room "main"
+    let (mut ws_web, _) = connect_and_auth_with_key(port, &sk_owner).await;
+    let (mut ws_phone, _) = connect_and_auth_with_key(port, &sk_owner).await;
+
+    let sub = json!({"type": "subscribe_rooms", "peers": [&peer_pi]}).to_string();
+    ws_web.send(Message::text(sub.clone())).await.unwrap();
+    ws_phone.send(Message::text(sub)).await.unwrap();
+    tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
+
+    // The second device of the same owner goes away.
+    ws_phone.close(None).await.unwrap();
+    drop(ws_phone);
+    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+    // The web tab still receives meta updates for the Pi's room...
+    ws_pi
+        .send(Message::text(
+            json!({"type": "room_meta_update", "room_id": "main", "meta": {"thinking": "high"}})
+                .to_string(),
+        ))
+        .await
+        .unwrap();
+    let v = recv_type(&mut ws_web, "room_meta_updated").await;
+    assert_eq!(v["peer"], peer_pi);
+    assert_eq!(v["room_id"], "main");
+    assert_eq!(v["meta"]["thinking"], "high");
+
+    // ...and announcements of new rooms.
+    let (_ws_pi_work, _) = connect_and_auth_with_room(port, &sk_pi, "work").await;
+    let v = recv_type(&mut ws_web, "room_announced").await;
+    assert_eq!(v["peer"], peer_pi);
+    assert_eq!(v["room_id"], "work");
+}
+
+/// Two devices of the same owner keep independent subscription lists: a
+/// `subscribe_rooms` from one device must not replace the other's list, and
+/// pushes reach only the connections that asked for them.
+#[tokio::test]
+async fn owner_devices_keep_independent_room_subscriptions() {
+    let port = start_relay().await;
+    let sk_pi_a = random_key();
+    let sk_pi_b = random_key();
+    let sk_owner = random_key();
+    use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
+    let peer_pi_a = B64.encode(sk_pi_a.verifying_key().to_bytes());
+    let peer_pi_b = B64.encode(sk_pi_b.verifying_key().to_bytes());
+
+    let (mut ws_pi_a, _) = connect_and_auth_with_key(port, &sk_pi_a).await;
+    let (_ws_pi_b, _) = connect_and_auth_with_key(port, &sk_pi_b).await;
+    let (mut ws_phone, _) = connect_and_auth_with_key(port, &sk_owner).await;
+    let (mut ws_web, _) = connect_and_auth_with_key(port, &sk_owner).await;
+
+    ws_phone
+        .send(Message::text(
+            json!({"type": "subscribe_rooms", "peers": [&peer_pi_a]}).to_string(),
+        ))
+        .await
+        .unwrap();
+    tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
+    ws_web
+        .send(Message::text(
+            json!({"type": "subscribe_rooms", "peers": [&peer_pi_b]}).to_string(),
+        ))
+        .await
+        .unwrap();
+    tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
+
+    ws_pi_a
+        .send(Message::text(
+            json!({"type": "room_meta_update", "room_id": "main", "meta": {"model": "opus"}})
+                .to_string(),
+        ))
+        .await
+        .unwrap();
+    let v = recv_type(&mut ws_phone, "room_meta_updated").await;
+    assert_eq!(v["peer"], peer_pi_a);
+    assert_eq!(v["meta"]["model"], "opus");
+
+    let spurious =
+        tokio::time::timeout(tokio::time::Duration::from_millis(150), ws_web.next()).await;
+    assert!(
+        spurious.is_err(),
+        "web did not subscribe to pi_a and must not receive its frames: {spurious:?}"
+    );
+}

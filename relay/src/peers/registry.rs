@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicU64, Ordering},
@@ -111,10 +111,7 @@ impl PeerRegistry {
                     serde_json::to_value(&room_meta).expect("RoomMeta serialization is infallible");
                 announced["type"] = "room_announced".into();
                 announced["peer"] = peer_id.as_str().into();
-                let msg = announced.to_string();
-                for sub in &room_subs {
-                    self.forward_to_all_rooms_of(sub, Message::Text(msg.clone()));
-                }
+                self.forward_to_conns(&room_subs, Message::Text(announced.to_string()));
             }
         }
 
@@ -126,9 +123,7 @@ impl PeerRegistry {
         if sub_count > 0 {
             if was_offline_before {
                 let msg = serde_json::json!({"type": "peer_online", "peer": peer_id}).to_string();
-                for sub in pres_subs {
-                    self.forward_to_all_rooms_of(&sub, Message::Text(msg.clone()));
-                }
+                self.forward_to_conns(&pres_subs, Message::Text(msg));
                 self.metrics.inc_peer_online_emitted(sub_count);
             } else {
                 self.metrics.inc_peer_online_suppressed(sub_count);
@@ -138,21 +133,24 @@ impl PeerRegistry {
         conn_id
     }
 
-    /// Immediately pushes a `peer_online` to `subscriber` for every peer in
-    /// `peers` that is currently online. Called by the handler right after
-    /// `subscribe_presence` to bridge the gap when a peer subscribed *after*
+    /// Immediately pushes a `peer_online` to conn `subscriber` for every peer
+    /// in `peers` that is currently online. Called by the handler right after
+    /// `subscribe_presence` to bridge the gap when a conn subscribed *after*
     /// its target was already connected.
-    pub fn backfill_presence(&self, subscriber: &str, peers: &[String]) {
+    pub fn backfill_presence(&self, subscriber: u64, peers: &[String]) {
+        let subscriber = HashSet::from([subscriber]);
         for peer in peers {
             if self.is_online(peer) {
                 let msg = serde_json::json!({"type": "peer_online", "peer": peer}).to_string();
-                self.forward_to_all_rooms_of(subscriber, Message::Text(msg));
+                self.forward_to_conns(&subscriber, Message::Text(msg));
             }
         }
     }
 
     /// Removes the connection identified by `conn_id` from the `Vec` at
-    /// `(peer_id, room_id)`. When the `Vec` empties, the entry is removed and
+    /// `(peer_id, room_id)` and drops that connection's presence and room
+    /// subscriptions; other conns of the same peer (the Owner's other
+    /// devices) keep theirs. When the `Vec` empties, the entry is removed and
     /// `room_ended` is broadcast; when the peer has no remaining rooms,
     /// `peer_offline` is also broadcast.
     ///
@@ -162,6 +160,9 @@ impl PeerRegistry {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis() as i64;
+
+        self.rooms.unsubscribe_all(conn_id).await;
+        self.presence.unsubscribe_all(conn_id).await;
 
         let (room_emptied, peer_offlined) = {
             let mut lock = self.senders.lock().unwrap();
@@ -190,9 +191,7 @@ impl PeerRegistry {
                     "since_ts": now_ms,
                 })
                 .to_string();
-                for sub in &room_subs {
-                    self.forward_to_all_rooms_of(sub, Message::Text(msg.clone()));
-                }
+                self.forward_to_conns(&room_subs, Message::Text(msg));
             }
         }
 
@@ -205,12 +204,9 @@ impl PeerRegistry {
                     "since_ts": now_ms,
                 })
                 .to_string();
-                for sub in pres_subs {
-                    self.forward_to_all_rooms_of(&sub, Message::Text(msg.clone()));
-                }
+                self.forward_to_conns(&pres_subs, Message::Text(msg));
             }
             self.presence.record_offline(peer_id, now_ms).await;
-            self.presence.unsubscribe_all(peer_id).await;
         }
     }
 
@@ -374,23 +370,22 @@ impl PeerRegistry {
                 "meta": serde_json::Value::Object(meta_obj),
             })
             .to_string();
-            for sub in &room_subs {
-                self.forward_to_all_rooms_of(sub, Message::Text(msg.clone()));
-            }
+            self.forward_to_conns(&room_subs, Message::Text(msg));
         }
 
         true
     }
 
-    /// Sends `msg` to every live connection of `peer_id` across all rooms.
+    /// Sends `msg` to every live connection whose `conn_id` is in `conn_ids`.
     /// Used for control-frame pushes (`peer_online`/`peer_offline`,
-    /// `room_announced`/`room_ended`, `room_meta_updated`) where the
-    /// subscriber's room isn't known in advance.
-    fn forward_to_all_rooms_of(&self, peer_id: &str, msg: Message) {
+    /// `room_announced`/`room_ended`, `room_meta_updated`): subscriptions
+    /// belong to the connection that sent them, so only that connection is
+    /// addressed, never every device sharing its peer_id.
+    fn forward_to_conns(&self, conn_ids: &HashSet<u64>, msg: Message) {
         let lock = self.senders.lock().unwrap();
-        for ((p, _), v) in lock.iter() {
-            if p == peer_id {
-                for (_, _, tx) in v.iter() {
+        for v in lock.values() {
+            for (cid, _, tx) in v.iter() {
+                if conn_ids.contains(cid) {
                     let _ = tx.send(msg.clone());
                 }
             }
@@ -599,8 +594,8 @@ mod tests {
 
         // App is online and subscribes to Pi's presence.
         let (tx_app, mut rx_app) = mpsc::unbounded_channel::<Message>();
-        let _ = reg.register(app.clone(), make_meta("main"), tx_app).await;
-        presence.subscribe(app.clone(), vec![pi.clone()]).await;
+        let app_conn = reg.register(app.clone(), make_meta("main"), tx_app).await;
+        presence.subscribe(app_conn, vec![pi.clone()]).await;
 
         // First Pi conn → real offline→online → app receives peer_online.
         let (tx_pi_1, _) = mpsc::unbounded_channel::<Message>();
@@ -643,8 +638,8 @@ mod tests {
         let _ = reg.register(pi.clone(), make_meta("main"), tx_pi).await;
 
         let (tx_app, rx_app) = mpsc::unbounded_channel::<Message>();
-        let _ = reg.register(app.clone(), make_meta("main"), tx_app).await;
-        rooms.subscribe(app.clone(), vec![pi.clone()]).await;
+        let app_conn = reg.register(app.clone(), make_meta("main"), tx_app).await;
+        rooms.subscribe(app_conn, vec![pi.clone()]).await;
 
         (reg, pi, rx_app)
     }

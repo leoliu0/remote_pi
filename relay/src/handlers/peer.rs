@@ -200,15 +200,19 @@ async fn handle_peer(socket: WebSocket, peer_addr: SocketAddr, state: AppState) 
 
                             match t {
                                 // ── presence control frames (plano 12) ──
+                                // Subscriptions (presence and rooms) belong to
+                                // this connection (conn_id), not to peer_id:
+                                // the Owner's devices share one key and each
+                                // keeps its own list.
                                 "subscribe_presence" => {
-                                    presence.subscribe(peer_id.clone(), peers.clone()).await;
+                                    presence.subscribe(conn_id, peers.clone()).await;
                                     // Backfill: push peer_online for any already-online
                                     // peers in the list, so subscribers don't have to
                                     // call presence_check to discover current state.
-                                    registry.backfill_presence(&peer_id, &peers);
+                                    registry.backfill_presence(conn_id, &peers);
                                 }
                                 "unsubscribe_presence" => {
-                                    presence.unsubscribe(&peer_id, peers).await;
+                                    presence.unsubscribe(conn_id, peers).await;
                                 }
                                 "presence_check" => {
                                     let states = presence
@@ -236,10 +240,10 @@ async fn handle_peer(socket: WebSocket, peer_addr: SocketAddr, state: AppState) 
 
                                 // ── rooms control frames (plano 17) ──
                                 "subscribe_rooms" => {
-                                    rooms.subscribe(peer_id.clone(), peers).await;
+                                    rooms.subscribe(conn_id, peers).await;
                                 }
                                 "unsubscribe_rooms" => {
-                                    rooms.unsubscribe(&peer_id, peers).await;
+                                    rooms.unsubscribe(conn_id, peers).await;
                                 }
                                 "rooms_check" => {
                                     let target_peers: Vec<(String, Vec<crate::RoomMeta>)> = if peers.is_empty() {
@@ -411,7 +415,7 @@ async fn handle_peer(socket: WebSocket, peer_addr: SocketAddr, state: AppState) 
         }
     }
 
+    // Also drops this connection's presence and room subscriptions.
     registry.unregister(&peer_id, &room_id, conn_id).await;
-    rooms.unsubscribe_all(&peer_id).await;
     info!(peer = %peer_short, room = %room_id, addr = %peer_addr, "disconnected");
 }

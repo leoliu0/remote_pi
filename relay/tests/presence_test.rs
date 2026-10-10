@@ -331,3 +331,102 @@ async fn presence_check_after_change_emits_new_snapshot() {
     assert_eq!(v2["type"], "presence");
     assert_eq!(v2["states"].as_array().unwrap().len(), 2);
 }
+
+/// Reads frames from `ws` until one with `type == ty` arrives (1 s cap).
+async fn recv_type(ws: &mut common::WsStream, ty: &str) -> serde_json::Value {
+    let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(1);
+    loop {
+        let msg = tokio::time::timeout_at(deadline, ws.next())
+            .await
+            .unwrap_or_else(|_| panic!("timed out waiting for {ty}"))
+            .unwrap()
+            .unwrap();
+        let Ok(text) = msg.to_text() else { continue };
+        let v: serde_json::Value = serde_json::from_str(text).unwrap();
+        if v["type"] == ty {
+            return v;
+        }
+    }
+}
+
+/// D1 (2026-10-10): the phone and /web tabs share the owner key. A
+/// `subscribe_presence` from one device must not replace the list of another
+/// device of the same owner.
+#[tokio::test]
+async fn owner_devices_keep_independent_presence_subscriptions() {
+    let port = start_relay().await;
+    let sk_pi_a = random_key();
+    let sk_pi_b = random_key();
+    let sk_owner = random_key();
+    use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
+    let peer_pi_a = B64.encode(sk_pi_a.verifying_key().to_bytes());
+    let peer_pi_b = B64.encode(sk_pi_b.verifying_key().to_bytes());
+
+    let (ws_pi_a, _) = connect_and_auth_with_key(port, &sk_pi_a).await;
+    let (_ws_pi_b, _) = connect_and_auth_with_key(port, &sk_pi_b).await;
+    let (mut ws_phone, _) = connect_and_auth_with_key(port, &sk_owner).await;
+    let (mut ws_web, _) = connect_and_auth_with_key(port, &sk_owner).await;
+
+    ws_phone
+        .send(Message::text(
+            json!({"type": "subscribe_presence", "peers": [&peer_pi_a]}).to_string(),
+        ))
+        .await
+        .unwrap();
+    let bf = recv_type(&mut ws_phone, "peer_online").await;
+    assert_eq!(bf["peer"], peer_pi_a);
+    ws_web
+        .send(Message::text(
+            json!({"type": "subscribe_presence", "peers": [&peer_pi_b]}).to_string(),
+        ))
+        .await
+        .unwrap();
+    let bf = recv_type(&mut ws_web, "peer_online").await;
+    assert_eq!(bf["peer"], peer_pi_b);
+
+    drop(ws_pi_a);
+    let v = recv_type(&mut ws_phone, "peer_offline").await;
+    assert_eq!(v["peer"], peer_pi_a);
+
+    let spurious =
+        tokio::time::timeout(tokio::time::Duration::from_millis(150), ws_web.next()).await;
+    assert!(
+        spurious.is_err(),
+        "web did not subscribe to pi_a and must not receive its frames: {spurious:?}"
+    );
+}
+
+/// One owner device unsubscribing (or disconnecting) must leave the other
+/// device's presence subscription intact.
+#[tokio::test]
+async fn owner_device_unsubscribe_and_disconnect_keep_other_presence_subscription() {
+    let port = start_relay().await;
+    let sk_pi = random_key();
+    let sk_owner = random_key();
+    use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
+    let peer_pi = B64.encode(sk_pi.verifying_key().to_bytes());
+
+    let (ws_pi, _) = connect_and_auth_with_key(port, &sk_pi).await;
+    let (mut ws_web, _) = connect_and_auth_with_key(port, &sk_owner).await;
+    let (mut ws_phone, _) = connect_and_auth_with_key(port, &sk_owner).await;
+
+    let sub = json!({"type": "subscribe_presence", "peers": [&peer_pi]}).to_string();
+    ws_web.send(Message::text(sub.clone())).await.unwrap();
+    ws_phone.send(Message::text(sub)).await.unwrap();
+    tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
+
+    ws_phone
+        .send(Message::text(
+            json!({"type": "unsubscribe_presence", "peers": [&peer_pi]}).to_string(),
+        ))
+        .await
+        .unwrap();
+    tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
+    ws_phone.close(None).await.unwrap();
+    drop(ws_phone);
+    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+    drop(ws_pi);
+    let v = recv_type(&mut ws_web, "peer_offline").await;
+    assert_eq!(v["peer"], peer_pi);
+}

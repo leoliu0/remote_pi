@@ -3,12 +3,15 @@ use std::sync::Arc;
 
 use tokio::sync::Mutex;
 
+/// Subscribers are connections (registry `conn_id`), not peer_ids: the
+/// Owner's phone and every /web tab share one key, and each device keeps its
+/// own watch list.
 #[derive(Debug, Default)]
 struct Inner {
-    /// subscribers_of[X] = set of peer_ids that want push when X connects/disconnects.
-    subscribers_of: HashMap<String, HashSet<String>>,
-    /// subscriptions_by[Y] = set of peer_ids that Y is watching (for efficient cleanup).
-    subscriptions_by: HashMap<String, HashSet<String>>,
+    /// subscribers_of[X] = conn_ids that want push when peer X connects/disconnects.
+    subscribers_of: HashMap<String, HashSet<u64>>,
+    /// subscriptions_by[C] = peer_ids that conn C is watching (for efficient cleanup).
+    subscriptions_by: HashMap<u64, HashSet<String>>,
     /// Epoch-ms timestamp of the most recent disconnect for each peer.
     last_offline_ts: HashMap<String, i64>,
 }
@@ -30,9 +33,9 @@ impl PresenceManager {
         Self::default()
     }
 
-    /// Replaces `subscriber`'s full subscription list with `peers`.
+    /// Replaces conn `subscriber`'s full subscription list with `peers`.
     /// Passing an empty list is equivalent to unsubscribing from everything.
-    pub async fn subscribe(&self, subscriber: String, peers: Vec<String>) {
+    pub async fn subscribe(&self, subscriber: u64, peers: Vec<String>) {
         let mut g = self.inner.lock().await;
         // Remove subscriber from all currently-watched sets.
         if let Some(old) = g.subscriptions_by.remove(&subscriber) {
@@ -48,45 +51,43 @@ impl PresenceManager {
             g.subscribers_of
                 .entry(peer.clone())
                 .or_default()
-                .insert(subscriber.clone());
+                .insert(subscriber);
         }
         if !new_set.is_empty() {
             g.subscriptions_by.insert(subscriber, new_set);
         }
     }
 
-    /// Removes `peers` from `subscriber`'s watched list.
-    pub async fn unsubscribe(&self, subscriber: &str, peers: Vec<String>) {
+    /// Removes `peers` from conn `subscriber`'s watched list.
+    pub async fn unsubscribe(&self, subscriber: u64, peers: Vec<String>) {
         let mut g = self.inner.lock().await;
         for peer in &peers {
             if let Some(set) = g.subscribers_of.get_mut(peer) {
-                set.remove(subscriber);
+                set.remove(&subscriber);
             }
-            if let Some(subs) = g.subscriptions_by.get_mut(subscriber) {
+            if let Some(subs) = g.subscriptions_by.get_mut(&subscriber) {
                 subs.remove(peer);
             }
         }
     }
 
-    /// Removes all subscriptions for `subscriber` (called on disconnect to prevent leaks).
-    pub async fn unsubscribe_all(&self, subscriber: &str) {
+    /// Removes all subscriptions of conn `subscriber` (called when that
+    /// connection closes to prevent leaks).
+    pub async fn unsubscribe_all(&self, subscriber: u64) {
         let mut g = self.inner.lock().await;
-        if let Some(peers) = g.subscriptions_by.remove(subscriber) {
+        if let Some(peers) = g.subscriptions_by.remove(&subscriber) {
             for peer in &peers {
                 if let Some(set) = g.subscribers_of.get_mut(peer) {
-                    set.remove(subscriber);
+                    set.remove(&subscriber);
                 }
             }
         }
     }
 
-    /// Returns everyone who subscribed to `peer`.
-    pub async fn subscribers_of(&self, peer: &str) -> Vec<String> {
+    /// Returns every conn that subscribed to `peer`.
+    pub async fn subscribers_of(&self, peer: &str) -> HashSet<u64> {
         let g = self.inner.lock().await;
-        g.subscribers_of
-            .get(peer)
-            .map(|s| s.iter().cloned().collect())
-            .unwrap_or_default()
+        g.subscribers_of.get(peer).cloned().unwrap_or_default()
     }
 
     /// Builds a presence snapshot for `peers`. `is_online` is called while holding
@@ -132,31 +133,42 @@ mod tests {
     #[tokio::test]
     async fn subscribe_replaces_list() {
         let pm = PresenceManager::new();
-        pm.subscribe("B".into(), vec!["A".into(), "C".into()]).await;
-        assert!(pm.subscribers_of("A").await.contains(&"B".to_string()));
-        assert!(pm.subscribers_of("C").await.contains(&"B".to_string()));
+        pm.subscribe(1, vec!["A".into(), "C".into()]).await;
+        assert!(pm.subscribers_of("A").await.contains(&1));
+        assert!(pm.subscribers_of("C").await.contains(&1));
 
-        // Replace: B now only watches A
-        pm.subscribe("B".into(), vec!["A".into()]).await;
-        assert!(pm.subscribers_of("A").await.contains(&"B".to_string()));
-        assert!(!pm.subscribers_of("C").await.contains(&"B".to_string()));
+        // Replace: conn 1 now only watches A
+        pm.subscribe(1, vec!["A".into()]).await;
+        assert!(pm.subscribers_of("A").await.contains(&1));
+        assert!(!pm.subscribers_of("C").await.contains(&1));
     }
 
     #[tokio::test]
     async fn subscribe_empty_equals_unsubscribe_all() {
         let pm = PresenceManager::new();
-        pm.subscribe("B".into(), vec!["A".into()]).await;
-        pm.subscribe("B".into(), vec![]).await; // empty → clear all
+        pm.subscribe(1, vec!["A".into()]).await;
+        pm.subscribe(1, vec![]).await; // empty → clear all
         assert!(pm.subscribers_of("A").await.is_empty());
     }
 
     #[tokio::test]
     async fn unsubscribe_all_cleans_subscriber_from_sets() {
         let pm = PresenceManager::new();
-        pm.subscribe("B".into(), vec!["A".into(), "C".into()]).await;
-        pm.unsubscribe_all("B").await;
+        pm.subscribe(1, vec!["A".into(), "C".into()]).await;
+        pm.unsubscribe_all(1).await;
         assert!(pm.subscribers_of("A").await.is_empty());
         assert!(pm.subscribers_of("C").await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn subscriptions_are_per_conn() {
+        let pm = PresenceManager::new();
+        pm.subscribe(1, vec!["A".into()]).await;
+        pm.subscribe(2, vec!["B".into()]).await;
+        pm.unsubscribe(2, vec!["A".into()]).await;
+        pm.unsubscribe_all(2).await;
+        assert!(pm.subscribers_of("A").await.contains(&1));
+        assert!(pm.subscribers_of("B").await.is_empty());
     }
 
     #[tokio::test]
