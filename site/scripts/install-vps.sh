@@ -45,6 +45,10 @@ Environment=RELAY_PROXY_HOSTS=178.157.59.181,178-157-59-181.sslip.io
 ExecStart=/opt/node/bin/node server.js
 Restart=always
 RestartSec=3
+# Browser relay tunnels are long-lived SSE streams that never close by
+# themselves, so a graceful stop waited for the 90 s default before SIGKILL:
+# every deploy meant ~1.5 min of downtime. Clients reconnect on their own.
+TimeoutStopSec=5
 
 [Install]
 WantedBy=multi-user.target

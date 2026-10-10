@@ -708,3 +708,9 @@ Existing stored duplicates are not purged by this fix.
 - Found live: the extension echoes prompts as `user_message`; the web only handled `user_input`, so its own bubble stayed ⏳ and phone prompts never showed live. Fixed in bfffb35b; checked with the patched build against the live relay ([own prompt](screens/2026-10-10-web-live-local-fix-own-prompt-confirmed.png), [other device](screens/2026-10-10-web-live-local-fix-other-device-prompt.png); production before the fix: [missing](screens/2026-10-10-web-live-prod-before-fix-other-device-prompt-missing.png)).
 - Agents panel on the real page: [running](screens/2026-10-10-web-live-agents-panel-running.png), [closed by ×](screens/2026-10-10-web-live-agents-closed-by-x.png), [header toggle](screens/2026-10-10-web-live-agents-hidden-header-toggle.png).
 - App: session_history is authoritative, so a leaked live-only row is dropped (d2edf9a0; mutation check: a merge-everything variant fails the test).
+
+### 2026-10-10 - Site down ~80 s on every deploy
+
+- Symptom: during deploys the site returned no response (curl 000) for over a minute; user saw "the site has problem".
+- Cause: `remote-pi-site.service` used the default 90 s TimeoutStopSec, and Next's graceful stop waits for open connections. Browser relay tunnels (SSE) never close by themselves, so each stop hung until SIGKILL (02:06:25 -> 02:07:44Z).
+- Fix: `TimeoutStopSec=5` in the unit written by `site/scripts/install-vps.sh`, applied to the live unit. Timed restart: stop 02:09:29.28, ready 02:09:35.06Z (5.8 s). Browsers reconnect on their own.
