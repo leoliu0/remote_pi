@@ -45,14 +45,21 @@ export interface SdkModelLike {
    *  `("text" | "image")[]`; we read `includes("image")` for the `vision`
    *  flag. Optional here so tests can omit it (treated as text-only). */
   input?: ("text" | "image")[];
-  /** Per-model thinking map (pi ≥0.84). Missing keys = provider default
-   *  (supported); an explicit `null` marks the level unsupported. */
-  thinkingLevelMap?: Partial<Record<string, string | null>>;
+  /** Per-model thinking map (upstream pi ≥0.84). Missing keys = provider
+   *  default (supported); an explicit `null` marks the level unsupported. */
+  thinkingLevelMap?: Partial<Record<string, string | null>> | null;
+  /** omp-only thinking metadata; `efforts` are the levels the model accepts,
+   *  in omp's order. Upstream pi models never carry this key. */
+  thinking?: { efforts?: readonly string[] } | null;
 }
 
-/** All wire thinking levels in picker order. */
+/** All upstream-pi wire thinking levels in picker order. */
 const ALL_THINKING_LEVELS: ThinkingLevel[] = [
   "auto", "off", "minimal", "low", "medium", "high", "xhigh", "max",
+];
+/** omp's effort ladder (`Effort` in omp's catalog); `efforts` only hold these. */
+const OMP_EFFORTS: readonly ThinkingLevel[] = [
+  "minimal", "low", "medium", "high", "xhigh", "max",
 ];
 export const PROVIDER_ALIASES: Record<string, string[]> = {
   openai: ["openai", "openai-codex"],
@@ -69,18 +76,28 @@ export const PROVIDER_ALIASES: Record<string, string[]> = {
   "kimi-code": ["kimi-coding", "moonshotai", "kimi", "kimi-code"],
 };
 
-
-/** Levels a model supports, matching Pi-AI's getSupportedThinkingLevels:
- *  - non-reasoning models only support ["off"]
- *  - reasoning models support ["auto", ...]
- *  - levels explicitly mapped to null are unsupported (e.g. "off": null in Gemini 3.7 Flash)
- *  - "xhigh" and "max" require an explicit non-null mapping in thinkingLevelMap
- *  - standard levels ("off", "minimal", "low", "medium", "high") are supported by default
- */
+/** Levels the host lets the user pick for `model`; non-reasoning → ["off"].
+ *
+ *  omp (`omp`): exactly omp's `getAvailableEffortSelectors()`, the list its
+ *  Shift+Tab cycle and `/effort` walk — `["off", "auto", ...thinking.efforts]`
+ *  in that order (a model without `thinking` gets `["off", "auto"]`).
+ *
+ *  upstream pi: pi-ai's `getSupportedThinkingLevels` plus `"auto"` first —
+ *  a level mapped to `null` is unsupported, "xhigh"/"max" need an explicit
+ *  non-null mapping, the standard levels are supported by default. */
 export function supportedThinkingLevels(
-  model: Pick<SdkModelLike, "reasoning" | "thinkingLevelMap">,
+  model: Pick<SdkModelLike, "reasoning" | "thinkingLevelMap" | "thinking">,
+  omp: boolean = model.thinking !== undefined,
 ): ThinkingLevel[] {
   if (!model.reasoning) return ["off"];
+  if (omp) {
+    const efforts = model.thinking?.efforts ?? [];
+    return [
+      "off",
+      "auto",
+      ...efforts.filter((e): e is ThinkingLevel => OMP_EFFORTS.includes(e as ThinkingLevel)),
+    ];
+  }
   const map = model.thinkingLevelMap;
   return ALL_THINKING_LEVELS.filter((level) => {
     if (level === "auto") return true;
@@ -91,62 +108,11 @@ export function supportedThinkingLevels(
   });
 }
 import { createRequire } from "node:module";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
 const _nodeRequire = createRequire(import.meta.url);
-
-let _cachedBuiltinMaps: Map<string, Partial<Record<string, string | null>>> | null = null;
-
-function _loadBuiltinThinkingMaps(): Map<string, Partial<Record<string, string | null>>> {
-  if (_cachedBuiltinMaps) return _cachedBuiltinMaps;
-  const maps = new Map<string, Partial<Record<string, string | null>>>();
-  try {
-    const candidates = [
-      "/home/leo/.npm-global/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/providers/data",
-      join(homedir(), ".npm-global", "lib", "node_modules", "@earendil-works", "pi-coding-agent", "node_modules", "@earendil-works", "pi-ai", "dist", "providers", "data"),
-    ];
-    for (const p of candidates) {
-      if (existsSync(p)) {
-        for (const file of readdirSync(p)) {
-          if (!file.endsWith(".json")) continue;
-          try {
-            const content = JSON.parse(readFileSync(join(p, file), "utf8")) as Record<string, unknown>;
-            for (const val of Object.values(content)) {
-              if (val && typeof val === "object") {
-                for (const [mid, m] of Object.entries(val as Record<string, unknown>)) {
-                  if (m && typeof m === "object" && (m as { thinkingLevelMap?: unknown }).thinkingLevelMap) {
-                    const tmap = (m as { thinkingLevelMap: Partial<Record<string, string | null>> }).thinkingLevelMap;
-                    maps.set(mid.toLowerCase(), tmap);
-                    if (mid.includes("/")) {
-                      maps.set(mid.split("/").pop()!.toLowerCase(), tmap);
-                    }
-                  }
-                }
-              }
-            }
-          } catch {}
-        }
-        break;
-      }
-    }
-  } catch {}
-  _cachedBuiltinMaps = maps;
-  return maps;
-}
-
-export function _resolveThinkingLevelMap(
-  id?: string,
-  provider?: string,
-  explicitMap?: Partial<Record<string, string | null>>,
-): Partial<Record<string, string | null>> | undefined {
-  if (explicitMap) return explicitMap;
-  const cleanId = (id || "").toLowerCase();
-  const cleanBase = cleanId.includes("/") ? cleanId.split("/").pop()! : cleanId;
-  const builtin = _loadBuiltinThinkingMaps();
-  return builtin.get(cleanId) || builtin.get(cleanBase);
-}
 
 export function _loadOmpModels(): WireModel[] {
   const models: WireModel[] = [];
@@ -171,25 +137,8 @@ export function _loadOmpModels(): WireModel[] {
             if (Array.isArray(list)) {
               for (const m of list) {
                 if (!m || typeof m !== "object") continue;
-                const reasoning = Boolean(m.reasoning || m.thinking);
-                const thinkingLevelMap = _resolveThinkingLevelMap(
-                  m.id,
-                  m.provider || row.provider_id,
-                  m.thinkingLevelMap as Partial<Record<string, string | null>> | undefined,
-                );
-                const levels = supportedThinkingLevels({
-                  reasoning,
-                  thinkingLevelMap,
-                });
-                models.push({
-                  id: m.id || "unknown",
-                  name: m.name || m.id || "unknown",
-                  provider: m.provider || row.provider_id || "unknown",
-                  reasoning,
-                  context_window: typeof m.contextWindow === "number" ? m.contextWindow : 128000,
-                  vision: Boolean(m.input && Array.isArray(m.input) && m.input.includes("image")),
-                  thinking_levels: levels,
-                });
+                // Rows are omp's own registry cache: always the omp rule.
+                models.push(wireFromModel({ ...m, provider: m.provider || row.provider_id }, true));
               }
             }
           } catch {}
@@ -266,15 +215,18 @@ export interface ActionModelRegistry {
 }
 
 /** Project a SDK `Model<Api>` onto the wire schema. Shared by list_models
- *  and the `current` echo, so both stay in lockstep. */
-export function wireFromModel(model: Model<any>): WireModel {
+ *  and the `current` echo, so both stay in lockstep. `omp` selects omp's
+ *  thinking-level rule (see `supportedThinkingLevels`); callers holding the
+ *  whole catalog pass the host-wide answer. */
+export function wireFromModel(
+  model: Model<any>,
+  omp: boolean = model?.thinking !== undefined,
+): WireModel {
   const reasoning = Boolean(model?.reasoning);
-  const thinkingLevelMap = _resolveThinkingLevelMap(
-    model?.id,
-    model?.provider,
-    model?.thinkingLevelMap,
+  const levels = supportedThinkingLevels(
+    { reasoning, thinkingLevelMap: model?.thinkingLevelMap, thinking: model?.thinking },
+    omp,
   );
-  const levels = supportedThinkingLevels({ reasoning, thinkingLevelMap });
   return {
     id: model?.id || "unknown",
     name: model?.name || model?.id || "unknown",
@@ -591,15 +543,26 @@ export function handleListModels(
     const liveReg = ctx?.modelRegistry ?? reg;
     liveReg.refresh();
     const anyReg = liveReg as any;
-    let models: WireModel[] = [];
+    let regModels: SdkModelLike[] = [];
     try {
-      const regModels =
-        typeof anyReg.getAvailable === "function"
+      regModels =
+        (typeof anyReg.getAvailable === "function"
           ? anyReg.getAvailable()
           : typeof anyReg.getAll === "function"
             ? anyReg.getAll()
-            : [];
-      models = (regModels ?? []).map(wireFromModel);
+            : []) ?? [];
+    } catch {}
+    let current: SdkModelLike | undefined;
+    try {
+      current = ctx?.getModel?.();
+    } catch {}
+    // omp models carry `thinking`, upstream pi models never do. Decide per
+    // catalog: some omp reasoning models (xai/grok-4) lack the key yet still
+    // get omp's ["off", "auto"].
+    const omp = [...regModels, current].some((m) => m?.thinking !== undefined);
+    let models: WireModel[] = [];
+    try {
+      models = regModels.map((m) => wireFromModel(m, omp));
     } catch {}
 
     if (process.env["VITEST"] !== "true") {
@@ -615,11 +578,7 @@ export function handleListModels(
       }
     }
 
-    let current: SdkModelLike | undefined;
-    try {
-      current = ctx?.getModel?.();
-    } catch {}
-    let currentWire: WireModel | undefined = current ? wireFromModel(current) : undefined;
+    let currentWire: WireModel | undefined = current ? wireFromModel(current, omp) : undefined;
     if (!currentWire && currentModelName && models.length > 0) {
       currentWire = models.find(
         (m) =>
@@ -631,14 +590,13 @@ export function handleListModels(
       );
     }
     if (!currentWire && currentModelName) {
+      // Name only, no model metadata: the levels are unknown, so omit
+      // `thinking_levels` (clients then offer every level).
       const parts = currentModelName.split("/");
       const provider = parts.length > 1 ? parts[0] : "unknown";
       const id = parts.length > 1 ? parts.slice(1).join("/") : parts[0];
-      const thinkingLevelMap = _resolveThinkingLevelMap(id, provider);
       const reasoning =
-        Boolean(thinkingLevelMap) ||
         /gemini|claude|gpt-4|gpt-5|k3|deepseek|qwen|o1|o3|r1/i.test(currentModelName);
-      const levels = supportedThinkingLevels({ reasoning, thinkingLevelMap });
       currentWire = {
         provider,
         id,
@@ -646,7 +604,6 @@ export function handleListModels(
         reasoning,
         context_window: 200000,
         vision: false,
-        thinking_levels: levels,
       };
       models.unshift(currentWire);
     }

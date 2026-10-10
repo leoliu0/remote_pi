@@ -24,6 +24,7 @@ import {
   type SdkModelLike,
 } from "./handlers.js";
 import type { ServerMessage } from "../protocol/types.js";
+import ompCapture from "./omp_thinking.fixture.json" with { type: "json" };
 
 function makeSender() {
   const sent: ServerMessage[] = [];
@@ -43,6 +44,8 @@ function fakePi(overrides: Partial<ActionPi> = {}): ActionPi {
   };
 }
 
+/** Upstream-pi-shaped model: no omp `thinking` key and no `thinkingLevelMap`,
+ *  so pi-ai's rule applies — standard levels only, no "xhigh"/"max". */
 const sampleModel: SdkModelLike = {
   id: "claude-opus-4-7",
   name: "Claude Opus 4.7",
@@ -417,7 +420,7 @@ describe("handleListModels", () => {
         reasoning: true,
         context_window: 200_000,
         vision: false,
-        thinking_levels: ["auto", "off", "minimal", "low", "medium", "high", "xhigh", "max"],
+        thinking_levels: ["auto", "off", "minimal", "low", "medium", "high"],
       },
     ]);
     expect(reply.current).toEqual(reply.models[0]);
@@ -431,6 +434,15 @@ describe("handleListModels", () => {
     expect(reply.type).toBe("models_list");
     if (reply.type !== "models_list") throw new Error("type guard");
     expect(reply.current).toBeUndefined();
+  });
+
+  test("name-only current (no model metadata) omits thinking_levels", () => {
+    const sender = makeSender();
+    handleListModels(null, fakeRegistry([]), sender, { type: "list_models", id: "r5" }, "anthropic/claude-opus-5-5");
+    const reply = sender.sent[0];
+    if (reply.type !== "models_list") throw new Error("type guard");
+    expect(reply.current).toMatchObject({ provider: "anthropic", id: "claude-opus-5-5", reasoning: true });
+    expect(reply.current).not.toHaveProperty("thinking_levels");
   });
 
   test("prefers ctx.modelRegistry over the fallback registry", () => {
@@ -490,7 +502,7 @@ describe("wireFromModel", () => {
       reasoning: true,
       context_window: 200_000,
       vision: false,  // sampleModel has no `input` → text-only
-      thinking_levels: ["auto", "off", "minimal", "low", "medium", "high", "xhigh", "max"],
+      thinking_levels: ["auto", "off", "minimal", "low", "medium", "high"],
     });
   });
 
@@ -561,5 +573,53 @@ describe("wireFromModel", () => {
   test("thinking_levels is ['off'] for non-reasoning models", () => {
     expect(wireFromModel({ ...sampleModel, reasoning: false }).thinking_levels)
       .toEqual(["off"]);
+  });
+});
+
+// ── thinking levels on omp hosts ───────────────────────────────────────────
+
+/** A live omp v18.8.7 registry Model plus its captured Shift+Tab cycle. */
+type OmpCapturedModel = SdkModelLike & { cycle: string[] };
+const ompModels = ompCapture.models as unknown as OmpCapturedModel[];
+
+/** The levels omp offers, in omp's order: the captured cycle rotated to start
+ *  at "off" (omp's first selector), de-duplicated. omp offers nothing for a
+ *  non-reasoning model; the wire contract then is ["off"]. */
+function ompCycleLevels(cycle: string[]): string[] {
+  if (cycle.length === 0) return ["off"];
+  const start = cycle.indexOf("off");
+  return [...new Set([...cycle.slice(start), ...cycle.slice(0, start)])];
+}
+
+describe("thinking levels match omp's Shift+Tab cycle (live omp v18.8.7 models)", () => {
+  test("sanity: the captured cycles are the expected omp ladders", () => {
+    expect(Object.fromEntries(ompModels.map((m) => [m.id, ompCycleLevels(m.cycle)]))).toEqual({
+      "claude-opus-5-5": ["off", "auto", "low", "medium", "high", "xhigh", "max"],
+      "claude-sonnet-4-5": ["off", "auto", "minimal", "low", "medium", "high", "xhigh"],
+      "glm-5.2": ["off", "auto", "high", "max"],
+      "grok-4": ["off", "auto"],
+      "gemma2-9b-it": ["off"],
+    });
+  });
+
+  for (const model of ompModels) {
+    test(`models_list: ${model.provider}/${model.id} offers ${ompCycleLevels(model.cycle).join(" ")}`, () => {
+      const reg = fakeRegistry(ompModels);
+      const ctx: ActionCtx = { getModel: () => model };
+      const sender = makeSender();
+      handleListModels(ctx, reg, sender, { type: "list_models", id: "r6" });
+      const reply = sender.sent[0];
+      if (reply.type !== "models_list") throw new Error("type guard");
+      const expected = ompCycleLevels(model.cycle);
+      expect(reply.models.find((m) => m.id === model.id)?.thinking_levels).toEqual(expected);
+      expect(reply.current?.thinking_levels).toEqual(expected);
+    });
+  }
+
+  test("production defect: Opus 5.5 alone offers xhigh and max (per-model omp metadata)", () => {
+    const opus = ompModels.find((m) => m.id === "claude-opus-5-5")!;
+    expect(wireFromModel(opus).thinking_levels).toEqual([
+      "off", "auto", "low", "medium", "high", "xhigh", "max",
+    ]);
   });
 });

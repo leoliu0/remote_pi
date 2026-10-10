@@ -428,10 +428,10 @@ export type ActionName =
  * protocol owns its own enum and we don't leak SDK-internal types onto
  * the app's network surface.
  *
- * Note: `"xhigh"`/`"max"` are only honored by select model families — the
- * SDK uses each `Model.thinkingLevelMap` to decide if the requested level
- * is supported, falling back to a sensible neighbour when not. The app's
- * picker hides unsupported levels via `WireModel.thinking_levels`.
+ * Note: `"xhigh"`/`"max"` are only honored by select model families. omp
+ * offers each model's `thinking.efforts`; upstream pi uses each
+ * `Model.thinkingLevelMap`. The app's picker hides unsupported levels via
+ * `WireModel.thinking_levels`.
  */
 export type ThinkingLevel =
   | "auto" | "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
@@ -460,11 +460,12 @@ export interface WireModel {
    *  includes `"image"`). The app uses it to enable/disable the attach
    *  button — a text-only model greys out image attachments. */
   vision: boolean;
-  /** Thinking levels this model supports, always including `"off"`. Derived
-   *  from the SDK's `Model.thinkingLevelMap` — a level mapped to `null` is
-   *  unsupported (e.g. no "max" on most models) and omitted. Undefined when
-   *  the catalog entry predates per-model maps — the app falls back to
-   *  showing every level. */
+  /** Thinking levels the host offers for this model, in the host's order.
+   *  omp: exactly its Shift+Tab / `/effort` list, `["off", "auto",
+   *  ...thinking.efforts]`. Upstream pi: `"auto"` plus pi-ai's
+   *  `getSupportedThinkingLevels` over `Model.thinkingLevelMap`. Non-reasoning
+   *  models get `["off"]`. Undefined when the model's metadata is unknown —
+   *  clients then offer every level. */
   thinking_levels?: ThinkingLevel[];
 }
 

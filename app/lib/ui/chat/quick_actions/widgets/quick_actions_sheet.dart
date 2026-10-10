@@ -579,7 +579,8 @@ class _ThinkingSegmented extends StatelessWidget {
   final bool disabled;
   final ValueChanged<ThinkingLevel> onPick;
 
-  /// Levels the current model supports. Null/empty = show every level.
+  /// Levels the current model supports, in the Pi's order (omp: off, auto,
+  /// then the model's efforts). Null/empty = show every level.
   final List<ThinkingLevel>? levels;
   const _ThinkingSegmented({
     required this.current,
@@ -590,10 +591,9 @@ class _ThinkingSegmented extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final shown = [
-      for (final level in ThinkingLevel.values)
-        if (levels == null || levels!.contains(level)) level,
-    ];
+    final shown = (levels == null || levels!.isEmpty)
+        ? ThinkingLevel.values
+        : levels!;
     return Container(
       decoration: BoxDecoration(
         border: Border.all(color: context.colors.border),

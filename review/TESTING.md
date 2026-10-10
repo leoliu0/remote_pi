@@ -754,3 +754,9 @@ Existing stored duplicates are not purged by this fix.
 - New thinking style shown in full on production ([thinking](screens/2026-10-10-prod-10-thinking-new-style-full.png)). Stop before any text streamed cancels the turn ([stop](screens/2026-10-10-prod-9-stop-cancelled.png)). Quick Actions model picker loads the Pi's models ([picker](screens/2026-10-10-prod-8-model-picker.png)).
 - D1 retest after the relay deploy: a second same-key device connected and disconnected several times (relay journal, peer VtdIPl4=); the tile still shows the live level ([tile](screens/2026-10-10-prod-11-d1-tile-follows-after-second-device-disconnect.png)). The verifier's written report for this pass was lost when its run ended; evidence is the screenshots plus the relay journal.
 - New defect: with thinking at `max`, the Quick Actions chips after `models_list` stop at `high` (no `xhi`/`max`) ([defect](screens/2026-10-10-prod-8-defect-thinking-chips-after-models-list.png)). Fix in progress.
+
+### 2026-10-10 - Thinking levels offered match omp (xhi/max were missing)
+
+- Cause: `wireFromModel` looked up an upstream-pi `thinkingLevelMap` under a hardcoded global npm path that no longer exists on this host, and ignored omp's own `model.thinking.efforts`. So `xhigh` and `max` were dropped from `models_list`. The same cause produced the 2 "host-dependent" handlers.test.ts failures seen all day.
+- Rule taken from omp v18.8.7 (`getAvailableEffortSelectors`, used by Shift+Tab and `/effort`): `[off, auto, ...thinking.efforts]`. Confirmed live with `omp --mode rpc` and `cycle_thinking_level` for 5 models; captured in `omp_thinking.fixture.json`.
+- Opus 5.5 now offers `off auto low med high xhi max`; the app keeps the wire order. pi-extension 912 pass / 0 fail (first fully green run today); app quick-actions tests pass.

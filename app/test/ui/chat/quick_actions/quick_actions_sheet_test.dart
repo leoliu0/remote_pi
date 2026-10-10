@@ -352,6 +352,46 @@ void main() {
     );
   });
 
+  testWidgets('thinking chips keep the Pi order and offer xhi + max',
+      (tester) async {
+    // Production defect: Opus 5.5 at max showed only auto off min low med
+    // high. The extension now sends omp's Shift+Tab list for the model.
+    await _openSheet(
+      tester,
+      currentModel: WireModel.fromJson(const {
+        'id': 'claude-opus-5-5',
+        'name': 'Claude Opus 5.5',
+        'provider': 'anthropic',
+        'reasoning': true,
+        'context_window': 1000000,
+        'vision': true,
+        'thinking_levels': [
+          'off', 'auto', 'low', 'medium', 'high', 'xhigh', 'max',
+        ],
+      }),
+    );
+    await tester.pumpAndSettle();
+    const order = ['off', 'auto', 'low', 'medium', 'high', 'xhigh', 'max'];
+    const labels = ['off', 'auto', 'low', 'med', 'high', 'xhi', 'max'];
+    final xs = [
+      for (final level in order)
+        tester.getCenter(find.byKey(Key('qa-thinking-$level'))).dx,
+    ];
+    for (var i = 1; i < xs.length; i++) {
+      expect(xs[i], greaterThan(xs[i - 1]), reason: '${order[i]} after ${order[i - 1]}');
+    }
+    for (var i = 0; i < order.length; i++) {
+      expect(
+        find.descendant(
+          of: find.byKey(Key('qa-thinking-${order[i]}')),
+          matching: find.text(labels[i]),
+        ),
+        findsOneWidget,
+      );
+    }
+    expect(find.byKey(const Key('qa-thinking-minimal')), findsNothing);
+  });
+
   test('QuickActionsState equality covers idle + busy', () {
     expect(const QuickActionsIdle(), const QuickActionsIdle());
     expect(
