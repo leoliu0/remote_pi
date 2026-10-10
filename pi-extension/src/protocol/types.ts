@@ -344,10 +344,78 @@ export type ServerMessage =
   // owner on attach and after every session_sync reply. `jobs: []` means
   // nothing is running and nothing finished recently.
   | { type: "agent_activity"; jobs: AgentActivityJob[]; ts: number }
+  // omp's footer status row under the composer (default preset, left side).
+  // Model + thinking are NOT repeated here: they ride room_meta (`model`,
+  // `thinking`). Full snapshot; sent to an owner on attach and after every
+  // session_sync reply, then broadcast to active owners on change (deduped,
+  // ≤1/s). Main session only, never a subagent.
+  | StatusLineMessage
   // Plan/57 — interactive extension prompt (ask_user via pi-ask). Mirrors
   // RpcExtensionUIRequest (select/confirm/input/editor/notify); the optional
   // `ask` envelope carries pi-ask's full question so the app renders richly.
   | ExtensionUiRequestWire;
+
+/**
+ * One `status_line` snapshot: the values behind omp's footer segments
+ * (`packages/tui/src/status-line/segments.ts`). Raw numbers, so each client
+ * formats them like the terminal (`35.3%/1M`, `0.01`, `12s`):
+ *
+ * `π · ⬢ Opus 5.5 · ◕ xhi · 📁 <path> · ⑂ <branch> *U +S ?N · ◫ <ctx> · <cost>`
+ */
+export interface StatusLineMessage {
+  type: "status_line";
+  /** Absolute session cwd. */
+  cwd: string;
+  /**
+   * The path segment text exactly as omp prints it: a cwd under a temp root
+   * (`os.tmpdir()`, `~/tmp`, `/tmp`, `/var/tmp`) or a work root (`~/Projects`,
+   * `~/repos`, `/work`) is shown relative to it, the home dir becomes `~`, and
+   * anything over 40 chars keeps its tail behind a leading `…`.
+   */
+  path: string;
+  /** cwd is under a temp root: omp swaps the folder icon for its scratch icon. */
+  scratch: boolean;
+  /** null outside a git repo (omp hides the segment). */
+  git: StatusLineGit | null;
+  context: StatusLineContext;
+  cost: StatusLineCost;
+  /** Epoch ms the running agent started; null when idle. omp's leading `π`
+   *  segment shows a spinner + elapsed (`12s`, `3m`, `2h`) while it runs. */
+  run_started_at: number | null;
+  ts: number;
+}
+
+export interface StatusLineGit {
+  /** Branch name; `"detached"` for a detached HEAD; null when HEAD is unreadable. */
+  branch: string | null;
+  /** Counts behind omp's `*unstaged +staged ?untracked` suffix (each shown when > 0). */
+  staged: number;
+  unstaged: number;
+  untracked: number;
+}
+
+/** `ctx.getContextUsage()`: tokens in context over the model's window. */
+export interface StatusLineContext {
+  tokens: number;
+  /** 0 when unknown: omp then shows `<tokens>/?`. */
+  window: number;
+  /** `tokens / window * 100`, unrounded (omp prints `toFixed(1)`). null =
+   *  unknown (e.g. right after compaction): omp then shows only the window. */
+  percent: number | null;
+}
+
+/** Session spend from the session's usage statistics. */
+export interface StatusLineCost {
+  /** The main agent's own cost (subagents excluded), provider currency (USD). */
+  total: number;
+  /** Subagent cost, shown as `(+0.42)`. */
+  subagents: number;
+  /** The model runs on an OAuth subscription: omp shows its subscription
+   *  icon instead of `$` (or the icon alone while nothing is spent). */
+  subscription: boolean;
+  /** Copilot premium requests (`★ N`); 0 elsewhere. */
+  premium_requests: number;
+}
 
 /** Lifecycle of one activity row. `done`/`failed`/`cancelled` rows linger
  *  a few seconds after `ended_at` (and are dropped at the main agent's

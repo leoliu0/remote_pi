@@ -253,6 +253,7 @@ const {
   _tryExecuteTerminalInput,
   restartSession,
   _resetMainSessionForTest,
+  _setGitStatusReaderForTest,
 } = indexModule;
 const { acquireCwdLock } = await import("./session/cwd_lock.js");
 
@@ -7587,6 +7588,91 @@ describe("omp in-process subagents", () => {
     await vi.waitFor(() => expect(main.sendUserMessage).toHaveBeenCalled(), { timeout: 2000 });
     expect(sub.sendUserMessage).not.toHaveBeenCalled();
   });
+
+  test("status_line: main session's footer values on sync, live after a turn and a branch change; subagents ignored", async () => {
+    // Captured from a scratch omp (cwd /tmp/rp-sl/proj, Opus 5.5 on an OAuth
+    // subscription): footer `🗑 rp-sl/proj · ⑂ main ?2 · ◫ 1.3%/1M · 󰙺`,
+    // then `1.5%/1M · 󰙺 0.01` after one turn.
+    let git = { branch: "main", staged: 0, unstaged: 0, untracked: 2 };
+    _setGitStatusReaderForTest(async (cwd) => (cwd === "/tmp/rp-sl/proj" ? { ...git } : null));
+    let usage = { tokens: 13121, contextWindow: 1000000, percent: 1.3121 };
+    let stats = { cost: 0, subagentCost: 0, premiumRequests: 0 };
+    const model = { id: "claude-opus-5-5", name: "Claude Opus 5.5", contextWindow: 1000000 };
+    const mainCtx = {
+      ...makeMockCtx("/tmp/rp-sl/proj"),
+      model,
+      modelRegistry: { isUsingOAuth: (m: unknown) => m === model },
+      getContextUsage: () => usage,
+      sessionManager: { getUsageStatistics: () => stats, getBranch: () => [], getLeafId: () => null },
+    };
+    // Throttle timing: drive the clock instead of sleeping.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"] });
+    try {
+      const { main, sub } = await startMainTurn(mainCtx);
+      const sendsBefore = relayRef.current!.send.mock.calls.length;
+      const statusLines = () => sentSince(sendsBefore).filter((m) => m.type === "status_line");
+
+      relayRef.current!.emit("message", JSON.stringify({
+        peer: "ownerA__1234567890",
+        ct: Buffer.from(JSON.stringify({ type: "session_sync", id: "sync-sl", limit: 10 })).toString("base64"),
+      }));
+      await vi.waitFor(() => expect(statusLines().some((m) => (m.git as { branch?: string } | null)?.branch === "main")).toBe(true));
+      const types = sentSince(sendsBefore).map((m) => m.type);
+      expect(types.indexOf("status_line", types.indexOf("session_history"))).toBeGreaterThan(types.indexOf("session_history"));
+      const synced = statusLines().at(-1)!;
+      expect(synced).toMatchObject({
+        cwd: "/tmp/rp-sl/proj",
+        path: "rp-sl/proj",
+        scratch: true,
+        git: { branch: "main", staged: 0, unstaged: 0, untracked: 2 },
+        context: { tokens: 13121, window: 1000000, percent: 1.3121 },
+        cost: { total: 0, subagents: 0, subscription: true, premium_requests: 0 },
+      });
+      expect(typeof synced.run_started_at).toBe("number");  // mid-run (agent_start fired)
+      // Model + thinking stay in room_meta only.
+      expect(synced).not.toHaveProperty("model");
+      expect(synced).not.toHaveProperty("thinking");
+
+      // A subagent's own turn (other cwd, other usage) never reaches the row.
+      await vi.advanceTimersByTimeAsync(1_100);
+      const beforeSub = statusLines().length;
+      const subCtx = { ...SUBAGENT_CTX, getContextUsage: () => ({ tokens: 900000, contextWindow: 1000000, percent: 90 }) };
+      sub.fire("agent_start", { type: "agent_start" }, subCtx);
+      sub.fire("turn_end", { type: "turn_end", turnIndex: 0 }, subCtx);
+      sub.fire("agent_end", { type: "agent_end", messages: [] }, subCtx);
+      await vi.advanceTimersByTimeAsync(1_100);
+      expect(statusLines().slice(beforeSub)).toEqual([]);
+
+      // The main turn ends: one update with the new context + cost, run over.
+      usage = { tokens: 14722, contextWindow: 1000000, percent: 1.4722000000000002 };
+      stats = { cost: 0.0064716, subagentCost: 0, premiumRequests: 0 };
+      main.fire("turn_end", { type: "turn_end", turnIndex: 0 });
+      main.fire("agent_end", { type: "agent_end", messages: [] });
+      await vi.advanceTimersByTimeAsync(1_100);
+      expect(statusLines().at(-1)?.run_started_at).toBeNull();
+      const afterTurn = statusLines().at(-1)!;
+      expect(afterTurn.context).toEqual({ tokens: 14722, window: 1000000, percent: 1.4722000000000002 });
+      expect(afterTurn.cost).toEqual({ total: 0.0064716, subagents: 0, subscription: true, premium_requests: 0 });
+      expect(statusLines().every((m) => m.cwd === "/tmp/rp-sl/proj")).toBe(true);
+
+      // Nothing changed: no duplicate.
+      await vi.advanceTimersByTimeAsync(1_100);
+      const settled = statusLines().length;
+      main.fire("turn_end", { type: "turn_end", turnIndex: 1 });
+      await vi.advanceTimersByTimeAsync(1_100);
+      expect(statusLines()).toHaveLength(settled);
+
+      // `git checkout -b feat/status-line` by a tool: the row follows.
+      git = { branch: "feat/status-line", staged: 0, unstaged: 0, untracked: 2 };
+      main.fire("tool_execution_end", { type: "tool_execution_end", toolCallId: "t_git", toolName: "bash", result: { content: [] }, isError: false });
+      await vi.advanceTimersByTimeAsync(1_100);
+      expect((statusLines().at(-1)?.git as { branch?: string } | null)?.branch).toBe("feat/status-line");
+      expect(statusLines()).toHaveLength(settled + 1);
+    } finally {
+      vi.useRealTimers();
+      _setGitStatusReaderForTest(null);
+    }
+  }, 15_000);
 
   test("agent_activity: subagent bus events + async jobs → owner snapshots; sync and shutdown resend", async () => {
     let jobs: { running: unknown[]; recent: unknown[] } = { running: [], recent: [] };

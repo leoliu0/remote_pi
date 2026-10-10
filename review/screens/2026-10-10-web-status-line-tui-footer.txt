@@ -1,0 +1,31 @@
+omp 18.8.7 TUI footer (pty screen, last rows) vs /web status row (aria-label of [data-testid=status-line])
+Scratch omp: HOME=/tmp/rp-e2e/home, cwd /tmp/rp-e2e/proj, Opus 5.5 xhigh, patched pi-extension dist;
+web: local next dev :3988, real QR sign-in, throwaway owner, live relay 178.157.59.181.
+Nerd-font glyphs: 󰵗 π brand,  model, 󰪥 thinking xhi,  scratch folder,
+ branch,  context, 󰁨 auto-compact, 󰙺 subscription.
+
+1. attach (session start, before any turn)
+TUI:  󰵗 ·  Opus 5.5 · 󰪥 xhi ·  rp-e2e/proj ·  main ?1 ·  1.3%/1M 󰁨 · 󰙺
+      🟢 relay 📡 local (1) 📱 NC/F9KOo
+WEB:  Opus 5.5 · xhi · rp-e2e/proj · main ?1 · 1.3%/1M          (+ subscription icon)
+
+2. mid-turn (prompt sent from /web, bash `sleep 6`)
+TUI:  ⠸ 4s ·  Opus 5.5 · 󰪥 xhi ·  rp-e2e/proj ·  main ?1 ·  1.5%/1M 󰁨 · 󰙺 0.01
+WEB:  3s · Opus 5.5 · xhi · rp-e2e/proj · main ?1 · 1.5%/1M · 0.01      (web read ~1 s earlier)
+
+3. after the turn
+TUI:  󰵗 ·  Opus 5.5 · 󰪥 xhi ·  rp-e2e/proj ·  main ?1 ·  1.5%/1M 󰁨 · 󰙺 0.01
+WEB:  Opus 5.5 · xhi · rp-e2e/proj · main ?1 · 1.5%/1M · 0.01
+
+4. `git checkout -b feat/status-line`, `git add b.txt`, untracked c.txt (no reload)
+TUI:  󰵗 ·  Opus 5.5 · 󰪥 xhi ·  rp-e2e/proj ·  feat/status-line +1 ?2 ·  1.5%/1M 󰁨 · 󰙺 0.01
+WEB:  Opus 5.5 · xhi · rp-e2e/proj · feat/status-line +1 ?2 · 1.5%/1M · 0.01
+
+5. merge conflict (UU m.txt). First build showed `*1` (mismatch) → parseGitStatus fixed, dist rebuilt, omp restarted
+TUI:  󰵗 ·  Opus 5.5 · 󰪥 xhi ·  rp-e2e/proj ·  feat/status-line *1 +1 ?2 ·  1.3%/1M 󰁨 · 󰙺
+WEB:  Opus 5.5 · xhi · rp-e2e/proj · feat/status-line *1 +1 ?2 · 1.3%/1M
+
+6. turn typed in the terminal, then `git merge --abort && git checkout --detach`
+TUI:  󰵗 ·  Opus 5.5 · 󰪥 xhi ·  rp-e2e/proj ·  detached ?2 ·  1.5%/1M 󰁨 · 󰙺 0.01
+      🟢 relay 📡 local (1) 📱 NC/F9KOo
+WEB:  Opus 5.5 · xhi · rp-e2e/proj · detached ?2 · 1.5%/1M · 0.01

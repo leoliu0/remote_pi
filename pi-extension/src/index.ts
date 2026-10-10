@@ -67,6 +67,8 @@ import type {
   ThinkingLevel,
   WireImage,
   QueuedMessageItem,
+  StatusLineGit,
+  StatusLineMessage,
 } from "./protocol/types.js";
 import { RelayClient, RoomAlreadyOpenError } from "./transport/relay_client.js";
 import { PlainPeerChannel } from "./transport/peer_channel.js";
@@ -82,6 +84,16 @@ import {
   SUBAGENT_LIFECYCLE_CHANNEL,
   SUBAGENT_PROGRESS_CHANNEL,
 } from "./activity.js";
+import {
+  GitStatusCache,
+  StatusLineBroadcaster,
+  contextFromUsage,
+  costFromUsage,
+  defaultPathRoots,
+  footerPath,
+  readGitStatus,
+  type PathRoots,
+} from "./status_line.js";
 import { registerAgentTools } from "./session/tools.js";
 import {
   registerAskWrapperTool,
@@ -365,10 +377,14 @@ function _syncModelMeta(preferred?: unknown): void {
 }
 let _modelPollTimer: NodeJS.Timeout | null = null;
 
+/** 1 s poll while the room is up: model/thinking (omp has no change event)
+ *  and the status row (context, cost and git have none either). */
 function _startModelPollTimer(): void {
   if (_modelPollTimer) return;
   _modelPollTimer = setInterval(() => {
-    if (_relay && _myRoomId && _state === "started") _syncModelMeta();
+    if (!_relay || !_myRoomId || _state !== "started") return;
+    _syncModelMeta();
+    _refreshStatusLine();
   }, 1000);
   _modelPollTimer.unref?.();
 }
@@ -1486,6 +1502,7 @@ export function _setPiForTest(pi: unknown): void {
 export function _resetMainSessionForTest(): void {
   _mainPi = null;
   _resetActivity();
+  _resetStatusLine();
 }
 
 /**
@@ -1633,6 +1650,81 @@ function _resetActivity(): void {
   _activity.reset();
   _activityBroadcaster.flush();
   _activityBroadcaster.reset();
+}
+
+// omp's footer row (path, git, context, cost, run timer) → `status_line`
+// snapshots. Built only from the main session's ctx (`_lastEventCtx` never
+// holds a subagent's) and sent only while an owner is attached.
+let _runStartedAt: number | null = null;
+let _pathRoots: PathRoots | null = null;
+let _gitStatusReader: (cwd: string) => Promise<StatusLineGit | null> = readGitStatus;
+const _statusLineGit = new GitStatusCache((cwd) => _gitStatusReader(cwd), () => _statusLineBroadcaster.schedule());
+const _statusLineBroadcaster = new StatusLineBroadcaster(_buildStatusLine, _broadcastToActive, _anyPeerActive);
+
+/** The parts of an omp ExtensionContext the status row reads. */
+interface StatusLineCtx {
+  cwd?: string;
+  model?: { contextWindow?: number };
+  modelRegistry?: { isUsingOAuth?: (model: unknown) => boolean };
+  getContextUsage?: () => unknown;
+  sessionManager?: { getUsageStatistics?: () => unknown };
+}
+
+function _buildStatusLine(): StatusLineMessage | null {
+  // Host ctx objects are untyped across pi/omp versions; every member is optional.
+  const ctx = _liveCtx() as StatusLineCtx | null;
+  if (!ctx) return null;
+  try {
+    const cwd = typeof ctx.cwd === "string" && ctx.cwd ? ctx.cwd : process.cwd();
+    const model = ctx.model;
+    const subscription = model ? ctx.modelRegistry?.isUsingOAuth?.(model) === true : false;
+    _statusLineGit.refresh(cwd);
+    return {
+      type: "status_line",
+      cwd,
+      ...footerPath(cwd, (_pathRoots ??= defaultPathRoots())),
+      git: _statusLineGit.get(cwd),
+      context: contextFromUsage(ctx.getContextUsage?.(), model?.contextWindow),
+      cost: costFromUsage(ctx.sessionManager?.getUsageStatistics?.(), subscription),
+      run_started_at: _runStartedAt,
+      ts: Date.now(),
+    };
+  } catch {
+    return null;  // stale ctx after a session replacement
+  }
+}
+
+/** Something the row shows may have changed; `forceGit` re-reads git now. */
+function _refreshStatusLine(forceGit = false): void {
+  if (forceGit && _anyPeerActive()) {
+    const cwd = (_liveCtx() as StatusLineCtx | null)?.cwd;
+    if (typeof cwd === "string" && cwd) _statusLineGit.refresh(cwd, true);
+  }
+  _statusLineBroadcaster.schedule();
+}
+
+/** Main session replaced/ended: the next snapshot goes out in full. */
+function _resetStatusLine(): void {
+  _runStartedAt = null;
+  _statusLineGit.reset();
+  _statusLineBroadcaster.reset();
+}
+
+/** The current footer row to one owner (attach / session_sync). */
+function _sendStatusLine(channel: PlainPeerChannel): void {
+  const msg = _statusLineBroadcaster.message();
+  if (msg) channel.send(msg);
+}
+
+/** Test seam: the next snapshot as an owner would receive it. */
+export function _statusLineMessageForTest(): StatusLineMessage | null {
+  return _statusLineBroadcaster.message();
+}
+
+/** Test seam: replace `git status` (null restores the real reader). */
+export function _setGitStatusReaderForTest(reader: ((cwd: string) => Promise<StatusLineGit | null>) | null): void {
+  _gitStatusReader = reader ?? readGitStatus;
+  _statusLineGit.reset();
 }
 
 let _stopAutoListener: (() => void) | null = null;
@@ -2483,8 +2575,9 @@ function _installAutoListener(relay: RelayClient): () => void {
       // it explicitly via the new channel so the sender gets a reply.
       // Use _liveCtx (session_start-fresh) — not bare _lastCtx (#55).
       _routeClientMessageFrom(channel, inner, (_liveCtx() as typeof _noopCtx) ?? _noopCtx);
-      // Current running subagents/jobs, so the panel is right before any change.
+      // Current running subagents/jobs and footer row, so both are right before any change.
       channel.send(_activityBroadcaster.message());
+      _sendStatusLine(channel);
       return;
     }
 
@@ -2611,6 +2704,7 @@ async function _handlePairRequest(
     hostname: _HOSTNAME,
   });
   channel.send(_activityBroadcaster.message());
+  _sendStatusLine(channel);
 
   // Notify local RPC clients (e.g. Cockpit) that pairing completed, so they can
   // close the QR screen and show the new device. Pure data event (display:false)
@@ -2849,6 +2943,8 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     _agentRunActive = true;
     _agentRunGeneration += 1;
     _refreshActivity();
+    _runStartedAt = Date.now();
+    _refreshStatusLine();
   });
 
   pi.on("message_start", (event) => {
@@ -2996,6 +3092,8 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     _emittedToolRequests.delete(event.toolCallId);
     _streamedToolArgs.delete(event.toolCallId);
     _heldToolCalls.delete(event.toolCallId);
+    // Tools change the repo (edits, `git checkout`): re-read git now.
+    _refreshStatusLine(true);
     const rawArgs = _activeToolArgs.get(event.toolCallId);
     _activeToolArgs.delete(event.toolCallId);
     // An async bash / detached task just registered a background job.
@@ -3105,6 +3203,8 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     // omp drops settled subagent/job rows when the main run ends.
     _activity.clearFinished();
     _refreshActivity();
+    _runStartedAt = null;
+    _refreshStatusLine(true);
     _streamedToolArgs.clear();
     _heldToolCalls.clear();
     for (const steer of _pendingSteers) {
@@ -3160,6 +3260,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     _scheduleWorkingMetaOff(_agentActive ? 150 : 0);
     _maybeFinalizeTurn();
     _syncModelMeta();
+    _refreshStatusLine(true);
   });
   // compaction proceeds.
   pi.on("session_before_compact", (event) => {
@@ -3188,6 +3289,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     // (3) Working ends.
     _publishWorking(false);
     _maybeDrainQueuedItem();
+    _refreshStatusLine();
   });
 
   // Re-capture the freshest base ctx on every session replacement so compact
@@ -3223,7 +3325,10 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     if (_mainPi !== pi) {
       // First boot, a replacement session, or a main-shaped start on a new
       // `pi`: this is the main session now.
-      if (_mainPi !== null) _resetActivity();
+      if (_mainPi !== null) {
+        _resetActivity();
+        _resetStatusLine();
+      }
       _mainPi = pi;
       _subagentPis.delete(pi);
       if (_pi !== pi) {
@@ -3242,6 +3347,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
       _sessionStartLeafId = undefined;
     }
     _syncModelMeta();
+    _refreshStatusLine(true);
     if (ctx && (ctx as { sessionManager?: unknown }).sessionManager) {
       _hydrateMessageBufferFromSession((ctx as { sessionManager?: unknown }).sessionManager);
     }
@@ -3338,6 +3444,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
       // replacement session_start binds as main instead of as a subagent.
       _mainPi = null;
       _resetActivity();
+      _resetStatusLine();
     }
     if (_isSubagentSession(ctx)) return;
     // Revoke async authority synchronously, before any teardown await. `_disposed`
@@ -6098,6 +6205,7 @@ function _handleSessionSync(
   // The activity panel is live state, not history: resend it after the
   // client substitutes its timeline.
   sender.send(_activityBroadcaster.message());
+  _sendStatusLine(sender);
 
   // Plan/57 — replay ask_user flows still awaiting an answer. The bridge
   // broadcasts `started` once; a peer that connects afterwards would otherwise

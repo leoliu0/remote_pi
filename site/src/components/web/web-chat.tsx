@@ -37,6 +37,8 @@ import {
   type HistoryNav,
   type Recall,
 } from "./composer-history";
+import { StatusLineRow } from "./status-line-row";
+import type { StatusLine } from "./status-line";
 
 type ToolDisplay = "brief" | "full" | "hidden";
 
@@ -130,6 +132,11 @@ export function WebChat({
     setAgentsOpenState(open);
     writeAgentsPanelOpen(open);
   };
+  // The terminal footer row's values, bound to the client (room) they came from.
+  const [statusLine, setStatusLine] = useState<{ client: RemotePiRelayClient | null; line: StatusLine | null }>({
+    client: null,
+    line: null,
+  });
 
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const isInitialLoadRef = useRef(true);
@@ -268,6 +275,10 @@ export function WebChat({
           client,
           board: applyActivitySnapshot(prev.client === client ? prev.board : EMPTY_BOARD, jobs, Date.now()),
         }));
+      },
+
+      onStatusLine: (line) => {
+        setStatusLine({ client, line });
       },
     });
 
@@ -852,6 +863,11 @@ export function WebChat({
             </button>
           </div>
         </div>
+
+        {/* The terminal's footer row (omp status line), under the composer like the TUI */}
+        {statusLine.client === client && statusLine.line && (
+          <StatusLineRow line={statusLine.line} model={model} thinking={thinking} />
+        )}
       </div>
     </div>
     {/* Wide screens: persistent Agents column */}

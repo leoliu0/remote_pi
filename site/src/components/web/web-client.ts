@@ -13,6 +13,7 @@ import { toStandardB64, type PeerRecord, type RoomInfo } from "./session-list.ts
 import { chatEventFromFrame, type ChatEvent } from "./chat-stream.ts";
 import { parseExtensionUiRequest, type ExtensionUiRequest, type ExtensionUiResponseWire } from "./extension-ui.ts";
 import { parseAgentActivity, type AgentActivityJob } from "./activity.ts";
+import { parseStatusLine, type StatusLine } from "./status-line.ts";
 
 /** The room a chat is bound to — built from a Home tile when it is opened. */
 export interface PairedSession {
@@ -391,6 +392,8 @@ export interface ChatClientEvents {
   onQueuedState?: (items: Array<{ id: string; text: string; editable?: boolean }>) => void;
   /** Full `agent_activity` snapshot: replaces the panel's rows. */
   onActivity?: (jobs: AgentActivityJob[]) => void;
+  /** Full `status_line` snapshot: the terminal footer row's values. */
+  onStatusLine?: (line: StatusLine) => void;
 }
 
 export class RemotePiRelayClient {
@@ -495,6 +498,12 @@ export class RemotePiRelayClient {
       case "agent_activity": {
         const jobs = parseAgentActivity(msg);
         if (jobs) this.events.onActivity?.(jobs);
+        break;
+      }
+
+      case "status_line": {
+        const line = parseStatusLine(msg);
+        if (line) this.events.onStatusLine?.(line);
         break;
       }
     }
