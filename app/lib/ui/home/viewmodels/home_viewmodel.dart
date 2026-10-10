@@ -27,11 +27,16 @@ class HomeViewModel extends ViewModel<HomeState> {
   StreamSubscription<Map<String, List<RoomInfo>>>? _roomsSub;
   StreamSubscription<ConnectionStatus>? _statusSub;
   bool _relayConnected = false;
+  // `true` from a failed relay attempt (StatusRetrying) until the relay is
+  // back online. Sticky across the Retrying ↔ Connecting backoff cycle so the
+  // Online tab's empty state doesn't flicker with a spinner on each attempt.
+  bool _relayUnreachable = false;
   bool _disposed = false;
 
   HomeViewModel(this._storage, this._prefs, this._conn)
     : super(const HomeLoading()) {
     _relayConnected = _conn.status is StatusOnline;
+    _relayUnreachable = _conn.status is StatusRetrying;
     _load();
     _presenceSub = _conn.presenceStream.listen(_onPresence);
     _roomsSub = _conn.roomsStream.listen(_onRooms);
@@ -106,27 +111,23 @@ class HomeViewModel extends ViewModel<HomeState> {
   }
 
   void _onStatus(ConnectionStatus status) {
-    final next = status is StatusOnline;
-    if (next == _relayConnected) return;
-    _relayConnected = next;
-    // Trigger a re-render of any HomeList so tiles re-evaluate dot
-    // colour (room-live vs reconnecting).
-    final s = state;
-    if (s is HomeList) {
-      // emit a duplicate-looking HomeList so context.watch() triggers
-      // even though peers / roomsByPeer / presence didn't change.
-      // Preserve `filter` — otherwise a status flip would silently reset
-      // the user's tab back to the Online default (and, because the new
-      // object would then differ, actually fire that reset).
-      emit(
-        HomeList(
-          peers: s.peers,
-          statusByEpk: s.statusByEpk,
-          roomsByPeer: s.roomsByPeer,
-          filter: s.filter,
-        ),
-      );
+    final connected = status is StatusOnline;
+    final unreachable = switch (status) {
+      StatusRetrying() => true,
+      StatusOnline() => false,
+      _ => _relayUnreachable,
+    };
+    if (connected == _relayConnected && unreachable == _relayUnreachable) {
+      return;
     }
+    _relayConnected = connected;
+    _relayUnreachable = unreachable;
+    // Re-render any HomeList so tiles re-evaluate dot colour (room-live vs
+    // reconnecting) and the Online tab can swap its spinner for the empty
+    // state. The HomeList itself is unchanged (an equal re-emit would be
+    // swallowed by `emit`'s `==` check), so notify directly; this also
+    // leaves the user's selected tab untouched.
+    if (state is HomeList) notifyListeners();
   }
 
   /// Plan-38 Fase 3 — switch the presence tab. No reload: it only swaps the
@@ -146,14 +147,17 @@ class HomeViewModel extends ViewModel<HomeState> {
       _conn.isRoomInLiveSet(it.peer.remoteEpk, it.room.roomId) ||
       _conn.isRoomWorking(it.peer.remoteEpk, it.room.roomId);
 
-  /// Spinner instead of "No sessions online" until the relay has
-  /// delivered a rooms snapshot (or we time out in the page via this flag).
+  /// Spinner instead of "No sessions online" until the relay has delivered
+  /// a rooms snapshot. Once a relay attempt has failed we know nothing is
+  /// reachable, so the Online tab shows its empty state rather than a
+  /// spinner for as long as the relay stays down.
   bool get onlineListPending {
     final s = state;
     if (s is HomeLoading) return true;
     if (s is! HomeList) return false;
     if (s.filter != HomeFilter.online) return false;
     if (visibleItems.isNotEmpty) return false;
+    if (_relayUnreachable) return false;
     return !_conn.liveRoomsKnown;
   }
 

@@ -17,6 +17,7 @@ import 'package:app/routing/adaptive.dart';
 import 'package:app/ui/home/home_page.dart';
 import 'package:app/ui/home/states/home_state.dart';
 import 'package:app/ui/home/viewmodels/home_viewmodel.dart';
+import 'package:app/ui/home/widgets/widgets.dart';
 import 'package:app/ui/update/viewmodels/update_banner_viewmodel.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -209,7 +210,83 @@ void main() {
   );
 
   testWidgets(
-    'dropping the relay does not flash "No sessions online"',
+    'Home opens on the Online tab and lists only live sessions',
+    (tester) async {
+      final ch = _ControllableChannel();
+      final storage = _FakeStorage([_peerA]);
+      final conn = ConnectionManager(
+        factory: (_, _) async => ch,
+        storage: storage,
+        emitDebounce: Duration.zero,
+      );
+      final vm = HomeViewModel(storage, _preferences(), conn);
+      final banner = _banner();
+      await conn.connectTo(_peerA);
+      await tester.pump(const Duration(milliseconds: 10));
+
+      // r1 live, r2 announced then ended → cached/offline.
+      ch.pushControl(
+        const RoomAnnounced(peer: 'epk_A', roomId: 'r1', startedAt: 1),
+      );
+      ch.pushControl(
+        const RoomAnnounced(peer: 'epk_A', roomId: 'r2', startedAt: 2),
+      );
+      ch.pushControl(const RoomEnded(peer: 'epk_A', roomId: 'r2', sinceTs: 3));
+      await tester.pump(const Duration(milliseconds: 10));
+
+      await tester.pumpWidget(_home(vm: vm, banner: banner));
+      await tester.pump();
+
+      final tabs = tester.widget<HomeFilterTabs>(find.byType(HomeFilterTabs));
+      expect(tabs.filter, HomeFilter.online);
+      expect(
+        tester
+            .widgetList<SessionTile>(find.byType(SessionTile))
+            .map((t) => t.room?.roomId),
+        ['r1'],
+      );
+
+      vm.dispose();
+      banner.dispose();
+      await conn.disconnect();
+      conn.dispose();
+    },
+  );
+
+  testWidgets(
+    'relay unreachable: Online tab shows "No sessions online", not a spinner',
+    (tester) async {
+      final storage = _FakeStorage([_peerA]);
+      storage._rooms[_peerA.remoteEpk] = const [
+        PersistedRoom(roomId: 'cached-room', startedAt: 1),
+      ];
+      final conn = ConnectionManager(
+        factory: (_, _) async => throw StateError('relay unreachable'),
+        storage: storage,
+        emitDebounce: Duration.zero,
+      );
+      final vm = HomeViewModel(storage, _preferences(), conn);
+      final banner = _banner();
+      await conn.connectTo(_peerA);
+      await tester.pump(const Duration(milliseconds: 10));
+
+      await tester.pumpWidget(_home(vm: vm, banner: banner));
+      await tester.pump();
+
+      expect(conn.status, isA<StatusRetrying>());
+      expect(find.text('No sessions online'), findsOneWidget);
+      expect(find.byType(CircularProgressIndicator), findsNothing);
+
+      vm.dispose();
+      banner.dispose();
+      await conn.disconnect();
+      conn.dispose();
+    },
+  );
+
+  testWidgets(
+    'dropping the relay does not flash "No sessions online"; the cached '
+    'session stays reachable via All',
     (tester) async {
       final ch = _ControllableChannel();
       final storage = _FakeStorage([_peerA]);
@@ -234,6 +311,9 @@ void main() {
       await tester.pump();
 
       expect(find.text('No sessions online'), findsNothing);
+
+      vm.setFilter(HomeFilter.all);
+      await tester.pump();
       expect(find.text('Pi A'), findsWidgets);
 
       vm.dispose();

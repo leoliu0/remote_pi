@@ -8,7 +8,7 @@ sealed class HomeState {
 
 /// Plan-38 Fase 3 — which presence slice of the Home list is shown.
 /// Pure view filter over the existing (peer → room) list; the tabs never
-/// reload or regroup data. The durable-cache-safe default is [all].
+/// reload or regroup data. Home opens on [online].
 ///   - [all]     — every known session (live + cached/offline).
 ///   - [online]  — only sessions live on the relay right now.
 ///   - [offline] — only cached sessions that aren't live.
@@ -66,16 +66,16 @@ class HomeList extends HomeState {
   final Map<String, PresenceState> statusByEpk;
   final Map<String, List<RoomInfo>> roomsByPeer;
 
-  /// Selected presence tab. Defaults to [HomeFilter.all] so durable cached
-  /// sessions are immediately usable while the relay is unreachable; users
-  /// can still narrow the list to live-only or offline-only explicitly.
+  /// Selected presence tab. Defaults to [HomeFilter.online] so Home opens on
+  /// the sessions the user can talk to right now; cached sessions stay one
+  /// tap away under All / Offline. Held in memory only (not persisted).
   final HomeFilter filter;
 
   const HomeList({
     required this.peers,
     this.statusByEpk = const {},
     this.roomsByPeer = const {},
-    this.filter = HomeFilter.all,
+    this.filter = HomeFilter.online,
   });
 
   HomeList copyWith({

@@ -203,32 +203,40 @@ void main() {
       vm.dispose();
     });
 
-    test('cached room is visible by default with no relay connection', () async {
-      final storage = _FakeStorage([_peerA]);
-      storage._rooms[_peerA.remoteEpk] = const [
-        PersistedRoom(
-          roomId: 'cached-room',
-          startedAt: 1,
-          name: 'Offline project',
-        ),
-      ];
-      final prefs = _preferences();
-      final conn = _conn(storage: storage);
-      final vm = HomeViewModel(storage, prefs, conn);
+    test(
+      'Home opens on Online: a cached-only room is hidden there but stays '
+      'reachable via All when the relay is not connected',
+      () async {
+        final storage = _FakeStorage([_peerA]);
+        storage._rooms[_peerA.remoteEpk] = const [
+          PersistedRoom(
+            roomId: 'cached-room',
+            startedAt: 1,
+            name: 'Offline project',
+          ),
+        ];
+        final prefs = _preferences();
+        final conn = _conn(storage: storage);
+        final vm = HomeViewModel(storage, prefs, conn);
 
-      await Future<void>.delayed(Duration.zero);
-      await Future<void>.delayed(Duration.zero);
+        await Future<void>.delayed(Duration.zero);
+        await Future<void>.delayed(Duration.zero);
 
-      expect(conn.status, isA<StatusNoPeer>());
-      expect((vm.state as HomeList).filter, HomeFilter.all);
-      expect(
-        vm.visibleItems.map((item) => item.room.roomId),
-        ['cached-room'],
-      );
+        expect(conn.status, isA<StatusNoPeer>());
+        expect((vm.state as HomeList).filter, HomeFilter.online);
+        expect(vm.visibleItems, isEmpty);
+        expect(vm.counts, (all: 1, online: 0, offline: 1));
 
-      vm.dispose();
-      conn.dispose();
-    });
+        vm.setFilter(HomeFilter.all);
+        expect(
+          vm.visibleItems.map((item) => item.room.roomId),
+          ['cached-room'],
+        );
+
+        vm.dispose();
+        conn.dispose();
+      },
+    );
 
     test('openSession writes selectedPeerEpk to Preferences', () async {
       final storage = _FakeStorage([_peerA, _peerB]);
@@ -351,10 +359,9 @@ void main() {
       // Counts are independent of the selected tab.
       expect(vm.counts, (all: 2, online: 1, offline: 1));
 
-      // Default tab is All so cached/offline sessions remain usable without
-      // waiting for the relay. Both rooms are visible.
-      expect((vm.state as HomeList).filter, HomeFilter.all);
-      expect(vm.visibleItems.map((i) => i.room.roomId).toList(), ['r1', 'r2']);
+      // Default tab is Online: only the live room is listed.
+      expect((vm.state as HomeList).filter, HomeFilter.online);
+      expect(vm.visibleItems.map((i) => i.room.roomId).toList(), ['r1']);
 
       // Offline → only the cached room.
       vm.setFilter(HomeFilter.offline);
@@ -424,11 +431,11 @@ void main() {
         final vm = HomeViewModel(storage, prefs, _conn(storage: storage));
         await Future<void>.delayed(Duration.zero);
 
-        expect((vm.state as HomeList).filter, HomeFilter.all);
+        expect((vm.state as HomeList).filter, HomeFilter.online);
         var notifies = 0;
         vm.addListener(() => notifies++);
 
-        vm.setFilter(HomeFilter.all); // same tab → no emit
+        vm.setFilter(HomeFilter.online); // same tab → no emit
         expect(notifies, 0);
 
         vm.setFilter(HomeFilter.offline); // changed → one emit
@@ -482,6 +489,42 @@ void main() {
         expect(vm.counts, (all: 1, online: 0, offline: 1));
         expect((vm.state as HomeList).filter, HomeFilter.online);
         expect(vm.visibleItems, isEmpty);
+
+        vm.dispose();
+        await conn.disconnect();
+        conn.dispose();
+      },
+    );
+
+    test(
+      'relay unreachable (Retrying) ends the Online spinner so the tab can '
+      'show its empty message instead of loading forever',
+      () async {
+        final storage = _FakeStorage([_peerA]);
+        storage._rooms[_peerA.remoteEpk] = const [
+          PersistedRoom(roomId: 'cached-room', startedAt: 1),
+        ];
+        final conn = ConnectionManager(
+          factory: (_, _) async => throw StateError('relay unreachable'),
+          storage: storage,
+          emitDebounce: Duration.zero,
+        );
+        final vm = HomeViewModel(storage, _preferences(), conn);
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+
+        // Relay never answered yet, nothing has failed → still loading.
+        expect((vm.state as HomeList).filter, HomeFilter.online);
+        expect(vm.onlineListPending, isTrue);
+
+        var notifies = 0;
+        vm.addListener(() => notifies++);
+        await conn.connectTo(_peerA);
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+
+        expect(conn.status, isA<StatusRetrying>());
+        expect(vm.visibleItems, isEmpty);
+        expect(vm.onlineListPending, isFalse);
+        expect(notifies, greaterThan(0), reason: 'page must rebuild');
 
         vm.dispose();
         await conn.disconnect();
