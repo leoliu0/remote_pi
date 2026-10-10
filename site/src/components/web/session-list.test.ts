@@ -362,7 +362,17 @@ describe("Home derivations", () => {
   it("formats model ids like the app", () => {
     assert.equal(formatModelName("qwen3.8-flash"), "Qwen 3.8 Flash");
     assert.equal(formatModelName("anthropic/claude-opus-4-7"), "Claude Opus 4 7");
-    assert.equal(formatModelName("Claude Opus 4.7"), "Claude Opus 4.7");
+    assert.equal(formatModelName("Gemini 3.8 Flash"), "Gemini 3.8 Flash");
+  });
+
+  it("labels registry names like the omp footer (drops a leading \"Claude \")", () => {
+    // room_meta.model as pi-extension sends it (captured from omp v18.8.7);
+    // the terminal footer shows "Opus 5.5 · auto" for this session.
+    assert.equal(formatModelName("Claude Opus 5.5"), "Opus 5.5");
+    assert.equal(formatModelName("Claude Sonnet 5.5"), "Sonnet 5.5");
+    const items = homeItems(peers, state());
+    const tile = { ...items[1], room: { ...items[1].room, model: "Claude Opus 5.5", thinking: "auto" } };
+    assert.deepEqual(tileSubtitle(tile), { text: "Opus 5.5 · auto", accented: true });
   });
 
   it("forgetPeer removes a revoked PC everywhere", () => {

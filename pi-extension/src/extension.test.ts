@@ -14,6 +14,7 @@ import { fileURLToPath } from "node:url";
 import { getCapabilities, setCapabilities } from "@earendil-works/pi-tui";
 import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { EXIT_DAEMON_RESTART } from "./daemon/rpc_child.js";
+import capture from "./model_meta.fixture.json" with { type: "json" };
 
 const _convertToPngMock = vi.hoisted(() => vi.fn(async () => null));
 
@@ -6745,6 +6746,129 @@ describe("model meta", () => {
       .filter((f) => f.type === "room_meta_update");
     expect(updates).toHaveLength(1);
     expect(updates[0]!.meta?.model).toBe("GPT-5.6 Sol");
+  });
+
+  // ── footer mirror (captured omp v18.8.7 data, see model_meta.fixture.json) ──
+
+  /** Runs `body` with HOME pointing at a scratch dir whose omp config.yml
+   *  holds `configYml` — the old code read ~/.omp/agent/config.yml. */
+  async function withOmpHome(configYml: string, body: () => Promise<void>): Promise<void> {
+    const home = mkdtempSync(join(tmpdir(), "mp-omp-home-"));
+    mkdirSync(join(home, ".omp", "agent"), { recursive: true });
+    writeFileSync(join(home, ".omp", "agent", "config.yml"), configYml);
+    const prevHome = process.env["HOME"];
+    process.env["HOME"] = home;
+    try {
+      await body();
+    } finally {
+      if (prevHome === undefined) delete process.env["HOME"];
+      else process.env["HOME"] = prevHome;
+      rmSync(home, { recursive: true, force: true });
+    }
+  }
+
+  function ompCtx(cwd: string, model: unknown, branch: unknown[]) {
+    return {
+      ui: { notify: vi.fn() },
+      cwd,
+      abort: vi.fn(),
+      model,
+      sessionManager: { getBranch: () => branch, getLeafId: () => "5f8f1378" },
+    } as unknown as ReturnType<typeof makeMockCtx>;
+  }
+
+  function thinkingSent(): Array<string | null | undefined> {
+    return relayRef.current!.sendControl.mock.calls
+      .map((c) => c[0] as { type: string; meta?: { thinking?: string | null } })
+      .filter((f) => f.type === "room_meta_update" && f.meta && "thinking" in f.meta)
+      .map((f) => f.meta!.thinking);
+  }
+
+  test("auto thinking before any prompt publishes 'auto' like the footer, not the effective level", async () => {
+    // Captured: `/effort auto` → thinking_level_change {thinkingLevel:"high",
+    // configured:"auto"}; getThinkingLevel() = "high"; footer "Opus 5.5 · auto".
+    await withOmpHome("defaultThinkingLevel: high\n", async () => {
+      const capturedOpts: Array<{ roomMeta?: { model?: string; thinking?: string } }> = [];
+      _defaultConnectImpl = async (opts?: unknown) => {
+        capturedOpts.push(opts as { roomMeta?: { model?: string; thinking?: string } });
+      };
+      const branch = capture.branch.slice(0, 5);
+      const ctx = ompCtx("/tmp/remote-pi-footer-auto", capture.models.opus, branch);
+      captureHandler("remote-pi");
+      captureEventHandler("session_start")({ type: "session_start" }, ctx);
+      const setThinkingLevel = vi.fn();
+      _setPiForTest({ getThinkingLevel: () => "high", setThinkingLevel });
+      await _connectForTest(ctx);
+
+      expect(capturedOpts[0]!.roomMeta?.thinking).toBe("auto");
+      expect(setThinkingLevel).not.toHaveBeenCalled();
+
+      // First prompt resolves auto: omp appends the resolved level, then the
+      // user message; the footer flips to "low".
+      branch.push(...capture.branch.slice(5, 11));
+      _setPiForTest({ getThinkingLevel: () => "low", setThinkingLevel });
+      _pollModelAndThinkingChangesForTest();
+      expect(thinkingSent()).toEqual(["low"]);
+    });
+  });
+
+  test("relay start keeps the session's level (uts: config.yml auto, terminal xhigh) and follows terminal changes", async () => {
+    // Real uts Licensing entries: config.yml says `defaultThinkingLevel: auto`
+    // (written by an earlier app pick) while the terminal footer shows xhigh.
+    // The old start forced config.yml's level onto the session — `undefined`
+    // for auto, which omp renders as "off" — published "auto", and then
+    // ignored every terminal change.
+    await withOmpHome("defaultThinkingLevel: auto\n", async () => {
+      const capturedOpts: Array<{ roomMeta?: { thinking?: string } }> = [];
+      _defaultConnectImpl = async (opts?: unknown) => {
+        capturedOpts.push(opts as { roomMeta?: { thinking?: string } });
+      };
+      const branch: unknown[] = [
+        { type: "model_change", id: "8f858b39", parentId: null, timestamp: "2026-09-30T23:28:33.200Z", model: "anthropic/claude-opus-5-5", role: "default", resolvedModelIsFallback: false },
+        { type: "thinking_level_change", id: "69428d95", parentId: "98e42155", timestamp: "2026-10-10T01:22:48.522Z", thinkingLevel: "low", configured: "low" },
+        { type: "thinking_level_change", id: "fa78d4d2", parentId: "69428d95", timestamp: "2026-10-10T01:22:48.762Z", thinkingLevel: "medium", configured: "medium" },
+        { type: "thinking_level_change", id: "00239cab", parentId: "fa78d4d2", timestamp: "2026-10-10T01:22:49.487Z", thinkingLevel: "high", configured: "high" },
+        { type: "thinking_level_change", id: "263622c4", parentId: "00239cab", timestamp: "2026-10-10T01:22:50.445Z", thinkingLevel: "xhigh", configured: "xhigh" },
+      ];
+      const ctx = ompCtx("/tmp/remote-pi-footer-uts", capture.models.opus, branch);
+      captureHandler("remote-pi");
+      captureEventHandler("session_start")({ type: "session_start" }, ctx);
+      let level = "xhigh";
+      const setThinkingLevel = vi.fn();
+      _setPiForTest({ getThinkingLevel: () => level, setThinkingLevel });
+      await _connectForTest(ctx);
+
+      expect(setThinkingLevel).not.toHaveBeenCalled();
+      expect(capturedOpts[0]!.roomMeta?.thinking).toBe("xhigh");
+
+      // Terminal: Shift+Tab to "high".
+      branch.push({ type: "thinking_level_change", id: "t-high", parentId: "263622c4", thinkingLevel: "high", configured: "high" });
+      level = "high";
+      _pollModelAndThinkingChangesForTest();
+      expect(thinkingSent()).toEqual(["high"]);
+    });
+  });
+
+  test("hello carries the live model name, not the session log's provider/id", async () => {
+    // The old session_start hydration cached the last `model` string from the
+    // JSONL (`anthropic/claude-opus-5-5` / message `claude-opus-5-5`), and the
+    // hello then skipped the live model the footer shows.
+    const capturedOpts: Array<{ roomMeta?: { model?: string } }> = [];
+    _defaultConnectImpl = async (opts?: unknown) => {
+      capturedOpts.push(opts as { roomMeta?: { model?: string } });
+    };
+    const branch = [
+      ...capture.branch.slice(0, 2),
+      { type: "message", id: "u1", parentId: "5f8f1378", timestamp: "2026-10-10T01:58:03.811Z", message: { role: "user", content: "hi", timestamp: 1 } },
+      { type: "message", id: "a1", parentId: "u1", timestamp: "2026-10-10T01:58:05.384Z", message: { role: "assistant", content: [{ type: "text", text: "ok" }], model: "claude-opus-5-5", provider: "anthropic", timestamp: 2 } },
+    ];
+    const ctx = ompCtx("/tmp/remote-pi-footer-model", capture.models.opus, branch);
+    captureHandler("remote-pi");
+    captureEventHandler("session_start")({ type: "session_start" }, ctx);
+    _setPiForTest({ getThinkingLevel: () => "high", setThinkingLevel: vi.fn() });
+    await _connectForTest(ctx);
+
+    expect(capturedOpts[0]!.roomMeta?.model).toBe("Claude Opus 5.5");
   });
 
 

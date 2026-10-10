@@ -168,4 +168,11 @@ void main() {
     expect(formatModelName('claude-3-7-sonnet'), 'Claude 3 7 Sonnet');
     expect(formatModelName('google/gemini-2.5-pro'), 'Gemini 2.5 Pro');
   });
+
+  test('formatModelName drops a leading "Claude " like the omp footer', () {
+    // room_meta.model as pi-extension sends it (captured from omp v18.8.7);
+    // the terminal footer shows "Opus 5.5".
+    expect(formatModelName('Claude Opus 5.5'), 'Opus 5.5');
+    expect(formatModelName('Claude Sonnet 5.5'), 'Sonnet 5.5');
+  });
 }

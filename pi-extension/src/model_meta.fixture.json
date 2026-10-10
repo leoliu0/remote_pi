@@ -1,0 +1,51 @@
+{
+  "_source": "Captured 2026-10-10 from a scratch omp v18.8.7 TUI session (/tmp/mp-scratch, remote-pi debug capture). `models` are ctx.model as the extension saw it; `branch` is sessionManager.getBranch() reduced to the fields model_meta.ts reads (message bodies dropped). `footer` is the terminal status-line model segment at each step.",
+  "models": {
+    "opus": {
+      "id": "claude-opus-5-5",
+      "name": "Claude Opus 5.5",
+      "reasoning": true,
+      "thinking": { "mode": "anthropic-adaptive", "efforts": ["low", "medium", "high", "xhigh", "max"], "supportsDisplay": true, "prefixBinding": true }
+    },
+    "sonnet": {
+      "id": "claude-sonnet-5-5",
+      "name": "Claude Sonnet 5.5",
+      "reasoning": true,
+      "thinking": { "mode": "anthropic-adaptive", "efforts": ["low", "medium", "high", "xhigh", "max"], "supportsDisplay": true, "prefixBinding": true }
+    }
+  },
+  "branch": [
+    { "type": "model_change", "id": "bc59aa52", "parentId": null, "timestamp": "2026-10-10T01:57:34.477Z", "model": "anthropic/claude-opus-5-5", "resolvedModelIsFallback": false },
+    { "type": "thinking_level_change", "id": "5f8f1378", "parentId": "bc59aa52", "timestamp": "2026-10-10T01:57:34.477Z", "thinkingLevel": "high", "configured": null },
+    { "type": "thinking_level_change", "id": "11e7a990", "parentId": "5f8f1378", "timestamp": "2026-10-10T01:57:50.541Z", "thinkingLevel": "low", "configured": "low" },
+    { "type": "thinking_level_change", "id": "50f5f68a", "parentId": "11e7a990", "timestamp": "2026-10-10T01:57:53.613Z", "thinkingLevel": "off", "configured": "off" },
+    { "type": "thinking_level_change", "id": "39552e8f", "parentId": "50f5f68a", "timestamp": "2026-10-10T01:57:56.676Z", "thinkingLevel": "high", "configured": "auto" },
+    { "type": "model_usage", "id": "fbd36e56", "parentId": "39552e8f", "timestamp": "2026-10-10T01:58:03.785Z", "purpose": "auto-thinking", "role": "judge", "provider": "anthropic", "model": "claude-sonnet-5-5" },
+    { "type": "thinking_level_change", "id": "b7824217", "parentId": "fbd36e56", "timestamp": "2026-10-10T01:58:03.786Z", "thinkingLevel": "low", "configured": "auto" },
+    { "type": "message", "id": "caadcede", "parentId": "b7824217", "timestamp": "2026-10-10T01:58:03.811Z", "message": { "role": "user" } },
+    { "type": "custom", "id": "6d6b9cc5", "parentId": "caadcede", "timestamp": "2026-10-10T01:58:05.384Z" },
+    { "type": "message", "id": "6c8dd5da", "parentId": "6d6b9cc5", "timestamp": "2026-10-10T01:58:05.384Z", "message": { "role": "assistant" } },
+    { "type": "credential_pin", "id": "57bebd8d", "parentId": "6c8dd5da", "timestamp": "2026-10-10T01:58:05.392Z" },
+    { "type": "model_change", "id": "4dd16bc0", "parentId": "57bebd8d", "timestamp": "2026-10-10T01:58:16.653Z", "model": "anthropic/claude-sonnet-5-5", "role": "smol", "resolvedModelIsFallback": false },
+    { "type": "thinking_level_change", "id": "67281786", "parentId": "4dd16bc0", "timestamp": "2026-10-10T01:58:16.654Z", "thinkingLevel": "high", "configured": "auto" },
+    { "type": "thinking_level_change", "id": "8c2cc67f", "parentId": "67281786", "timestamp": "2026-10-10T01:58:20.713Z", "thinkingLevel": "low", "configured": "low" },
+    { "type": "thinking_level_change", "id": "da3a8c0d", "parentId": "8c2cc67f", "timestamp": "2026-10-10T01:58:29.910Z", "thinkingLevel": "high", "configured": "auto" },
+    { "type": "model_usage", "id": "09c33939", "parentId": "da3a8c0d", "timestamp": "2026-10-10T01:58:34.256Z", "purpose": "auto-thinking", "role": "judge", "provider": "anthropic", "model": "claude-sonnet-5-5" },
+    { "type": "thinking_level_change", "id": "d45f7c35", "parentId": "09c33939", "timestamp": "2026-10-10T01:58:34.256Z", "thinkingLevel": "low", "configured": "auto" },
+    { "type": "message", "id": "c1bfebc9", "parentId": "d45f7c35", "timestamp": "2026-10-10T01:58:34.280Z", "message": { "role": "user" } },
+    { "type": "custom", "id": "60808c4a", "parentId": "c1bfebc9", "timestamp": "2026-10-10T01:58:35.975Z" },
+    { "type": "message", "id": "9712a294", "parentId": "60808c4a", "timestamp": "2026-10-10T01:58:35.975Z", "message": { "role": "assistant" } },
+    { "type": "custom", "id": "bf571136", "parentId": "9712a294", "timestamp": "2026-10-10T01:58:47.037Z" }
+  ],
+  "steps": [
+    { "scenario": "startup (default role, high)", "branchEnd": 2, "model": "opus", "getThinkingLevel": "high", "footer": "Opus 5.5 · high", "expected": "high" },
+    { "scenario": "/effort low", "branchEnd": 3, "model": "opus", "getThinkingLevel": "low", "footer": "Opus 5.5 · low", "expected": "low" },
+    { "scenario": "/effort off", "branchEnd": 4, "model": "opus", "getThinkingLevel": "off", "footer": "Opus 5.5 · off", "expected": "off" },
+    { "scenario": "/effort auto, before any prompt", "branchEnd": 5, "model": "opus", "getThinkingLevel": "high", "footer": "Opus 5.5 · auto", "expected": "auto" },
+    { "scenario": "auto resolved by a prompt", "branchEnd": 11, "model": "opus", "getThinkingLevel": "low", "footer": "Opus 5.5 · low", "expected": "low" },
+    { "scenario": "Ctrl+P model switch while auto", "branchEnd": 13, "model": "sonnet", "getThinkingLevel": "high", "footer": "Sonnet 5.5 · auto", "expected": "auto" },
+    { "scenario": "Shift+Tab cycle to low", "branchEnd": 14, "model": "sonnet", "getThinkingLevel": "low", "footer": "Sonnet 5.5 · low", "expected": "low" },
+    { "scenario": "/effort auto again", "branchEnd": 15, "model": "sonnet", "getThinkingLevel": "high", "footer": "Sonnet 5.5 · auto", "expected": "auto" },
+    { "scenario": "auto resolved by a second prompt", "branchEnd": 21, "model": "sonnet", "getThinkingLevel": "low", "footer": "Sonnet 5.5 · low", "expected": "low" }
+  ]
+}

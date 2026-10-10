@@ -220,8 +220,8 @@ export interface ActionReplySender {
  */
 export interface ActionPi {
   setModel(model: Model<any>): Promise<boolean>;
-  /** `undefined` clears the override ("auto") — the SDK's
-   * `thinkingLevel?: Effort` state member. */
+  /** `"auto"` is omp's native auto mode; `undefined` clears upstream pi's
+   * override (its `thinkingLevel?: Effort` state member). */
   setThinkingLevel(level: ThinkingLevel | undefined): void;
 }
 
@@ -391,16 +391,16 @@ export function handleThinkingSet(
   pi: ActionPi,
   sender: ActionReplySender,
   msg: ThinkingSetMsg,
+  nativeAuto: boolean,
   onThinkingChanged?: (level: ThinkingLevel) => void,
 ): void {
   runSync(sender, msg, "thinking_set", () => {
-    // "auto" = clear the override so the model runs at its native default.
-    // The SDK's ThinkingLevel union has no "inherit" member — the type is
-    // `"off" | ... | "max"` and the runtime `state.thinkingLevel?: Effort`
-    // stores `undefined` for "no override". Passing "inherit" through would
-    // fall into clampThinkingLevel's unknown-level branch and snap to the
-    // lowest supported level (e.g. "minimal" on Gemini 3.7 Flash).
-    pi.setThinkingLevel(msg.level === "auto" ? undefined : msg.level);
+    // omp has a native "auto" thinking mode (footer shows "auto", then the
+    // level it picks per prompt). Upstream pi has none: its runtime
+    // `state.thinkingLevel?: Effort` stores `undefined` for "no override",
+    // and an unknown level would be clamped to the lowest supported one.
+    // omp treats `undefined` as a concrete level (its footer shows "off").
+    pi.setThinkingLevel(msg.level === "auto" && !nativeAuto ? undefined : msg.level);
     onThinkingChanged?.(msg.level);
   });
 }

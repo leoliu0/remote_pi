@@ -171,28 +171,39 @@ describe("handleThinkingSet", () => {
     const calls: string[] = [];
     const pi = fakePi({ setThinkingLevel: (lvl) => { calls.push(lvl); } });
     const sender = makeSender();
-    handleThinkingSet(pi, sender, { type: "thinking_set", id: "r3", level: "high" });
+    handleThinkingSet(pi, sender, { type: "thinking_set", id: "r3", level: "high" }, true);
     expect(calls).toEqual(["high"]);
     expect(sender.sent).toEqual([
       { type: "action_ok", in_reply_to: "r3", action: "thinking_set" },
     ]);
   });
 
-  test("auto level clears the override (undefined) on pi.setThinkingLevel", () => {
+  test("upstream pi: auto clears the override (undefined) on pi.setThinkingLevel", () => {
     const calls: (string | undefined)[] = [];
     const pi = fakePi({ setThinkingLevel: (lvl) => { calls.push(lvl); } });
     const sender = makeSender();
-    handleThinkingSet(pi, sender, { type: "thinking_set", id: "r3", level: "auto" });
+    handleThinkingSet(pi, sender, { type: "thinking_set", id: "r3", level: "auto" }, false);
     expect(calls).toEqual([undefined]);
     expect(sender.sent).toEqual([
       { type: "action_ok", in_reply_to: "r3", action: "thinking_set" },
     ]);
   });
 
+  test("omp: auto selects omp's native auto mode (undefined renders as \"off\" in its footer)", () => {
+    const calls: (string | undefined)[] = [];
+    const pi = fakePi({ setThinkingLevel: (lvl) => { calls.push(lvl); } });
+    const sender = makeSender();
+    handleThinkingSet(pi, sender, { type: "thinking_set", id: "r4", level: "auto" }, true);
+    expect(calls).toEqual(["auto"]);
+    expect(sender.sent).toEqual([
+      { type: "action_ok", in_reply_to: "r4", action: "thinking_set" },
+    ]);
+  });
+
   test("setThinkingLevel throwing surfaces as action_error", () => {
     const pi = fakePi({ setThinkingLevel: () => { throw new Error("nope"); } });
     const sender = makeSender();
-    handleThinkingSet(pi, sender, { type: "thinking_set", id: "r3", level: "low" });
+    handleThinkingSet(pi, sender, { type: "thinking_set", id: "r3", level: "low" }, true);
     expect(sender.sent[0]).toMatchObject({
       type: "action_error",
       action: "thinking_set",

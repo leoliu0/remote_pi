@@ -670,12 +670,18 @@ const MODEL_BRANDS: Record<string, string> = {
   thinking: "Thinking",
 };
 
-/** `google/gemini-3.8-flash` → `Gemini 3.8 Flash` (app's `formatModelName`). */
+/**
+ * `google/gemini-3.8-flash` → `Gemini 3.8 Flash` (app's `formatModelName`).
+ * Registry names keep their spelling minus a leading "Claude ", exactly like
+ * the omp footer (`Claude Opus 5.5` → `Opus 5.5`).
+ */
 export function formatModelName(raw: string): string {
   const trimmed = raw.trim();
   if (!trimmed) return trimmed;
   const namePart = trimmed.includes("/") ? trimmed.split("/").pop() ?? trimmed : trimmed;
-  if (namePart.includes(" ") && /[A-Z]/.test(namePart)) return namePart;
+  if (namePart.includes(" ") && /[A-Z]/.test(namePart)) {
+    return namePart.startsWith("Claude ") ? namePart.slice("Claude ".length) : namePart;
+  }
   const tokens: string[] = [];
   for (const seg of namePart.split(/[-_]/)) {
     const m = /^([a-zA-Z]+)(\d.*)$/.exec(seg);

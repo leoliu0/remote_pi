@@ -306,9 +306,10 @@ String formatModelName(String raw) {
   // Strip provider prefix if present (e.g. "google/gemini-3.8-flash" -> "gemini-3.8-flash")
   final namePart = trimmed.contains('/') ? trimmed.split('/').last : trimmed;
 
-  // If already properly spaced and capitalized (e.g. "Gemini 3.8 Flash"), keep as-is
+  // Registry display names (e.g. "Gemini 3.8 Flash") stay as-is, minus a
+  // leading "Claude " exactly like the omp footer ("Claude Opus 5.5" → "Opus 5.5").
   if (namePart.contains(' ') && RegExp(r'[A-Z]').hasMatch(namePart)) {
-    return namePart;
+    return namePart.startsWith('Claude ') ? namePart.substring('Claude '.length) : namePart;
   }
 
   // Known brand acronyms / capitalizations

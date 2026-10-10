@@ -75,6 +75,7 @@ import {
   type ExtensionUiBridge,
 } from "./extension_ui_bridge.js";
 import { roomIdFor } from "./rooms.js";
+import { modelMetaFromSession, type LiveModel, type ModelMeta } from "./model_meta.js";
 import {
   ActivityBroadcaster,
   ActivityTracker,
@@ -240,18 +241,15 @@ function _isStrictBase64(data: string): boolean {
 }
 
 let _myRoomId: string | null = null;   // this Pi's room id (derived from cwd)
-// Plan/28 Wave D.1: `thinking` published alongside `model` so the app's
-// Quick Actions sheet hydrates the thinking segmented control on first
-// open instead of starting null. The SDK fires `thinking_level_select`
-// on every change (initial load + user toggle), mirrored to room_meta
-// the same way model is — apps subscribe to one channel for both.
-let _myRoomMeta: { name: string; cwd: string; model?: string; thinking?: ThinkingLevel; working?: boolean; goal?: string; loop?: string; plan?: string } | null = null;
-let _currentModel: string | undefined = undefined;  // last-known model name
-let _currentThinking: ThinkingLevel | undefined = undefined;  // last-known thinking level
-/** True while the user's selected "auto" is the effective source of truth.
- * While set, clamped SDK `thinking_level_select` echoes must not overwrite
- * the persisted/displayed "auto". Cleared when a concrete level is picked. */
-let _autoSelected = false;
+// `model` + `thinking` mirror the omp footer (see model_meta.ts); the app's
+// Quick Actions sheet hydrates its thinking control from the same field.
+let _myRoomMeta: { name: string; cwd: string; model?: string; thinking?: ThinkingLevel | null; working?: boolean; goal?: string; loop?: string; plan?: string } | null = null;
+let _currentModel: string | undefined = undefined;  // last-published model name
+/** Last-published footer thinking level; null = the footer shows none. */
+let _currentThinking: ThinkingLevel | null | undefined = undefined;
+/** Session leaf when this process bound the session: omp forgets the
+ *  auto-resolved thinking level on restore, so earlier prompts don't count. */
+let _sessionStartLeafId: string | undefined = undefined;
 
 // Streaming block phase for the current turn. The SDK's delta stream carries
 // no block separators, so message_update injects "\n\n" between consecutive
@@ -317,65 +315,60 @@ function _refreshSessionPeerCount(
     .catch(() => { /* older broker without list_peers — keep prior count */ });
 }
 
-/** Friendly model name for room_meta (plano 18). undefined when SDK has none yet. */
-export function _currentModelName(): string | undefined {
-  return _currentModel;
+/** The parts of an extension ctx the footer mirror reads. */
+interface ModelMetaCtx {
+  models?: { current?: () => LiveModel | undefined };
+  getModel?: () => LiveModel | undefined;
+  model?: LiveModel;
+  sessionManager?: { getBranch?: () => unknown[]; getLeafId?: () => string | null | undefined };
+}
+
+/** Model + thinking exactly as the terminal footer shows them (model_meta.ts). */
+function _liveModelMeta(preferred?: unknown): ModelMeta {
+  // Host ctx objects are untyped across pi/omp versions; every member is optional.
+  const ctx = (preferred ?? _liveCtx()) as ModelMetaCtx | null;
+  let branch: readonly unknown[] = [];
+  try { branch = ctx?.sessionManager?.getBranch?.() ?? []; } catch {}
+  let thinkingLevel: unknown;
+  try { thinkingLevel = _pi?.getThinkingLevel?.(); } catch {}
+  return modelMetaFromSession({
+    model: ctx?.models?.current?.() ?? ctx?.getModel?.() ?? ctx?.model,
+    thinkingLevel,
+    branch,
+    sessionStartLeafId: _sessionStartLeafId,
+  });
 }
 
 /**
- * Cache the active model name and fan it out to subscribed apps via a
- * `room_meta_update`. The relay push is a no-op when the room isn't up yet —
- * the next `room_meta` hello carries the cached value instead. Shared by the
- * `model_select` event and the connect/turn-start seeding, so a daemon that
- * just runs its DEFAULT model still reports it: `model_select` only fires on an
- * explicit set/cycle (never on settings load), so default-model daemons would
- * otherwise never surface their model.
+ * Publish model/thinking changes as one `room_meta_update`. The cache feeds
+ * the next `room_meta` hello, so this also runs while the relay is down.
+ * omp emits no extension event for model or thinking changes, so the 1 s
+ * poll below is what keeps clients in step with the terminal.
  */
-function _setCurrentModel(name: string): void {
-  _currentModel = name;
-  if (_myRoomMeta) _myRoomMeta = { ..._myRoomMeta, model: name };
+function _syncModelMeta(preferred?: unknown): void {
+  let meta: ModelMeta;
+  try { meta = _liveModelMeta(preferred); } catch { return; }
+  const patch: { model?: string; thinking?: ThinkingLevel | null } = {};
+  if (meta.model !== undefined && meta.model !== _currentModel) {
+    _currentModel = meta.model;
+    patch.model = meta.model;
+  }
+  if (meta.thinking !== undefined && meta.thinking !== _currentThinking) {
+    _currentThinking = meta.thinking;
+    patch.thinking = meta.thinking;
+  }
+  if (patch.model === undefined && patch.thinking === undefined) return;
+  if (_myRoomMeta) _myRoomMeta = { ..._myRoomMeta, ...patch };
   if (_relay && _myRoomId) {
-    _relay.sendControl({ type: "room_meta_update", room_id: _myRoomId, meta: { model: name } });
+    _relay.sendControl({ type: "room_meta_update", room_id: _myRoomId, meta: patch });
   }
 }
 let _modelPollTimer: NodeJS.Timeout | null = null;
 
-function _syncModelFromLiveCtx(): void {
-  try {
-    const ctx = _liveCtx() as {
-      models?: { current?: () => { name?: string; id?: string } | undefined };
-      getModel?: () => { name?: string; id?: string } | undefined;
-      model?: { name?: string; id?: string };
-    } | null;
-    const m = ctx?.models?.current?.() ?? ctx?.getModel?.() ?? ctx?.model;
-    const name = m?.name ?? m?.id;
-    if (name && name !== _currentModel) {
-      _setCurrentModel(name);
-    }
-  } catch {}
-}
-
-function _pollModelAndThinkingChanges(): void {
-  if (!_relay || !_myRoomId || _state !== "started") return;
-  _syncModelFromLiveCtx();
-  try {
-    const currentThinking = _pi?.getThinkingLevel?.();
-    if (currentThinking && currentThinking !== _currentThinking && !_autoSelected) {
-      _currentThinking = currentThinking;
-      if (_myRoomMeta) _myRoomMeta = { ..._myRoomMeta, thinking: currentThinking };
-      _relay.sendControl({
-        type: "room_meta_update",
-        room_id: _myRoomId,
-        meta: { thinking: currentThinking },
-      });
-    }
-  } catch {}
-}
-
 function _startModelPollTimer(): void {
   if (_modelPollTimer) return;
   _modelPollTimer = setInterval(() => {
-    _pollModelAndThinkingChanges();
+    if (_relay && _myRoomId && _state === "started") _syncModelMeta();
   }, 1000);
   _modelPollTimer.unref?.();
 }
@@ -388,7 +381,7 @@ function _stopModelPollTimer(): void {
 }
 
 export function _pollModelAndThinkingChangesForTest(): void {
-  _pollModelAndThinkingChanges();
+  _syncModelMeta();
 }
 
 
@@ -1157,7 +1150,6 @@ export function _hydrateMessageBufferFromSession(sessionManager?: unknown, fallb
   }
   try {
     const msgs: BufferMsg[] = [];
-    let lastSessionModel: string | undefined;
     if (sm && (typeof sm.getBranch === "function" || typeof sm.getEntries === "function")) {
       const branch = (typeof sm.getBranch === "function" ? sm.getBranch() : null) ??
                      (typeof sm.getEntries === "function" ? sm.getEntries() : null);
@@ -1165,13 +1157,6 @@ export function _hydrateMessageBufferFromSession(sessionManager?: unknown, fallb
         for (const entry of branch) {
           if (!entry || typeof entry !== "object") continue;
           const e = entry as Record<string, unknown>;
-          if (e.type === "model_change" && typeof e.model === "string") {
-            lastSessionModel = e.model;
-          } else if (e.model && typeof e.model === "string") {
-            lastSessionModel = e.model;
-          } else if (e.message && typeof e.message === "object" && typeof (e.message as any).model === "string") {
-            lastSessionModel = (e.message as any).model;
-          }
           const ts = typeof e.timestamp === "number"
             ? e.timestamp
             : typeof e.timestamp === "string"
@@ -1202,9 +1187,6 @@ export function _hydrateMessageBufferFromSession(sessionManager?: unknown, fallb
           }
         }
       }
-    }
-    if (lastSessionModel) {
-      _setCurrentModel(lastSessionModel);
     }
     if (msgs.length === 0 && sm && typeof sm.buildSessionContext === "function") {
       const built = sm.buildSessionContext();
@@ -1476,9 +1458,11 @@ export function _setSessionStartedAtForTest(ts: number | null): void {
   _sessionStartedAt = ts;
 }
 
-/** Test-only: reset the cached model name (between tests). */
+/** Test-only: reset the published model (and thinking) cache between tests. */
 export function _setCurrentModelForTest(name: string | undefined): void {
   _currentModel = name;
+  _currentThinking = undefined;
+  _sessionStartLeafId = undefined;
 }
 
 /** Test-only: read the active turn id used for plain `cancel` routing. */
@@ -1584,36 +1568,6 @@ function _persistThinkingDefault(level: string): void {
       writeFileSync(ompConfigPath, content);
     }
   } catch {}
-}
-
-function _mapOmpThinkingToPi(raw: string | undefined): ThinkingLevel | undefined {
-  if (!raw) return undefined;
-  const normalized = raw.trim().toLowerCase();
-  if (normalized === "auto" || normalized === "inherit") return "auto";
-  if (
-    normalized === "off" ||
-    normalized === "minimal" ||
-    normalized === "low" ||
-    normalized === "medium" ||
-    normalized === "high" ||
-    normalized === "xhigh" ||
-    normalized === "max"
-  ) {
-    return normalized;
-  }
-  return undefined;
-}
-
-function _readOmpThinkingLevel(): ThinkingLevel | undefined {
-  try {
-    const ompConfigPath = join(homedir(), ".omp", "agent", "config.yml");
-    if (!existsSync(ompConfigPath)) return undefined;
-    const content = readFileSync(ompConfigPath, "utf8");
-    const match = content.match(/defaultThinkingLevel:\s*([^\s#]+)/);
-    return _mapOmpThinkingToPi(match?.[1]);
-  } catch {
-    return undefined;
-  }
 }
 
 type ClientUserMessage = Extract<ClientMessage, { type: "user_message" }>;
@@ -2828,47 +2782,23 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     return undefined;
   });
 
-  // Track active model so the app can show it in the SessionTile (plano 18).
-  // SDK fires model_select on settings load + every user switch. We cache the
-  // friendly name and broadcast a room_meta_update so the relay can fan it
-  // out to subscribed apps without needing a new pair.
+  // Upstream pi announces model/thinking switches with these events (omp has
+  // neither; the 1 s poll covers it). The event carries the new model, so it
+  // wins over the ctx; everything else follows the live footer state.
   pi.on("model_select", (event) => {
     if (fromSubagent()) return;
-    const m = event?.model as { name?: string; id?: string } | undefined;
-    const modelName = m?.name ?? m?.id;
-    if (!modelName) return;
-    // Cache + fan out. Keeps the cached room_meta fresh so a future reconnect
-    // carries the current model in its hello, and pushes a room_meta_update to
-    // apps already subscribed.
-    _setCurrentModel(modelName);
+    const model = event?.model as LiveModel | undefined;
+    if (!model) return;
+    const live = _liveCtx() as ModelMetaCtx | null;
+    _syncModelMeta({ model, sessionManager: live?.sessionManager });
   });
 
-  // Plan/28 Wave D.1: mirror model's room_meta_update path for thinking
-  // level so the app hydrates the segmented control on first open instead
-  // of starting null. SDK fires `thinking_level_select` on settings load
-  // AND on every user toggle (matching `model_select`'s behavior), so
-  // late-pairing apps see the current level via `room_meta_updated`.
-  //
-  // "auto" (app-level) maps to clearing the SDK override; the SDK then
-  // clamps to the model's lowest supported level and emits THAT level
-  // here. We must NOT let that resolved level overwrite the user's
-  // "auto" choice — otherwise the app's "auto" highlight flips to e.g.
-  // "min" and `_persistThinkingDefault` bakes the resolved level to disk,
-  // permanently replacing "auto". `_autoSelected` tracks the window.
   pi.on("thinking_level_select", (event) => {
     if (fromSubagent()) return;
     const level = event?.level as ThinkingLevel | undefined;
     if (!level) return;
-    if (_autoSelected) return;
-    _currentThinking = level;
-    if (_myRoomMeta) _myRoomMeta = { ..._myRoomMeta, thinking: level };
     try { _persistThinkingDefault(level); } catch {}
-    if (!_relay || !_myRoomId) return;
-    _relay.sendControl({
-      type: "room_meta_update",
-      room_id: _myRoomId,
-      meta: { thinking: level },
-    });
+    _syncModelMeta();
   });
   // Goal Mode state (plan: smart goal button). The SDK fires
   // `goal_updated` whenever the goal loop starts/stops/pauses.
@@ -3214,9 +3144,9 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     if (ctx && (ctx as { sessionManager?: unknown }).sessionManager) {
       _hydrateMessageBufferFromSession((ctx as { sessionManager?: unknown }).sessionManager);
     }
-    // Model hydration: grab the active model on each turn and fan it out
-    // (cached even while the relay is down, so the next hello carries it).
-    _syncModelFromLiveCtx();
+    // Model/thinking follow the footer on every turn (cached even while the
+    // relay is down, so the next hello carries them).
+    _syncModelMeta();
     // Plan/32 Part B: publish working=true as room_meta (raw, no debounce —
     // the debounce lives in the app). Same shape as the model/thinking updates.
     if (_myRoomMeta) _myRoomMeta = { ..._myRoomMeta, working: true };
@@ -3229,7 +3159,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     _turnActive = false;
     _scheduleWorkingMetaOff(_agentActive ? 150 : 0);
     _maybeFinalizeTurn();
-    _pollModelAndThinkingChanges();
+    _syncModelMeta();
   });
   // compaction proceeds.
   pi.on("session_before_compact", (event) => {
@@ -3305,7 +3235,13 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     }
     if (subagentCtx) return;
     _lastEventCtx = ctx;
-    _pollModelAndThinkingChanges();
+    // A restored session starts with auto thinking unresolved (omp resets it).
+    try {
+      _sessionStartLeafId = (ctx as ModelMetaCtx | undefined)?.sessionManager?.getLeafId?.() ?? undefined;
+    } catch {
+      _sessionStartLeafId = undefined;
+    }
+    _syncModelMeta();
     if (ctx && (ctx as { sessionManager?: unknown }).sessionManager) {
       _hydrateMessageBufferFromSession((ctx as { sessionManager?: unknown }).sessionManager);
     }
@@ -3692,7 +3628,7 @@ function _cmdStatus(ctx: Pick<ExtensionContext, "ui">): void {
       : `🟡 Relay: on, waiting for first pairing (${relayUrl})`;
   }
 
-  _pollModelAndThinkingChanges();
+  _syncModelMeta();
   ctx.ui.notify(`[remote-pi]\n  ${meshLine}\n  ${relayLine}`, "info");
 }
 
@@ -4145,70 +4081,30 @@ async function _cmdStart(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<voi
   // app pairs on the room the Pi actually announces.
   const roomId = roomIdFor(cwd, sessionName);
 
-  // Seed the current model from the SDK's resolved selection so room_meta
-  // carries it on connect. `model_select` only fires on an explicit set/cycle
-  // (NOT on settings load), so a headless daemon that just runs its default
-  // model never emits it — without this its room_meta would omit the model and
-  // the app shows "unknown". `getModel()` returns the session's resolved model
-  // in every mode (interactive + RPC daemon); turn_start hydrates it later if
-  // the SDK resolves the model lazily.
-  if (!_currentModel) {
+  // Seed model + thinking from the live session so the hello carries what the
+  // terminal footer shows. A HEADLESS DAEMON has no model at connect (the SDK
+  // resolves it lazily at the first turn), so fall back to the CONFIGURED
+  // default (defaultProvider/defaultModel in <cwd>/.pi/settings.json) — the
+  // model the daemon will actually use; without it an idle daemon shows
+  // "unknown". turn_start and the poll pick up the live model later.
+  _syncModelMeta(ctx);
+  if (_currentModel === undefined) {
     try {
-      const c = ctx as Partial<ExtensionContext> & {
-        model?: { name?: string; id?: string };
-        getModel?: () => { name?: string; id?: string } | undefined;
-      };
-      // Prefer the live getModel() / ctx.model — populated for an interactive
-      // Pi. For a HEADLESS DAEMON both are undefined at connect: the SDK only
-      // resolves `this.model` lazily at the first turn, and `model_select`
-      // never fires for a default-model session. So fall back to the CONFIGURED
-      // default (defaultProvider/defaultModel in <cwd>/.pi/settings.json) — the
-      // model the daemon will actually use. Without this an idle daemon (never
-      // prompted → no turn) would never report its model and the app shows
-      // "unknown". turn_start still hydrates a later override.
-      const live = c.getModel?.() ?? c.model;
-      if (live) {
-        _currentModel = live.name ?? live.id ?? undefined;
-      } else {
-        const sm = SettingsManager.create(cwd);
-        const provider = sm.getDefaultProvider();
-        const modelId = sm.getDefaultModel();
-        if (modelId) {
-          const found = provider
-            ? ensureModelRegistry((c ?? _lastEventCtx ?? _lastCtx) as unknown as ActionCtx | null)
-                .find(provider, modelId)
-            : undefined;
-          _currentModel = found?.name ?? modelId;
-        }
+      const sm = SettingsManager.create(cwd);
+      const provider = sm.getDefaultProvider();
+      const modelId = sm.getDefaultModel();
+      if (modelId) {
+        const found = provider
+          ? ensureModelRegistry((ctx ?? _lastEventCtx ?? _lastCtx) as unknown as ActionCtx | null)
+              .find(provider, modelId)
+          : undefined;
+        _currentModel = found?.name ?? modelId;
       }
     } catch { /* defensive — never block start on a model lookup */ }
   }
 
-  // Seed thinking from OMP config.yml first so the phone matches the CLI,
-  // then fall back to the SDK's current level.
-  // "auto" on the wire means "no override" — pass `undefined` to the SDK
-  // so the model runs at its native default, and raise `_autoSelected` so
-  // the SDK's clamped echo (thinking_level_select) can't overwrite the
-  // persisted/displayed "auto".
-  try {
-    const ompThinking = _readOmpThinkingLevel();
-    const sdkThinking = _pi?.getThinkingLevel() as ThinkingLevel | undefined;
-    _currentThinking = ompThinking ?? sdkThinking;
-    _autoSelected = ompThinking === "auto";
-    if (ompThinking && _pi && typeof _pi.setThinkingLevel === "function") {
-      // Bundled SDK types (0.79) predate "max"; the runtime pi (≥0.84)
-      // accepts it. Cast across the version gap.
-      try {
-        _pi.setThinkingLevel(
-          (ompThinking === "auto" ? undefined : ompThinking) as never,
-        );
-      } catch {}
-    }
-  } catch { /* defensive — never block /remote-pi start on this */ }
-
   const roomMeta: { name: string; cwd: string; model?: string; thinking?: ThinkingLevel; goal?: string; loop?: string; plan?: string } = { name: sessionName, cwd };
-  const modelName = _currentModelName();
-  if (modelName) roomMeta.model = modelName;
+  if (_currentModel) roomMeta.model = _currentModel;
   if (_currentThinking) roomMeta.thinking = _currentThinking;
   try {
     const detectedGoal =
@@ -5832,7 +5728,7 @@ export function _routeClientMessageFrom(
   // session_sync has its own internal guards — handle before the strict
   // pi-binding guard so a missing _pi doesn't drop the reply.
   if (msg.type === "session_sync") {
-  _pollModelAndThinkingChanges();
+    _syncModelMeta();
     _handleSessionSync(sender, msg);
     return;
   }
@@ -6071,9 +5967,7 @@ export function _routeClientMessageFrom(
           sender,
           msg,
           _persistModelDefault,
-          (friendlyName) => {
-            _setCurrentModel(friendlyName);
-          },
+          () => _syncModelMeta(),
         ).catch((err) => {
           sender.send({
             type: "action_error",
@@ -6093,18 +5987,12 @@ export function _routeClientMessageFrom(
       break;
     case "thinking_set":
       try {
-        handleThinkingSet(_pi, sender, msg, (lvl) => {
-          _currentThinking = lvl;
-          _autoSelected = lvl === "auto";
-          if (_myRoomMeta) _myRoomMeta = { ..._myRoomMeta, thinking: lvl };
+        // omp models carry `thinking` metadata and omp has a native "auto"
+        // mode; upstream pi only knows "clear the override".
+        const nativeAuto = (_liveCtx() as ModelMetaCtx | null)?.model?.thinking !== undefined;
+        handleThinkingSet(_pi, sender, msg, nativeAuto, (lvl) => {
           try { _persistThinkingDefault(lvl); } catch {}
-          if (_relay && _myRoomId) {
-            _relay.sendControl({
-              type: "room_meta_update",
-              room_id: _myRoomId,
-              meta: { thinking: lvl },
-            });
-          }
+          _syncModelMeta();
         });
       } catch (err: any) {
         sender.send({
@@ -6122,7 +6010,7 @@ export function _routeClientMessageFrom(
           ensureModelRegistry((_lastEventCtx ?? _lastCtx) as ActionCtx | null),
           sender,
           msg,
-          _currentModelName(),
+          _currentModel,
         );
       } catch (err: any) {
         sender.send({
