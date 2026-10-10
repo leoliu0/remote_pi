@@ -720,3 +720,4 @@ Existing stored duplicates are not purged by this fix.
 - User: the thinking trace font is too small and too dark.
 - Web: 12.5px #5A5A5A became 13.5px #8A8A8A with relaxed line height (body is 14px #E0E0E0); header 12px. App: `muted` at 65% alpha, 12.5pt became `muted2` (#8A8A8A), 14pt (body 15pt). Still italic and grey, so it stays apart from the answer ([web](screens/2026-10-10-web-thinking-readable.png), throwaway page in isolated headless Chromium).
 - App chat tests 246 pass, analyzer clean; site 129 pass.
+- Phone check on 1.2.51 (SM-S948B, USB): Home opens on Online (Online 2 of All 10); rosebery tile `Opus 5.5 · xhigh`, matching the session; Licensing still `auto` because its omp runs the extension from before ac3375b8. In the remote_pi chat the thinking blocks are visibly larger and lighter than before and the Agents panel lists running jobs ([home](screens/2026-10-10-phone-1251-home.png), [chat](screens/2026-10-10-phone-1251-chat.png)).
