@@ -747,3 +747,10 @@ Existing stored duplicates are not purged by this fix.
 - Cause: room subscriptions were keyed by the owner key and wiped on any disconnect of that key, so the phone sleeping or a tab closing silently stopped live room updates on every other device. A `subscribe_*` from one device also replaced the other's list (presence too).
 - Fix a93863aa: keyed by connection id. 4 new integration tests fail before the fix and pass after; full `cargo test` 118 pass, clippy clean.
 - Deployed 02:52:39Z: binary sha256 1aed7e4b…, previous binary kept as `/usr/local/bin/remote-pi-relay.bak-20261010`. Health 200; rosebery (2 rooms), uts Licensing, the owner device and the scratch PC re-authenticated within seconds.
+
+### 2026-10-10 - Production second pass after the audit, label and relay deploys
+
+- Chat header shows `Opus 5.5 · xhi`, matching the footer ([header](screens/2026-10-10-prod-12-chat-header-xhi.png), [tile](screens/2026-10-10-prod-12-home-tile-xhi.png), [quick actions](screens/2026-10-10-prod-12-quick-actions-opus55-xhi.png)).
+- New thinking style shown in full on production ([thinking](screens/2026-10-10-prod-10-thinking-new-style-full.png)). Stop before any text streamed cancels the turn ([stop](screens/2026-10-10-prod-9-stop-cancelled.png)). Quick Actions model picker loads the Pi's models ([picker](screens/2026-10-10-prod-8-model-picker.png)).
+- D1 retest after the relay deploy: a second same-key device connected and disconnected several times (relay journal, peer VtdIPl4=); the tile still shows the live level ([tile](screens/2026-10-10-prod-11-d1-tile-follows-after-second-device-disconnect.png)). The verifier's written report for this pass was lost when its run ended; evidence is the screenshots plus the relay journal.
+- New defect: with thinking at `max`, the Quick Actions chips after `models_list` stop at `high` (no `xhi`/`max`) ([defect](screens/2026-10-10-prod-8-defect-thinking-chips-after-models-list.png)). Fix in progress.
