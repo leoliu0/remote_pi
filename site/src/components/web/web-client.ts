@@ -14,6 +14,8 @@ import { chatEventFromFrame, type ChatEvent } from "./chat-stream.ts";
 import { parseExtensionUiRequest, type ExtensionUiRequest, type ExtensionUiResponseWire } from "./extension-ui.ts";
 import { parseAgentActivity, type AgentActivityJob } from "./activity.ts";
 import { parseStatusLine, type StatusLine } from "./status-line.ts";
+import { parsePlanState, type PlanModeAction, type PlanState } from "./plan-state.ts";
+import { parseTodoState, type TodoPhase } from "./todo.ts";
 
 /** The room a chat is bound to — built from a Home tile when it is opened. */
 export interface PairedSession {
@@ -208,7 +210,8 @@ export type RoomCommand =
   | { action: "set_model"; provider: string; modelId: string }
   | { action: "set_thinking"; thinking: string }
   | { action: "compact" }
-  | { action: "new_session" };
+  | { action: "new_session" }
+  | { action: "plan_mode"; mode: PlanModeAction };
 
 // Keeps action ids unique within one millisecond: replies are matched by id.
 let actionSeq = 0;
@@ -237,6 +240,8 @@ export function buildRoomCommand(cmd: RoomCommand): InnerFrame {
       return { type: "session_compact", id: actionId };
     case "new_session":
       return { type: "session_new", id: actionId };
+    case "plan_mode":
+      return { type: "plan_mode", id: actionId, action: cmd.mode };
   }
 }
 
@@ -322,8 +327,11 @@ export function actionReplyFromFrame(frame: Record<string, unknown>): ActionRepl
 /** Same budget as the app's ActionsRepository. */
 export const ACTION_TIMEOUT_MS = 15_000;
 
-/** The typed actions the quick actions sheet sends. */
-export type RoomAction = Extract<RoomCommand, { action: "list_models" | "set_model" | "set_thinking" | "compact" | "new_session" }>;
+/** The typed actions the quick actions sheet and the Plan control send. */
+export type RoomAction = Extract<
+  RoomCommand,
+  { action: "list_models" | "set_model" | "set_thinking" | "compact" | "new_session" | "plan_mode" }
+>;
 
 /**
  * Sends one typed action to `(peer, room)` and resolves with its reply frame,
@@ -394,6 +402,10 @@ export interface ChatClientEvents {
   onActivity?: (jobs: AgentActivityJob[]) => void;
   /** Full `status_line` snapshot: the terminal footer row's values. */
   onStatusLine?: (line: StatusLine) => void;
+  /** `plan_state` (on change and after every session_sync reply): omp's plan mode. */
+  onPlanState?: (state: PlanState) => void;
+  /** Full `todo_state` snapshot (on attach, after every sync reply, on change): omp's todo list; [] hides it. */
+  onTodoState?: (phases: TodoPhase[]) => void;
 }
 
 export class RemotePiRelayClient {
@@ -504,6 +516,18 @@ export class RemotePiRelayClient {
       case "status_line": {
         const line = parseStatusLine(msg);
         if (line) this.events.onStatusLine?.(line);
+        break;
+      }
+
+      case "plan_state": {
+        const state = parsePlanState(msg);
+        if (state) this.events.onPlanState?.(state);
+        break;
+      }
+
+      case "todo_state": {
+        const phases = parseTodoState(msg);
+        if (phases) this.events.onTodoState?.(phases);
         break;
       }
     }

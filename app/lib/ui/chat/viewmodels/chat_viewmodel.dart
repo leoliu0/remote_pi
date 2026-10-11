@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:app/data/actions/actions_repository.dart';
 import 'package:app/data/local/records/message_record.dart';
 import 'package:app/data/local/records/runtime_record.dart';
 import 'package:app/data/preferences/preferences.dart';
@@ -26,6 +27,7 @@ class ChatViewModel extends ViewModel<ChatState> {
   final ConnectionManager _conn;
   final Preferences _prefs;
   final PairingStorage _storage;
+  final IActionsRepository _actions;
 
   StreamSubscription<List<MessageRecord>>? _msgsSub;
   StreamSubscription<RuntimeRecord>? _runtimeSub;
@@ -36,6 +38,8 @@ class ChatViewModel extends ViewModel<ChatState> {
   StreamSubscription<ExtensionUiRequest>? _uiReqSub;
   StreamSubscription<Set<String>>? _uiOpenSub;
   StreamSubscription<List<AgentActivityJob>>? _activitySub;
+  StreamSubscription<PlanState?>? _planSub;
+  StreamSubscription<List<TodoPhase>>? _todoSub;
   StreamSubscription<Map<String, List<RoomInfo>>>? _roomsSub;
   StreamSubscription<ConnectionStatus>? _statusSub;
 
@@ -49,6 +53,13 @@ class ChatViewModel extends ViewModel<ChatState> {
   bool _working = false;
   List<QueuedMsg> _queuedMessages = const [];
   List<AgentActivityJob> _activity = const [];
+  // omp plan mode of this chat's session (latest `plan_state`; null until the
+  // Pi reports one). Seeded after activate(), reset by the SyncService on a
+  // session switch.
+  PlanState? _planState;
+  // omp todo list of this chat's session (latest `todo_state`; empty = no
+  // panel). Seeded after activate(), reset by the SyncService on a switch.
+  List<TodoPhase> _todo = const [];
   // Plan/57 — interactive extension_ui_requests awaiting an answer, in arrival
   // order; the newest is shown, older ones resurface once it resolves (several
   // can be open at once: parallel ask calls, plan review + ask, a sync replay).
@@ -62,8 +73,14 @@ class ChatViewModel extends ViewModel<ChatState> {
   String? _peerOfflineReason;
   ConnectionStatus? _lastStatus;
 
-  ChatViewModel(this._read, this._sync, this._conn, this._prefs, this._storage)
-    : super(const ChatReady(messages: [])) {
+  ChatViewModel(
+    this._read,
+    this._sync,
+    this._conn,
+    this._prefs,
+    this._storage,
+    this._actions,
+  ) : super(const ChatReady(messages: [])) {
     // Plan/32f — do NOT seed _streaming/_working from the shared SyncService
     // here: it may still be bound to the PREVIOUS chat (this VM is recreated
     // on session switch, before _bootstrap rebinds via activate). Seeding now
@@ -76,6 +93,8 @@ class ChatViewModel extends ViewModel<ChatState> {
     _uiReqSub = _sync.extensionUiRequestStream.listen(_onExtensionUiRequest);
     _uiOpenSub = _sync.extensionUiOpenStream.listen(_onExtensionUiOpen);
     _activitySub = _sync.agentActivityStream.listen(_onActivity);
+    _planSub = _sync.planStateStream.listen(_onPlanState);
+    _todoSub = _sync.todoStream.listen(_onTodo);
     _roomsSub = _conn.roomsStream.listen((_) => _recompute());
     _statusSub = _conn.statusStream.listen(_onStatus);
     // ignore: discarded_futures
@@ -187,6 +206,8 @@ class ChatViewModel extends ViewModel<ChatState> {
     _working = _sync.isWorking;
     _queuedMessages = _sync.queuedMessages;
     _activity = _sync.agentActivity;
+    _planState = _sync.planState;
+    _todo = _sync.todoPhases;
     _msgsSub = _read.watchMessages(epk, roomId).listen(_onMessages);
     _runtimeSub = _read.watchRuntime(epk, roomId).listen(_onRuntime);
 
@@ -238,6 +259,16 @@ class ChatViewModel extends ViewModel<ChatState> {
 
   void _onActivity(List<AgentActivityJob> jobs) {
     _activity = jobs;
+    _recompute();
+  }
+
+  void _onPlanState(PlanState? state) {
+    _planState = state;
+    _recompute();
+  }
+
+  void _onTodo(List<TodoPhase> phases) {
+    _todo = phases;
     _recompute();
   }
 
@@ -359,6 +390,8 @@ class ChatViewModel extends ViewModel<ChatState> {
       pendingUiRequest: _uiRequests.lastOrNull,
       pendingUiError: _uiErrors[_uiRequests.lastOrNull?.id],
       activity: _activity,
+      planState: _planState,
+      todo: _todo,
     );
   }
 
@@ -377,6 +410,12 @@ class ChatViewModel extends ViewModel<ChatState> {
 
   Future<void> approveTool(String toolCallId, ApproveDecision decision) =>
       _sync.approveTool(toolCallId, decision);
+
+  /// omp plan mode command over the typed-action path. Throws [ActionFailure]
+  /// (offline / timeout / `action_error`) for the page to surface; the new
+  /// state itself arrives as `plan_state`.
+  Future<void> setPlanMode(PlanModeAction action) =>
+      _actions.setPlanMode(action);
 
   /// Plan/57 — submit (or cancel) an interactive extension_ui_request.
   ///
@@ -434,6 +473,8 @@ class ChatViewModel extends ViewModel<ChatState> {
     _uiReqSub?.cancel();
     _uiOpenSub?.cancel();
     _activitySub?.cancel();
+    _planSub?.cancel();
+    _todoSub?.cancel();
     _roomsSub?.cancel();
     _statusSub?.cancel();
     super.dispose();

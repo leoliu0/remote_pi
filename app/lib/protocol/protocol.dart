@@ -39,7 +39,6 @@ sealed class ControlInbound {
             (j['working'] as bool?) ?? (metaJson?['working'] as bool?);
         final rawGoal = (j['goal'] as String?) ?? (metaJson?['goal'] as String?);
         final rawLoop = (j['loop'] as String?) ?? (metaJson?['loop'] as String?);
-        final rawPlan = (j['plan'] as String?) ?? (metaJson?['plan'] as String?);
         return RoomAnnounced(
           peer: j['peer'] as String,
           roomId: j['room_id'] as String,
@@ -53,7 +52,6 @@ sealed class ControlInbound {
           working: rawWorking,
           goal: rawGoal,
           loop: rawLoop,
-          plan: rawPlan,
         );
       }(),
       'room_ended' => RoomEnded(
@@ -73,7 +71,6 @@ sealed class ControlInbound {
         final hasThinking = meta?.containsKey('thinking') ?? false;
         final hasGoal = meta?.containsKey('goal') ?? false;
         final hasLoop = meta?.containsKey('loop') ?? false;
-        final hasPlan = meta?.containsKey('plan') ?? false;
         final rawThinking = meta?['thinking'] as String?;
         return RoomMetaUpdated(
           peer: j['peer'] as String,
@@ -85,12 +82,10 @@ sealed class ControlInbound {
           working: meta?['working'] as bool?,
           goal: meta?['goal'] as String?,
           loop: meta?['loop'] as String?,
-          plan: meta?['plan'] as String?,
           hasModel: hasModel,
           hasThinking: hasThinking,
           hasGoal: hasGoal,
           hasLoop: hasLoop,
-          hasPlan: hasPlan,
         );
       }(),
       _ => null,
@@ -207,7 +202,6 @@ class RoomInfo {
   final bool working;
   final String? goal;
   final String? loop;
-  final String? plan;
 
   const RoomInfo({
     required this.roomId,
@@ -219,7 +213,6 @@ class RoomInfo {
     this.working = false,
     this.goal,
     this.loop,
-    this.plan,
   });
 
   factory RoomInfo.fromJson(Map<String, dynamic> j) {
@@ -236,7 +229,6 @@ class RoomInfo {
       working: (j['working'] as bool?) ?? false,
       goal: j['goal'] as String?,
       loop: j['loop'] as String?,
-      plan: j['plan'] as String?,
     );
   }
 
@@ -250,7 +242,6 @@ class RoomInfo {
     'working': working,
     if (goal != null) 'goal': goal,
     if (loop != null) 'loop': loop,
-    if (plan != null) 'plan': plan,
   };
 
   RoomInfo copyWith({
@@ -262,7 +253,6 @@ class RoomInfo {
     bool? working,
     Object? goal = _kRoomInfoUnset,
     Object? loop = _kRoomInfoUnset,
-    Object? plan = _kRoomInfoUnset,
   }) => RoomInfo(
     roomId: roomId,
     name: name ?? this.name,
@@ -275,7 +265,6 @@ class RoomInfo {
     working: working ?? this.working,
     goal: identical(goal, _kRoomInfoUnset) ? this.goal : goal as String?,
     loop: identical(loop, _kRoomInfoUnset) ? this.loop : loop as String?,
-    plan: identical(plan, _kRoomInfoUnset) ? this.plan : plan as String?,
   );
 
   @override
@@ -289,8 +278,7 @@ class RoomInfo {
       other.thinking == thinking &&
       other.working == working &&
       other.goal == goal &&
-      other.loop == loop &&
-      other.plan == plan;
+      other.loop == loop;
   @override
   int get hashCode => Object.hash(
         roomId,
@@ -302,7 +290,6 @@ class RoomInfo {
         working,
         goal,
         loop,
-        plan,
       );
 }
 
@@ -327,7 +314,6 @@ class RoomAnnounced extends ControlInbound {
   final bool? working;
   final String? goal;
   final String? loop;
-  final String? plan;
   const RoomAnnounced({
     required this.peer,
     required this.roomId,
@@ -339,7 +325,6 @@ class RoomAnnounced extends ControlInbound {
     this.working,
     this.goal,
     this.loop,
-    this.plan,
   });
 }
 
@@ -399,8 +384,6 @@ class RoomMetaUpdated extends ControlInbound {
   final bool hasGoal;
   final String? loop;
   final bool hasLoop;
-  final String? plan;
-  final bool hasPlan;
   const RoomMetaUpdated({
     required this.peer,
     required this.roomId,
@@ -409,12 +392,10 @@ class RoomMetaUpdated extends ControlInbound {
     this.working,
     this.goal,
     this.loop,
-    this.plan,
     this.hasModel = true,
     this.hasThinking = true,
     this.hasGoal = false,
     this.hasLoop = false,
-    this.hasPlan = false,
   });
 }
 
@@ -657,7 +638,8 @@ enum ActionName {
   sessionCompact('session_compact'),
   modelSet('model_set'),
   thinkingSet('thinking_set'),
-  reloadPlugins('reload_plugins');
+  reloadPlugins('reload_plugins'),
+  planMode('plan_mode');
   final String wire;
   const ActionName(this.wire);
 
@@ -833,6 +815,31 @@ class ReloadPlugins extends ClientMessage {
   Map<String, dynamic> toJson() => {'type': 'reload_plugins', 'id': id};
 }
 
+/// omp plan mode command (typed action like `session_compact`): `enter` =
+/// `/plan`, `exit` = leave plan mode (the client confirms with the user first
+/// when a plan exists), `review` = `/plan-review` (re-opens the review).
+enum PlanModeAction {
+  enter('enter'),
+  exit('exit'),
+  review('review');
+
+  final String wire;
+  const PlanModeAction(this.wire);
+}
+
+class PlanMode extends ClientMessage {
+  final String id;
+  final PlanModeAction action;
+  PlanMode({required this.id, required this.action});
+
+  @override
+  Map<String, dynamic> toJson() => {
+    'type': 'plan_mode',
+    'id': id,
+    'action': action.wire,
+  };
+}
+
 // --- ServerMessage (extension → app) ---
 // 1 pairing = 1 session: no session_id on any message.
 // Sealed: all subtypes in this file — switch exhaustiveness enforced by compiler.
@@ -877,6 +884,14 @@ sealed class ServerMessage {
       // Running subagents + background jobs (omp's bottom activity panel).
       // Full snapshot: replace local state wholesale, never merge.
       'agent_activity' => AgentActivity.fromJson(json),
+      // omp plan mode state (idle/active/paused/review), broadcast on change
+      // and after every session_sync reply. The only plan state source: the
+      // relay drops room_meta `plan`.
+      'plan_state' => PlanState.fromJson(json),
+      // omp's todo list (the TUI's TODO panel), full snapshot of the main
+      // session's list on attach, after every session_sync reply and on
+      // change. `phases: []` hides the panel.
+      'todo_state' => TodoState.fromJson(json),
       // forward-compat: unknown types are not fatal — callers catch and log
       _ => throw UnsupportedTypeException(type ?? ''),
     };
@@ -1659,6 +1674,11 @@ class ExtensionUiRequest extends ServerMessage {
   final String? notifyType; // notify
   final AskEnrichmentWire? ask;
 
+  /// omp plan review envelope (present only on the `select` that carries a
+  /// proposed plan); clients that know it render the plan review sheet
+  /// instead of the plain select over [options].
+  final PlanReview? plan;
+
   const ExtensionUiRequest({
     required this.id,
     required this.method,
@@ -1669,6 +1689,7 @@ class ExtensionUiRequest extends ServerMessage {
     this.options = const <String>[],
     this.notifyType,
     this.ask,
+    this.plan,
   });
 
   factory ExtensionUiRequest.fromJson(Map<String, dynamic> j) =>
@@ -1687,7 +1708,148 @@ class ExtensionUiRequest extends ServerMessage {
         ask: j['ask'] is Map<String, dynamic>
             ? AskEnrichmentWire.fromJson(j['ask'] as Map<String, dynamic>)
             : null,
+        plan: j['plan'] is Map<String, dynamic>
+            ? PlanReview.fromJson(j['plan'] as Map<String, dynamic>)
+            : null,
       );
+}
+
+// ---------------------------------------------------------------------------
+// omp plan mode — plan review + plan state.
+// Contract: pi-extension/src/protocol/types.ts (PlanReviewWire,
+// PlanReviewAnswerWire, PlanStatus, `plan_state`, `plan_mode`). Older Pi
+// builds never send any of it, so every field stays optional on the app side.
+// ---------------------------------------------------------------------------
+
+/// omp's plan review choices, in omp's order. A `cancelled` response (not an
+/// action) is the overlay's Esc: close the review, keep planning.
+enum PlanReviewAction {
+  approveExecute('approve_execute'),
+  approveCompact('approve_compact'),
+  approveKeep('approve_keep'),
+  refine('refine'),
+  saveQuit('save_quit');
+
+  final String wire;
+  const PlanReviewAction(this.wire);
+
+  static PlanReviewAction? fromWire(String? s) {
+    for (final a in values) {
+      if (a.wire == s) return a;
+    }
+    return null;
+  }
+}
+
+class PlanReviewOption {
+  final PlanReviewAction action;
+
+  /// omp's label, e.g. "Approve and keep context (~19k / 1m)".
+  final String label;
+
+  /// omp disables `approve_keep` when the context is over 95 % full.
+  final bool disabled;
+
+  const PlanReviewOption({
+    required this.action,
+    required this.label,
+    this.disabled = false,
+  });
+}
+
+/// The `plan` envelope of a plan review request.
+class PlanReview {
+  /// omp's plan path, e.g. "local://hello-txt-plan.md".
+  final String planFilePath;
+  final String title;
+
+  /// The plan file's markdown; null when the Pi could not read it.
+  final String? content;
+
+  /// omp's choices in order. Options with an action this build does not know
+  /// are dropped (a newer Pi may add some).
+  final List<PlanReviewOption> options;
+
+  const PlanReview({
+    required this.planFilePath,
+    required this.title,
+    this.content,
+    this.options = const <PlanReviewOption>[],
+  });
+
+  factory PlanReview.fromJson(Map<String, dynamic> j) => PlanReview(
+    planFilePath: j['plan_file_path'] as String? ?? '',
+    title: j['title'] as String? ?? '',
+    content: j['content'] as String?,
+    options: [
+      for (final o in (j['options'] as List<dynamic>? ?? const <dynamic>[])
+          .whereType<Map<String, dynamic>>())
+        if (PlanReviewAction.fromWire(o['action'] as String?) case final action?)
+          PlanReviewOption(
+            action: action,
+            label: o['label'] as String? ?? action.wire,
+            disabled: (o['disabled'] as bool?) ?? false,
+          ),
+    ],
+  );
+}
+
+/// The client's choice on a plan review (`extension_ui_response.plan`).
+class PlanReviewAnswer {
+  final PlanReviewAction action;
+
+  /// Used by `refine` only (sent as the next prompt); trimmed, omitted when
+  /// empty and for every other action.
+  final String? feedback;
+
+  const PlanReviewAnswer({required this.action, this.feedback});
+
+  Map<String, dynamic> toJson() {
+    final text = action == PlanReviewAction.refine ? feedback?.trim() : null;
+    return {
+      'action': action.wire,
+      if (text != null && text.isNotEmpty) 'feedback': text,
+    };
+  }
+}
+
+/// omp's plan mode as clients show it: `active` = planning, `paused` = omp's
+/// `plan_paused` (one more exit fully leaves), `review` = a plan waits for a
+/// decision, `idle` = off.
+enum PlanStatus {
+  idle('idle'),
+  active('active'),
+  paused('paused'),
+  review('review');
+
+  final String wire;
+  const PlanStatus(this.wire);
+
+  static PlanStatus? fromWire(String? s) {
+    for (final st in values) {
+      if (st.wire == s) return st;
+    }
+    return null;
+  }
+}
+
+/// ServerMessage: the active session's plan mode state. [planFilePath] /
+/// [title] are present while a proposed plan exists (lets the client offer
+/// "Review plan" while still planning).
+class PlanState extends ServerMessage {
+  final PlanStatus status;
+  final String? planFilePath;
+  final String? title;
+
+  const PlanState({required this.status, this.planFilePath, this.title});
+
+  /// An unknown status (newer Pi) reads as idle: the plan button then offers
+  /// only "Enter plan mode", which every build understands.
+  factory PlanState.fromJson(Map<String, dynamic> j) => PlanState(
+    status: PlanStatus.fromWire(j['status'] as String?) ?? PlanStatus.idle,
+    planFilePath: j['plan_file_path'] as String?,
+    title: j['title'] as String?,
+  );
 }
 
 /// pi-ask RemoteAskAnswer — one question's answered parts (outbound).
@@ -1743,13 +1905,15 @@ class AskResponseEnrichmentWire {
 
 /// ClientMessage: response to an `extension_ui_request`. Mirrors
 /// RpcExtensionUIResponse (value / confirmed / cancelled) + optional `ask`
-/// envelope carrying pi-ask's structured answer.
+/// envelope carrying pi-ask's structured answer, or the [plan] choice for a
+/// plan review.
 class ExtensionUiResponse extends ClientMessage {
   final String id;
   final String? value;
   final bool? confirmed;
   final bool cancelled;
   final AskResponseEnrichmentWire? ask;
+  final PlanReviewAnswer? plan;
 
   ExtensionUiResponse({
     required this.id,
@@ -1757,6 +1921,7 @@ class ExtensionUiResponse extends ClientMessage {
     this.confirmed,
     this.cancelled = false,
     this.ask,
+    this.plan,
   });
 
   @override
@@ -1766,6 +1931,7 @@ class ExtensionUiResponse extends ClientMessage {
     if (value != null) m['value'] = value;
     if (confirmed != null) m['confirmed'] = confirmed;
     if (ask != null) m['ask'] = ask!.toJson();
+    if (plan != null) m['plan'] = plan!.toJson();
     return m;
   }
 }
@@ -1922,4 +2088,112 @@ class AgentActivity extends ServerMessage {
         .toList(growable: false),
     ts: (j['ts'] as num?)?.toInt(),
   );
+}
+
+// ---------------------------------------------------------------------------
+// todo_state — omp's todo list (the `todo` tool's phases and tasks).
+// Contract: pi-extension/src/protocol/types.ts (TodoStateMessage) and
+// pi-extension/src/todo_state.ts. Every frame is a FULL snapshot; phases are
+// never empty; `phases: []` means no list (or the TUI dismissed a done one).
+// ---------------------------------------------------------------------------
+
+enum TodoStatus {
+  pending('pending'),
+  inProgress('in_progress'),
+  completed('completed'),
+  abandoned('abandoned'),
+  blocked('blocked');
+
+  final String wire;
+  const TodoStatus(this.wire);
+
+  /// Null for a status this build does not know (the task is dropped).
+  static TodoStatus? fromWire(Object? s) {
+    for (final v in values) {
+      if (v.wire == s) return v;
+    }
+    return null;
+  }
+
+  /// omp counts dropped (`abandoned`) tasks as done.
+  bool get isDone => this == completed || this == abandoned;
+}
+
+class TodoTask {
+  final String content;
+  final TodoStatus status;
+
+  /// `blocked` only: the agent's reason.
+  final String? blocker;
+
+  const TodoTask({required this.content, required this.status, this.blocker});
+
+  @override
+  bool operator ==(Object other) =>
+      other is TodoTask &&
+      other.content == content &&
+      other.status == status &&
+      other.blocker == blocker;
+
+  @override
+  int get hashCode => Object.hash(content, status, blocker);
+}
+
+class TodoPhase {
+  final String name;
+  final List<TodoTask> tasks;
+
+  const TodoPhase({required this.name, required this.tasks});
+
+  @override
+  bool operator ==(Object other) =>
+      other is TodoPhase &&
+      other.name == name &&
+      _listEquals(other.tasks, tasks);
+
+  @override
+  int get hashCode => Object.hash(name, Object.hashAll(tasks));
+}
+
+bool _listEquals<T>(List<T> a, List<T> b) {
+  if (a.length != b.length) return false;
+  for (var i = 0; i < a.length; i++) {
+    if (a[i] != b[i]) return false;
+  }
+  return true;
+}
+
+class TodoState extends ServerMessage {
+  final List<TodoPhase> phases;
+  final int? ts;
+
+  const TodoState({required this.phases, this.ts});
+
+  /// Malformed tasks and phases left without tasks are dropped.
+  factory TodoState.fromJson(Map<String, dynamic> j) {
+    final phases = <TodoPhase>[];
+    for (final p in (j['phases'] as List<dynamic>? ?? const []).whereType<Map>()) {
+      final name = p['name'];
+      if (name is! String) continue;
+      final tasks = <TodoTask>[];
+      for (final t in (p['tasks'] as List<dynamic>? ?? const []).whereType<Map>()) {
+        final content = t['content'];
+        final status = TodoStatus.fromWire(t['status']);
+        if (content is! String || status == null) continue;
+        final blocker = t['blocker'];
+        tasks.add(TodoTask(
+          content: content,
+          status: status,
+          blocker: blocker is String && blocker.isNotEmpty ? blocker : null,
+        ));
+      }
+      if (tasks.isNotEmpty) {
+        phases.add(TodoPhase(name: name, tasks: List.unmodifiable(tasks)));
+      }
+    }
+    return TodoState(
+      phases: List.unmodifiable(phases),
+      ts: (j['ts'] as num?)?.toInt(),
+    );
+  }
 }

@@ -1,3 +1,4 @@
+import 'package:app/protocol/protocol.dart';
 import 'package:app/routing/adaptive.dart';
 import 'package:app/ui/chat/quick_actions/widgets/dismiss_on_session_change.dart';
 import 'package:app/ui/core/themes/themes.dart';
@@ -5,20 +6,16 @@ import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:provider/provider.dart';
 
-/// Actions available from the Plan Mode action sheet.
-enum PlanMenuAction {
-  toggle,
-  review,
-}
-
-/// Bottom sheet menu for Plan Mode operations (toggle /plan, review /plan-review).
-Future<PlanMenuAction?> showPlanMenuSheet(
+/// Bottom sheet menu for omp plan mode, driven by the session's latest
+/// `plan_state`. Returns the `plan_mode` action the user picked (null when
+/// dismissed); the caller confirms an exit and dispatches it.
+Future<PlanModeAction?> showPlanMenuSheet(
   BuildContext context, {
-  required String? planStatus,
+  required PlanState? planState,
 }) {
   final selection = Provider.of<SessionSelection?>(context, listen: false);
-  final body = _PlanMenuSheetBody(planStatus: planStatus);
-  return showModalBottomSheet<PlanMenuAction>(
+  final body = _PlanMenuSheetBody(planState: planState);
+  return showModalBottomSheet<PlanModeAction>(
     context: context,
     backgroundColor: context.colors.bg,
     barrierColor: Colors.black.withValues(alpha: 0.6),
@@ -36,28 +33,82 @@ Future<PlanMenuAction?> showPlanMenuSheet(
   );
 }
 
+/// omp asks this before leaving plan mode while a plan exists; the Pi answers
+/// omp's own confirm with Yes, so the user must agree here first.
+Future<bool> confirmPlanExit(BuildContext context) async {
+  final confirmed = await showDialog<bool>(
+    context: context,
+    builder: (dCtx) {
+      final colors = dCtx.colors;
+      return AlertDialog(
+        backgroundColor: colors.bg,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(8),
+          side: BorderSide(color: colors.border),
+        ),
+        title: Text(
+          'Exit plan mode?',
+          style: TextStyle(
+            fontFamily: kMonoFamily,
+            fontSize: 14,
+            color: colors.text,
+          ),
+        ),
+        content: Text(
+          'This exits plan mode without approving a plan.',
+          style: TextStyle(
+            fontFamily: kMonoFamily,
+            fontSize: 12,
+            color: colors.muted,
+          ),
+        ),
+        actions: [
+          TextButton(
+            key: const Key('plan-exit-cancel'),
+            onPressed: () => Navigator.of(dCtx).pop(false),
+            child: Text(
+              'Cancel',
+              style: TextStyle(fontFamily: kMonoFamily, color: colors.muted),
+            ),
+          ),
+          FilledButton(
+            key: const Key('plan-exit-confirm'),
+            style: FilledButton.styleFrom(
+              backgroundColor: colors.warning,
+              foregroundColor: colors.onAccent,
+            ),
+            onPressed: () => Navigator.of(dCtx).pop(true),
+            child: const Text(
+              'Exit',
+              style: TextStyle(fontFamily: kMonoFamily),
+            ),
+          ),
+        ],
+      );
+    },
+  );
+  return confirmed ?? false;
+}
+
 class _PlanMenuSheetBody extends StatelessWidget {
-  final String? planStatus;
-  const _PlanMenuSheetBody({required this.planStatus});
+  final PlanState? planState;
+  const _PlanMenuSheetBody({required this.planState});
 
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
-    final isReview = planStatus == 'review';
-    final isActive = planStatus == 'active';
+    final status = planState?.status ?? PlanStatus.idle;
+    final planPath = planState?.planFilePath;
 
-    String title;
-    Color statusColor;
-    if (isReview) {
-      title = 'Plan Mode: Ready for Review';
-      statusColor = colors.accent;
-    } else if (isActive) {
-      title = 'Plan Mode: Active (Planning)';
-      statusColor = colors.accent;
-    } else {
-      title = 'Plan Mode: Off';
-      statusColor = colors.muted;
-    }
+    final (String title, Color statusColor) = switch (status) {
+      PlanStatus.idle => ('Plan mode: off', colors.muted),
+      PlanStatus.active => ('Plan mode: planning', colors.accent),
+      PlanStatus.paused => ('Plan mode: paused', colors.warning),
+      PlanStatus.review => ('Plan mode: ready for review', colors.accent),
+    };
+    final canReview =
+        status == PlanStatus.review ||
+        (status == PlanStatus.active && planPath != null);
 
     return SafeArea(
       top: false,
@@ -103,22 +154,42 @@ class _PlanMenuSheetBody extends StatelessWidget {
                 ],
               ),
             ),
+            if (planPath != null)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(32, 0, 16, 4),
+                child: Text(
+                  planPath,
+                  style: TextStyle(
+                    fontFamily: kMonoFamily,
+                    fontSize: 11,
+                    color: colors.muted,
+                  ),
+                ),
+              ),
             const SizedBox(height: 4),
-            if (isReview || isActive)
+            if (canReview)
               _PlanOption(
                 key: const Key('plan-menu-review'),
                 icon: LucideIcons.fileCheck,
-                label: 'Review Proposed Plan (/plan-review)',
+                label: 'Review plan',
                 color: colors.accent,
-                onTap: () => Navigator.of(context).pop(PlanMenuAction.review),
+                onTap: () => Navigator.of(context).pop(PlanModeAction.review),
               ),
-            _PlanOption(
-              key: const Key('plan-menu-toggle'),
-              icon: LucideIcons.listTodo,
-              label: isActive ? 'Exit Plan Mode (/plan)' : 'Enable Plan Mode (/plan)',
-              color: isActive ? colors.warning : colors.text,
-              onTap: () => Navigator.of(context).pop(PlanMenuAction.toggle),
-            ),
+            if (status == PlanStatus.idle)
+              _PlanOption(
+                key: const Key('plan-menu-enter'),
+                icon: LucideIcons.listTodo,
+                label: 'Enter plan mode',
+                onTap: () => Navigator.of(context).pop(PlanModeAction.enter),
+              )
+            else
+              _PlanOption(
+                key: const Key('plan-menu-exit'),
+                icon: LucideIcons.listTodo,
+                label: 'Exit plan mode',
+                color: colors.warning,
+                onTap: () => Navigator.of(context).pop(PlanModeAction.exit),
+              ),
           ],
         ),
       ),

@@ -1,0 +1,50 @@
+╭─ Plan Review ──────────────────┬─────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ ▎Context                       │ Context                                                                                                 │
+│  Approach                      │                                                                                                         │
+│                                │ Create seven.txt in /tmp/pmf-e2e/proj containing the single line seven.                                 │
+│                                │                                                                                                         │
+│                                │ Approach                                                                                                │
+│                                │                                                                                                         │
+│                                │ - Write /tmp/pmf-e2e/proj/seven.txt with content seven\n (overwrite if it exists).                      │
+│                                │ - Verify: cat seven.txt prints exactly seven.                                                           │
+│                                │                                                                                                         │
+│                                │                                                                                                         │
+│                                │                                                                                                         │
+│                                │                                                                                                         │
+│                                │                                                                                                         │
+│                                │                                                                                                         │
+│                                │                                                                                                         │
+│                                │                                                                                                         │
+│                                │                                                                                                         │
+│                                │                                                                                                         │
+│                                │                                                                                                         │
+│                                │                                                                                                         │
+│                                │                                                                                                         │
+│                                │                                                                                                         │
+│                                │                                                                                                         │
+│                                │                                                                                                         │
+│                                │                                                                                                         │
+│                                │                                                                                                         │
+│                                │                                                                                                         │
+│                                │                                                                                                         │
+│                                │                                                                                                         │
+│                                │                                                                                                         │
+│                                │                                                                                                         │
+│                                │                                                                                                         │
+│                                │                                                                                                         │
+│                                │                                                                                                         │
+│                                │                                                                                                         │
+│                                │                                                                                                         │
+│                                │                                                                                                         │
+├────────────────────────────────┴─────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ Plan mode - next step                                                                                                                    │
+│ continue with  ◂  smol   default   ▸                                                                                                   │
+│   ↳ Claude Sonnet 5.5                                                                                                                    │
+│  Approve and execute                                                                                                                    │
+│   Approve and compact context                                                                                                            │
+│   Approve and keep context (~18k / 1m)                                                                                                   │
+│   Refine plan                                                                                                                            │
+│   Save and quit                                                                                                                          │
+├──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ ↑/↓ select · 󰌑 confirm · ←/→ model · c copy · 󰌒 regions · Ctrl+G editor · 󱊷 cancel                                                       │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

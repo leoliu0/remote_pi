@@ -3,6 +3,7 @@
 
 import 'dart:async';
 
+import 'package:app/data/actions/actions_repository.dart';
 import 'package:app/data/local/app_database.dart';
 import 'package:app/data/local/session_store.dart';
 import 'package:app/data/local/records/message_record.dart';
@@ -113,7 +114,7 @@ void main() {
     final prefs = Preferences(_database);
     await prefs.setSelectedRoom(epk: _peer.remoteEpk, roomId: roomId);
 
-    final vm = ChatViewModel(read, sync, conn, prefs, storage);
+    final vm = ChatViewModel(read, sync, conn, prefs, storage, ActionsRepository(conn));
     await Future<void>.delayed(const Duration(milliseconds: 30));
 
     expect(vm.state, isA<ChatReady>());
@@ -143,7 +144,7 @@ void main() {
     conn.adopt(ch, _peer);
     await Future<void>.delayed(const Duration(milliseconds: 30));
 
-    final vm = ChatViewModel(read, sync, conn, prefs, storage);
+    final vm = ChatViewModel(read, sync, conn, prefs, storage, ActionsRepository(conn));
     await Future<void>.delayed(const Duration(milliseconds: 50));
 
     // The Pi rebroadcasts a user message → SyncService writes a row →
@@ -189,7 +190,7 @@ void main() {
 
     conn.adopt(ch, _peer);
     await Future<void>.delayed(const Duration(milliseconds: 30));
-    final vm = ChatViewModel(read, sync, conn, prefs, storage);
+    final vm = ChatViewModel(read, sync, conn, prefs, storage, ActionsRepository(conn));
     await Future<void>.delayed(const Duration(milliseconds: 50));
 
     ch.push(UserInput(id: 'u1', text: 'run bash'));
@@ -227,7 +228,7 @@ void main() {
 
       conn.adopt(ch, _peer);
       await Future<void>.delayed(const Duration(milliseconds: 30));
-      final vm = ChatViewModel(read, sync, conn, prefs, storage);
+      final vm = ChatViewModel(read, sync, conn, prefs, storage, ActionsRepository(conn));
       await Future<void>.delayed(const Duration(milliseconds: 50));
 
       ch.push(UserInput(id: 'cancel-u1', text: 'please stop'));
@@ -277,7 +278,7 @@ void main() {
 
       conn.adopt(ch, _peer);
       await Future<void>.delayed(const Duration(milliseconds: 30));
-      final vm = ChatViewModel(read, sync, conn, prefs, storage);
+      final vm = ChatViewModel(read, sync, conn, prefs, storage, ActionsRepository(conn));
       await Future<void>.delayed(const Duration(milliseconds: 50));
 
       ch.push(UserInput(id: 'u1', text: 'primary'));
@@ -316,7 +317,7 @@ void main() {
 
     conn.adopt(ch, _peer);
     await Future<void>.delayed(const Duration(milliseconds: 30));
-    final vm = ChatViewModel(read, sync, conn, prefs, storage);
+    final vm = ChatViewModel(read, sync, conn, prefs, storage, ActionsRepository(conn));
     await Future<void>.delayed(const Duration(milliseconds: 50));
 
     ch.push(
@@ -381,7 +382,7 @@ void main() {
 
       conn.adopt(ch, _peer);
       await Future<void>.delayed(const Duration(milliseconds: 30));
-      final vm = ChatViewModel(read, sync, conn, prefs, storage);
+      final vm = ChatViewModel(read, sync, conn, prefs, storage, ActionsRepository(conn));
       await Future<void>.delayed(const Duration(milliseconds: 50));
 
       final state = vm.state;
@@ -415,7 +416,7 @@ void main() {
 
     conn.adopt(ch, _peer);
     await Future<void>.delayed(const Duration(milliseconds: 30));
-    final vm = ChatViewModel(read, sync, conn, prefs, storage);
+    final vm = ChatViewModel(read, sync, conn, prefs, storage, ActionsRepository(conn));
     await Future<void>.delayed(const Duration(milliseconds: 50));
 
     // Room comes online idle (no local turn started in THIS chat).
@@ -512,7 +513,7 @@ void main() {
     conn.adopt(ch, _peer);
     await Future<void>.delayed(const Duration(milliseconds: 30));
 
-    final vm = ChatViewModel(read, sync, conn, prefs, storage);
+    final vm = ChatViewModel(read, sync, conn, prefs, storage, ActionsRepository(conn));
     await Future<void>.delayed(const Duration(milliseconds: 50));
 
     // Simulate history containing a tool call whose result was not received

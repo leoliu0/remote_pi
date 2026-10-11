@@ -61,6 +61,14 @@ class ChatReady extends ChatState {
   /// the input bar. Identity compared (replaced wholesale per snapshot).
   final List<AgentActivityJob> activity;
 
+  /// omp plan mode of this session (latest `plan_state`; null until the Pi
+  /// reports one). Drives the input bar's plan button. Identity compared.
+  final PlanState? planState;
+
+  /// omp todo list of this session (latest `todo_state`). Non-empty → the
+  /// todo panel shows above the input bar. Identity compared.
+  final List<TodoPhase> todo;
+
   String? get queuedText =>
       queuedMessages.isEmpty ? null : queuedMessages.first.text;
 
@@ -76,6 +84,8 @@ class ChatReady extends ChatState {
     this.pendingUiRequest,
     this.pendingUiError,
     this.activity = const [],
+    this.planState,
+    this.todo = const [],
   });
 
   ChatReady copyWith({
@@ -95,6 +105,8 @@ class ChatReady extends ChatState {
     String? pendingUiError,
     bool clearPendingUiError = false,
     List<AgentActivityJob>? activity,
+    PlanState? planState,
+    List<TodoPhase>? todo,
   }) =>
       ChatReady(
         messages: messages ?? this.messages,
@@ -116,6 +128,8 @@ class ChatReady extends ChatState {
             ? null
             : (pendingUiError ?? this.pendingUiError),
         activity: activity ?? this.activity,
+        planState: planState ?? this.planState,
+        todo: todo ?? this.todo,
       );
 
   @override
@@ -131,7 +145,9 @@ class ChatReady extends ChatState {
       other.queuedMessages == queuedMessages &&
       other.pendingUiRequest == pendingUiRequest &&
       other.pendingUiError == pendingUiError &&
-      other.activity == activity;
+      other.activity == activity &&
+      other.planState == planState &&
+      other.todo == todo;
 
   @override
   int get hashCode => Object.hash(
@@ -146,6 +162,8 @@ class ChatReady extends ChatState {
         pendingUiRequest,
         pendingUiError,
         activity,
+        planState,
+        todo,
       );
 }
 

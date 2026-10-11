@@ -128,6 +128,7 @@ Future<void> setupDependencies() async {
         next.get<ConnectionManager>(),
         prefs,
         pairingStorage,
+        next.get<IActionsRepository>(),
       ),
     );
     next.addViewModel<HomeViewModel>(

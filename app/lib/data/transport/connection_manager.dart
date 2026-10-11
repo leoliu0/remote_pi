@@ -742,7 +742,6 @@ class ConnectionManager extends Service {
         :final working,
         :final goal,
         :final loop,
-        :final plan,
       ):
         final key = toStandardB64(peer);
         final list = _roomsByPeer[key] ?? <RoomInfo>[];
@@ -762,7 +761,6 @@ class ConnectionManager extends Service {
         var preservedWorking = false;
         String? preservedGoal;
         String? preservedLoop;
-        String? preservedPlan;
         final existingIdx = list.indexWhere((r) => r.roomId == roomId);
         if (existingIdx >= 0) {
           preservedName = list[existingIdx].name;
@@ -770,7 +768,6 @@ class ConnectionManager extends Service {
           preservedWorking = list[existingIdx].working;
           preservedGoal = list[existingIdx].goal;
           preservedLoop = list[existingIdx].loop;
-          preservedPlan = list[existingIdx].plan;
         }
         final next = RoomInfo(
           roomId: roomId,
@@ -782,7 +779,6 @@ class ConnectionManager extends Service {
           working: working ?? preservedWorking,
           goal: goal ?? preservedGoal,
           loop: loop ?? preservedLoop,
-          plan: plan ?? preservedPlan,
         );
         final liveAlready = _liveRoomIds[key]?.contains(roomId) ?? false;
         final identicalEntry = existingIdx >= 0 && list[existingIdx] == next;
@@ -824,12 +820,10 @@ class ConnectionManager extends Service {
         :final working,
         :final goal,
         :final loop,
-        :final plan,
         :final hasModel,
         :final hasThinking,
         :final hasGoal,
         :final hasLoop,
-        :final hasPlan,
       ):
         final key = toStandardB64(peer);
         final list = _roomsByPeer[key];
@@ -847,7 +841,6 @@ class ConnectionManager extends Service {
         final nextThinking = hasThinking ? thinking : current.thinking;
         final nextGoal = hasGoal ? goal : current.goal;
         final nextLoop = hasLoop ? loop : current.loop;
-        final nextPlan = hasPlan ? plan : current.plan;
         if (working == true) {
           _workingOffTimers.remove('$key:$roomId')?.cancel();
           _unreadFinishedRooms.remove('$key:$roomId');
@@ -855,7 +848,6 @@ class ConnectionManager extends Service {
               current.thinking == nextThinking &&
               current.goal == nextGoal &&
               current.loop == nextLoop &&
-              current.plan == nextPlan &&
               current.working == true) {
             break;
           }
@@ -864,20 +856,18 @@ class ConnectionManager extends Service {
             thinking: nextThinking,
             goal: nextGoal,
             loop: nextLoop,
-            plan: nextPlan,
             working: true,
           );
           roomsDirty = true;
           // ignore: unawaited_futures
           _persistRoomsForPeer(key, generation);
         } else if (working == false) {
-          if (hasModel || hasThinking || hasGoal || hasLoop || hasPlan) {
+          if (hasModel || hasThinking || hasGoal || hasLoop) {
             list[idx] = current.copyWith(
               model: nextModel,
               thinking: nextThinking,
               goal: nextGoal,
               loop: nextLoop,
-              plan: nextPlan,
             );
           }
           if (current.working) {
@@ -887,8 +877,7 @@ class ConnectionManager extends Service {
           if (current.model == nextModel &&
               current.thinking == nextThinking &&
               current.goal == nextGoal &&
-              current.loop == nextLoop &&
-              current.plan == nextPlan) {
+              current.loop == nextLoop) {
             break;
           }
           list[idx] = current.copyWith(
@@ -896,7 +885,6 @@ class ConnectionManager extends Service {
             thinking: nextThinking,
             goal: nextGoal,
             loop: nextLoop,
-            plan: nextPlan,
           );
           roomsDirty = true;
           // ignore: unawaited_futures
@@ -912,7 +900,6 @@ class ConnectionManager extends Service {
           final preservedThinking = r.thinking ?? byId[r.roomId]?.thinking;
           final preservedGoal = r.goal ?? byId[r.roomId]?.goal;
           final preservedLoop = r.loop ?? byId[r.roomId]?.loop;
-          final preservedPlan = r.plan ?? byId[r.roomId]?.plan;
           final hasActiveWorkingTimer =
               _workingOffTimers.containsKey('$key:${r.roomId}');
           final effectiveWorking =
@@ -930,7 +917,6 @@ class ConnectionManager extends Service {
             working: effectiveWorking,
             goal: preservedGoal,
             loop: preservedLoop,
-            plan: preservedPlan,
           );
         }
         final newList = byId.values.toList();

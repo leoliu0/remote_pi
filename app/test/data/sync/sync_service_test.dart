@@ -1717,6 +1717,49 @@ void main() {
     });
   });
 
+  group('todo_state (per active session, full snapshots)', () {
+    Map<String, dynamic> snapshot(List<String> tasks) => {
+      'type': 'todo_state',
+      'ts': 1,
+      'phases': [
+        if (tasks.isNotEmpty)
+          {
+            'name': 'Setup',
+            'tasks': [for (final t in tasks) {'content': t, 'status': 'pending'}],
+          },
+      ],
+    };
+
+    test('each snapshot replaces the list; [] clears it; a switch clears it', () async {
+      final s = await setup();
+      addTearDown(s.conn.dispose);
+      addTearDown(s.sync.dispose);
+      final seen = <List<String>>[];
+      final sub = s.sync.todoStream.listen(
+        (phases) => seen.add([for (final p in phases) ...p.tasks.map((t) => t.content)]),
+      );
+      addTearDown(sub.cancel);
+
+      s.ch.push(ServerMessage.fromJson(snapshot(['Create repo', 'Add CI'])));
+      await _settle();
+      s.ch.push(ServerMessage.fromJson(snapshot(['Add CI'])));
+      await _settle();
+      s.ch.push(ServerMessage.fromJson(snapshot(const [])));
+      await _settle();
+      expect(seen, [
+        ['Create repo', 'Add CI'],
+        ['Add CI'],
+        <String>[],
+      ]);
+
+      s.ch.push(ServerMessage.fromJson(snapshot(['Ship'])));
+      await _settle();
+      expect(s.sync.todoPhases, hasLength(1));
+      await s.sync.activate(s.epk, 'other-room');
+      expect(s.sync.todoPhases, isEmpty);
+    });
+  });
+
   group('thinking traces reach the bubble intact (live == history)', () {
     void expectTrace(MessageRecord row) {
       final text = (row.toChatMessage() as AssistantMsg).text;

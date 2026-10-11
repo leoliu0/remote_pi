@@ -15,6 +15,7 @@ import { getCapabilities, setCapabilities } from "@earendil-works/pi-tui";
 import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { EXIT_DAEMON_RESTART } from "./daemon/rpc_child.js";
 import capture from "./model_meta.fixture.json" with { type: "json" };
+import todoCapture from "./todo_state.fixture.json" with { type: "json" };
 
 const _convertToPngMock = vi.hoisted(() => vi.fn(async () => null));
 
@@ -2852,6 +2853,110 @@ describe("user_input mirroring", () => {
       in_reply_to: turnId,
       delta: "hi",
     });
+  });
+
+  // Captured omp 18.9.2 "Approve and execute" (/tmp/pm-keep/run1, lines 48-78):
+  // agent_end(propose) → session_switch{new} → agent_start with no `input`
+  // event (synthetic developer "Plan approved…" prompt) → streamed text →
+  // agent_end. Before the fix no turn id existed, so every chunk was dropped.
+  test("omp-started run with no input event (approved plan) streams chunks and ends its turn", async () => {
+    await _pairForTest("peer-plan-run");
+    const harness = captureEventHarness();
+    const sendsBefore = relayRef.current!.send.mock.calls.length;
+
+    harness.handler("agent_start")({ type: "agent_start" });
+    harness.handler("message_update")({
+      type: "message_update",
+      message: {},
+      assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "Created hello.txt", partial: {} },
+    });
+    harness.handler("message_end")({
+      type: "message_end",
+      message: { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "Created hello.txt" }] },
+    });
+    harness.handler("agent_end")({ type: "agent_end", messages: [] });
+
+    const sent = relayRef.current!.send.mock.calls.slice(sendsBefore)
+      .map((c) => c[0] as string).map(decodeSentCt).map((d) => d.inner);
+    const chunks = sent.filter((m) => m.type === "agent_chunk");
+    expect(chunks).toEqual([expect.objectContaining({ delta: "Created hello.txt" })]);
+    const turnId = chunks[0]!["in_reply_to"] as string;
+    expect(turnId.startsWith("local_")).toBe(true);
+    expect(sent).toContainEqual({ type: "agent_done", in_reply_to: turnId });
+    expect(sent).toContainEqual({ type: "agent_message", in_reply_to: turnId, text: "Created hello.txt" });
+    expect(_getCurrentTurnIdForTest()).toBeNull();
+  });
+
+  test("a bare slash command from the terminal (no agent run) settles its client turn", async () => {
+    await _pairForTest("peer-slash");
+    const harness = captureEventHarness();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const sendsBefore = relayRef.current!.send.mock.calls.length;
+      harness.handler("input")({ type: "input", text: "/plan", source: "interactive" });
+      const turnId = _getCurrentTurnIdForTest();
+      expect(turnId?.startsWith("local_")).toBe(true);
+
+      vi.advanceTimersByTime(2_000);
+
+      const sent = relayRef.current!.send.mock.calls.slice(sendsBefore)
+        .map((c) => c[0] as string).map(decodeSentCt).map((d) => d.inner);
+      expect(sent).toContainEqual({ type: "agent_done", in_reply_to: turnId });
+      expect(_getCurrentTurnIdForTest()).toBeNull();
+
+      // The next terminal prompt opens a new turn instead of becoming a steer.
+      harness.handler("input")({ type: "input", text: "now do it", source: "interactive" });
+      const after = relayRef.current!.send.mock.calls.slice(sendsBefore)
+        .map((c) => c[0] as string).map(decodeSentCt).map((d) => d.inner);
+      expect(after.at(-1)).toMatchObject({ type: "user_input", text: "now do it" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("a slash command whose run starts is not settled early", async () => {
+    await _pairForTest("peer-slash-run");
+    const harness = captureEventHarness();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const sendsBefore = relayRef.current!.send.mock.calls.length;
+      harness.handler("input")({ type: "input", text: "/plan make hello.txt", source: "interactive" });
+      const turnId = _getCurrentTurnIdForTest();
+      harness.handler("agent_start")({ type: "agent_start" });
+
+      vi.advanceTimersByTime(2_000);
+
+      const sent = relayRef.current!.send.mock.calls.slice(sendsBefore)
+        .map((c) => c[0] as string).map(decodeSentCt).map((d) => d.inner);
+      expect(sent.some((m) => m.type === "agent_done")).toBe(false);
+      expect(_getCurrentTurnIdForTest()).toBe(turnId);
+      harness.handler("agent_end")({ type: "agent_end", messages: [] });
+      expect(_getCurrentTurnIdForTest()).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("headless (no omp TUI): /plan from a client gets a clear error instead of reaching the model", async () => {
+    await _pairForTest("peer-headless-plan");
+    const sendUserMessage = vi.fn();
+    _setPiForTest({ sendUserMessage, sendMessage: () => undefined });
+    const sendsBefore = relayRef.current!.send.mock.calls.length;
+
+    relayRef.current!.emit("message", makeInnerLine("peer-headless-plan", {
+      type: "user_message", id: "msg-plan-headless", text: "/plan make hello.txt",
+    }));
+    await new Promise<void>((r) => setImmediate(r));
+
+    const sent = relayRef.current!.send.mock.calls.slice(sendsBefore)
+      .map((c) => c[0] as string).map(decodeSentCt).map((d) => d.inner);
+    expect(sendUserMessage).not.toHaveBeenCalled();
+    expect(sent).toContainEqual(expect.objectContaining({
+      type: "error", code: "plan_mode_unavailable", in_reply_to: "msg-plan-headless",
+    }));
+    expect(sent.some((m) => m.type === "user_message")).toBe(false);
+    expect(_getCurrentTurnIdForTest()).toBeNull();
+    _setPiForTest(null);
   });
 });
 
@@ -7512,6 +7617,7 @@ describe("omp in-process subagents", () => {
     _savedRelayUrl = null;
     _tokenStatus = "ok";
     relayRef.current = null;
+    _setDisposedForTest(false);  // a previous test's session_shutdown leaves the shared module disposed
     const qr = await import("./pairing/qr.js");
     (qr.qrSession.consumeToken as unknown as ReturnType<typeof vi.fn>).mockImplementation(
       (token: string) => { _consumeCalls.push(token); return _tokenStatus; },
@@ -7707,5 +7813,61 @@ describe("omp in-process subagents", () => {
     // Main session replaced: the panel empties at once.
     await main.fire("session_shutdown", { type: "session_shutdown", reason: "new" }, mainCtx);
     expect(activity().at(-1)).toEqual([]);
+  });
+
+  test("todo_state: main session's todo list live, deduped, rebuilt from the session on sync; subagents ignored", async () => {
+    // Payloads + session entries captured from a scratch omp v18.9.2 run.
+    const runs: Array<{ args: { op?: string }; toolCallId: string; toolName: string; result: unknown; isError: boolean }> =
+      todoCapture.toolExecutions;
+    const entries: Array<{ message?: { toolCallId?: string } }> = todoCapture.branch;
+    const run = (op: string, nth = 0) => runs.filter((r) => r.args.op === op)[nth]!;
+    const through = (id: string) => entries.slice(0, entries.findIndex((e) => e.message?.toolCallId === id) + 1);
+    let branch: unknown[] = [];
+    const mainCtx = { ...makeMockCtx(), sessionManager: { getBranch: () => branch, getLeafId: () => null } };
+    const { main, sub } = await startMainTurn(mainCtx);
+    const sendsBefore = relayRef.current!.send.mock.calls.length;
+    const todos = () => sentSince(sendsBefore)
+      .filter((m) => m.type === "todo_state")
+      .map((m) => (m.phases as Array<{ name: string; tasks: Array<{ content: string; status: string }> }>)
+        .map((p) => `${p.name}: ${p.tasks.map((t) => `${t.content}=${t.status}`).join(", ")}`));
+    const end = (harness: typeof main, r: (typeof runs)[number], ctx?: unknown) =>
+      harness.fire("tool_execution_end", { type: "tool_execution_end", toolCallId: r.toolCallId, toolName: r.toolName, result: r.result, isError: r.isError }, ctx);
+
+    // The agent creates the list.
+    branch = through(run("init").toolCallId);
+    end(main, run("init"));
+    expect(todos()).toEqual([["Setup: Create repo=in_progress, Add CI=pending", "Build: Write parser=pending, Write tests=pending, Ship=pending"]]);
+
+    // A subagent's own todo list never reaches the panel.
+    end(sub, { ...run("init"), toolCallId: "toolu_sub", result: { details: { op: "init", phases: [{ name: "Sub", tasks: [{ content: "x", status: "in_progress" }] }] } } }, SUBAGENT_CTX);
+    // `view`, a failed op and the 1 s poll change nothing: no re-send.
+    end(main, run("view"));
+    end(main, run("done", 1));
+    expect(todos()).toHaveLength(1);
+
+    // The list moves on in the session (e.g. while this owner was away);
+    // session_sync rebuilds it from the branch and sends it after the history.
+    branch = through(run("drop").toolCallId);
+    relayRef.current!.emit("message", JSON.stringify({
+      peer: "ownerA__1234567890",
+      ct: Buffer.from(JSON.stringify({ type: "session_sync", id: "sync-todo", limit: 10 })).toString("base64"),
+    }));
+    await vi.waitFor(() => expect(sentSince(sendsBefore).some((m) => m.type === "session_history")).toBe(true));
+    const types = sentSince(sendsBefore).map((m) => m.type);
+    expect(types.lastIndexOf("todo_state")).toBeGreaterThan(types.indexOf("session_history"));
+    expect(todos().at(-1)).toEqual([
+      "Setup: Create repo=completed, Add CI=pending",
+      "Build: Write parser=in_progress, Write tests=blocked, Ship=abandoned, Write docs=pending",
+    ]);
+
+    // A todo call inside `eval` is persisted as a user_todo_edit entry.
+    const evalRun = runs.find((r) => r.toolName === "eval")!;
+    branch = through(evalRun.toolCallId);
+    end(main, evalRun);
+    expect(todos().at(-1)?.[0]).toBe("Setup: Create repo=completed, Add CI=completed");
+
+    // Main session replaced: the panel hides at once.
+    await main.fire("session_shutdown", { type: "session_shutdown", reason: "new" }, mainCtx);
+    expect(todos().at(-1)).toEqual([]);
   });
 });

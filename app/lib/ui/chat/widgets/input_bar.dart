@@ -79,8 +79,12 @@ class InputBar extends StatefulWidget {
   final String? goalStatus;
   /// Loop Mode status: 'active' | 'running' | 'paused' | 'waiting' | 'idle' | null.
   final String? loopStatus;
-  /// Plan Mode status: 'active' | 'review' | 'idle' | null.
-  final String? planStatus;
+  /// omp plan mode of the session (latest `plan_state`; null = unknown).
+  final PlanState? planState;
+
+  /// Dispatches a `plan_mode` action (exit already confirmed by the user when
+  /// a plan exists). Null disables the plan button (no channel).
+  final void Function(PlanModeAction action)? onPlanMode;
   /// Fired whenever the typed composer text changes.
   final void Function(String text)? onDraftChanged;
   const InputBar({
@@ -105,7 +109,8 @@ class InputBar extends StatefulWidget {
     this.activeThinking,
     this.goalStatus,
     this.loopStatus,
-    this.planStatus,
+    this.planState,
+    this.onPlanMode,
     this.onDraftChanged,
   });
 
@@ -191,6 +196,28 @@ class _InputBarState extends State<InputBar> {
       _savedDraft = '';
       setState(() {});
     }
+  }
+
+  /// Plan button: a waiting plan opens its review directly; otherwise the
+  /// menu offers what the current state allows. Leaving plan mode while a
+  /// plan exists needs the user's OK first (omp's own confirm gets a Yes).
+  Future<void> _onPlanButton() async {
+    final onPlanMode = widget.onPlanMode;
+    if (onPlanMode == null) return;
+    final plan = widget.planState;
+    if (plan?.status == PlanStatus.review) {
+      onPlanMode(PlanModeAction.review);
+      return;
+    }
+    final action = await showPlanMenuSheet(context, planState: plan);
+    if (action == null || !mounted) return;
+    if (action == PlanModeAction.exit &&
+        plan?.planFilePath != null &&
+        !await confirmPlanExit(context)) {
+      return;
+    }
+    if (!mounted) return;
+    onPlanMode(action);
   }
 
   Widget? _buildHistoryBar(BuildContext context) {
@@ -704,27 +731,9 @@ class _InputBarState extends State<InputBar> {
                   ),
                   const SizedBox(width: 4),
                   _PlanModeQuickButton(
-                    enabled: !widget.disabled,
-                    status: widget.planStatus,
-                    onTap: () async {
-                      if (widget.planStatus == 'review') {
-                        widget.onSend('/plan-review');
-                        return;
-                      }
-                      final action = await showPlanMenuSheet(
-                        context,
-                        planStatus: widget.planStatus,
-                      );
-                      if (action == null || !mounted) return;
-                      switch (action) {
-                        case PlanMenuAction.toggle:
-                          widget.onSend('/plan');
-                          break;
-                        case PlanMenuAction.review:
-                          widget.onSend('/plan-review');
-                          break;
-                      }
-                    },
+                    enabled: !widget.disabled && widget.onPlanMode != null,
+                    status: widget.planState?.status,
+                    onTap: _onPlanButton,
                   ),
                   const SizedBox(width: 4),
                   _LoopModeQuickButton(
@@ -1096,27 +1105,23 @@ class _PlanModeQuickButton extends StatelessWidget {
   });
 
   final bool enabled;
-  final String? status;
+  final PlanStatus? status;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
-    final isReview = status == 'review';
-    final isActive = status == 'active';
+    final disabledColor = colors.muted.withValues(alpha: 0.35);
 
-    final String tooltip;
-    if (isReview) {
-      tooltip = 'Plan ready for review — tap to review (/plan-review)';
-    } else if (isActive) {
-      tooltip = 'Plan mode active — tap to manage (/plan)';
-    } else {
-      tooltip = 'Toggle plan mode (/plan)';
-    }
+    final String tooltip = switch (status) {
+      PlanStatus.review => 'Plan ready for review — tap to review',
+      PlanStatus.active => 'Plan mode active — tap to manage',
+      PlanStatus.paused => 'Plan mode paused — tap to manage',
+      PlanStatus.idle || null => 'Plan mode',
+    };
 
-    Widget iconWidget;
-    if (isReview) {
-      iconWidget = Container(
+    final Widget iconWidget = switch (status) {
+      PlanStatus.review => Container(
         width: 22,
         height: 22,
         decoration: BoxDecoration(
@@ -1124,20 +1129,23 @@ class _PlanModeQuickButton extends StatelessWidget {
           shape: BoxShape.circle,
         ),
         child: Icon(LucideIcons.fileCheck, size: 13, color: colors.surface),
-      );
-    } else if (isActive) {
-      iconWidget = Icon(
+      ),
+      PlanStatus.active => Icon(
         LucideIcons.listTodo,
         size: 18,
-        color: enabled ? colors.accent : colors.muted.withValues(alpha: 0.35),
-      );
-    } else {
-      iconWidget = Icon(
+        color: enabled ? colors.accent : disabledColor,
+      ),
+      PlanStatus.paused => Icon(
         LucideIcons.listTodo,
         size: 18,
-        color: enabled ? colors.muted2 : colors.muted.withValues(alpha: 0.35),
-      );
-    }
+        color: enabled ? colors.warning : disabledColor,
+      ),
+      PlanStatus.idle || null => Icon(
+        LucideIcons.listTodo,
+        size: 18,
+        color: enabled ? colors.muted2 : disabledColor,
+      ),
+    };
 
     return SizedBox(
       width: 38,

@@ -74,6 +74,20 @@ class SyncService extends Service {
   final StreamController<List<AgentActivityJob>> _agentActivityController =
       StreamController<List<AgentActivityJob>>.broadcast();
 
+  // omp plan mode of the ACTIVE session, as last reported by `plan_state`
+  // (null until the Pi sends one; older Pis never do). In-memory only; cleared
+  // on session switch — the Pi resends it after every session_sync reply.
+  PlanState? _planState;
+  final StreamController<PlanState?> _planStateController =
+      StreamController<PlanState?>.broadcast();
+
+  // omp todo list of the ACTIVE session, as last reported by `todo_state` (a
+  // full snapshot each time; empty = no panel). In-memory only; cleared on
+  // session switch — the Pi resends it on attach and after every sync reply.
+  List<TodoPhase> _todoPhases = const [];
+  final StreamController<List<TodoPhase>> _todoController =
+      StreamController<List<TodoPhase>>.broadcast();
+
   List<QueuedMsg> _queuedMessages = const [];
   final StreamController<List<QueuedMsg>> _queuedController =
       StreamController<List<QueuedMsg>>.broadcast();
@@ -149,6 +163,14 @@ class SyncService extends Service {
   List<AgentActivityJob> get agentActivity => _agentActivity;
   Stream<List<AgentActivityJob>> get agentActivityStream =>
       _agentActivityController.stream;
+
+  /// Plan mode of the active session (latest `plan_state`; null = unknown).
+  PlanState? get planState => _planState;
+  Stream<PlanState?> get planStateStream => _planStateController.stream;
+
+  /// Todo list of the active session (latest `todo_state`; empty = hidden).
+  List<TodoPhase> get todoPhases => _todoPhases;
+  Stream<List<TodoPhase>> get todoStream => _todoController.stream;
   List<QueuedMsg> get queuedMessages => _queuedMessages;
   String? get queuedText =>
       _queuedMessages.isEmpty ? null : _queuedMessages.first.text;
@@ -214,6 +236,8 @@ class SyncService extends Service {
       if (!_workingController.isClosed) _workingController.add(false);
     }
     _setAgentActivity(const []);
+    _setPlanState(null);
+    _setTodoPhases(const []);
   }
 
   /// Replaces the activity list wholesale (the wire sends full snapshots).
@@ -226,6 +250,22 @@ class SyncService extends Service {
     if (!_agentActivityController.isClosed) {
       _agentActivityController.add(jobs);
     }
+  }
+
+  void _setPlanState(PlanState? state) {
+    if (identical(state, _planState)) return;
+    _planState = state;
+    if (!_planStateController.isClosed) _planStateController.add(state);
+  }
+
+  /// Replaces the todo list wholesale (the wire sends full snapshots).
+  void _setTodoPhases(List<TodoPhase> phases) {
+    if (identical(phases, _todoPhases) ||
+        (phases.isEmpty && _todoPhases.isEmpty)) {
+      return;
+    }
+    _todoPhases = phases;
+    if (!_todoController.isClosed) _todoController.add(phases);
   }
 
   Future<void> sendMessage(
@@ -758,6 +798,10 @@ class SyncService extends Service {
         break;
       case AgentActivity(:final jobs):
         _setAgentActivity(jobs);
+      case PlanState():
+        _setPlanState(msg);
+      case TodoState(:final phases):
+        _setTodoPhases(phases);
     }
   }
 
@@ -1342,6 +1386,8 @@ class SyncService extends Service {
     _extensionUiController.close();
     _extensionUiOpenController.close();
     _agentActivityController.close();
+    _planStateController.close();
+    _todoController.close();
     _workingController.close();
     _queuedController.close();
   }

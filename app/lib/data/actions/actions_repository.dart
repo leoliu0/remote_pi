@@ -63,7 +63,6 @@ class ActiveRoomMeta {
   final ThinkingLevel? thinking;
   final String? goal;
   final String? loop;
-  final String? plan;
   const ActiveRoomMeta({
     this.peerEpk,
     this.roomId = 'main',
@@ -71,7 +70,6 @@ class ActiveRoomMeta {
     this.thinking,
     this.goal,
     this.loop,
-    this.plan,
   });
 
   @override
@@ -82,10 +80,9 @@ class ActiveRoomMeta {
       other.model == model &&
       other.thinking == thinking &&
       other.goal == goal &&
-      other.loop == loop &&
-      other.plan == plan;
+      other.loop == loop;
   @override
-  int get hashCode => Object.hash(peerEpk, roomId, model, thinking, goal, loop, plan);
+  int get hashCode => Object.hash(peerEpk, roomId, model, thinking, goal, loop);
 }
 
 /// Typed failure thrown by [ActionsRepository] when an action cannot
@@ -104,6 +101,9 @@ abstract class IActionsRepository extends Repository {
   Future<void> setModel(String provider, String modelId);
   Future<void> setThinking(ThinkingLevel level);
   Future<void> reloadPlugins();
+  /// omp plan mode command (`plan_mode`); the resulting state arrives as a
+  /// `plan_state` frame, not in the reply.
+  Future<void> setPlanMode(PlanModeAction action);
   /// Fetches the model catalogue. When [forceRefresh] is `false`
   /// (default) returns the cached catalogue for the current
   /// (peer, room) session if one exists; otherwise hits the Pi.
@@ -249,7 +249,6 @@ class ActionsRepository extends Repository implements IActionsRepository {
       thinking: active?.thinking,
       goal: active?.goal,
       loop: active?.loop,
-      plan: active?.plan,
     );
     // Plan/28 Wave D — detect external model changes. The local
     // `setModel` path already drops the cache directly; here we only
@@ -336,6 +335,11 @@ class ActionsRepository extends Repository implements IActionsRepository {
   }
 
   @override
+  Future<void> setPlanMode(PlanModeAction action) async {
+    await _dispatch<void>((id) => PlanMode(id: id, action: action));
+  }
+
+  @override
   Future<ModelsCatalogue> listModels({bool forceRefresh = false}) async {
     final key = _sessionKey();
     if (!forceRefresh) {
@@ -361,7 +365,6 @@ class ActionsRepository extends Repository implements IActionsRepository {
         thinking: _activeRoomMeta.thinking,
         goal: _activeRoomMeta.goal,
         loop: _activeRoomMeta.loop,
-        plan: _activeRoomMeta.plan,
       );
       if (nextMeta != _activeRoomMeta) {
         _activeRoomMeta = nextMeta;

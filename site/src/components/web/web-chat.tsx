@@ -5,12 +5,15 @@ import {
   PairedSession,
   PeerPresence,
   RemotePiRelayClient,
+  type RoomAction,
   type WebChatMessage,
   type WireSkill,
 } from "./web-client";
 import { AssistantContent } from "./thinking-block";
 import { readShowThinking, SHOW_THINKING_EVENT } from "./thinking";
 import { AgentsBottomPanel, AgentsSideColumn } from "./activity-panel";
+import { TodoBottomPanel, TodoSideSection } from "./todo-panel";
+import { readTodoPanelOpen, writeTodoPanelOpen, type TodoPhase } from "./todo";
 import {
   EMPTY_BOARD,
   applyActivitySnapshot,
@@ -24,9 +27,12 @@ import { slashMenuItems } from "./slash-commands";
 import { BrailleSpinner } from "./braille-spinner";
 import type { RelayConnection } from "./relay-connection";
 import { workingLabel } from "./working-label";
-import { ToolFullCard, ToolPill } from "./tool-card";
+import { TodoToolPill, ToolFullCard, ToolPill } from "./tool-card";
 import { ExtensionUiPrompt } from "./extension-ui-prompt";
+import { PlanReviewPrompt } from "./plan-review-prompt";
 import { applyExtensionUiRequest, type ExtensionUiResponseWire, type PendingPrompt } from "./extension-ui";
+import { PlanControl } from "./plan-control";
+import type { PlanModeAction, PlanState } from "./plan-state";
 import {
   HISTORY_IDLE,
   buildComposerHistory,
@@ -54,6 +60,9 @@ import {
 
 type ToolDisplay = "brief" | "full" | "hidden";
 
+/** Stable "no list" for other rooms' state, so memo/effect deps don't churn. */
+const NO_TODOS: TodoPhase[] = [];
+
 function readToolDisplay(): ToolDisplay {
   try {
     const saved = localStorage.getItem("remotepi_tool_display");
@@ -73,6 +82,8 @@ interface WebChatProps {
   onDisconnect: () => void;
   onOpenSessionInfo: () => void;
   onOpenQuickActions: () => void;
+  /** Sends a typed room action; failures surface through the page's toast. */
+  onRoomAction: (cmd: RoomAction) => void;
   onOpenSettings?: () => void;
 }
 
@@ -157,9 +168,12 @@ const MessageRow = memo(function MessageRow({
         </div>
       )}
 
-      {/* TOOL CALL (Mobile Parity: Brief Pill / Full Card) */}
+      {/* TOOL CALL (Mobile Parity: Brief Pill / Full Card). `todo` calls stay one
+          line in every mode (the list lives in the Todo panel); expanding shows the card. */}
       {m.role === "tool" && m.tool && toolDisplay !== "hidden" && (
-        toolDisplay === "full" ? (
+        m.tool.tool === "todo" && !expanded ? (
+          <TodoToolPill tool={m.tool} onExpand={() => onSetToolExpanded(toolRowKey(m), true)} />
+        ) : toolDisplay === "full" && m.tool.tool !== "todo" ? (
           <ToolFullCard tool={m.tool} />
         ) : expanded ? (
           <ToolFullCard tool={m.tool} onCollapse={() => onSetToolExpanded(toolRowKey(m), false)} />
@@ -279,6 +293,7 @@ export function WebChat({
   onDisconnect,
   onOpenSessionInfo,
   onOpenQuickActions,
+  onRoomAction,
   onOpenSettings,
 }: WebChatProps) {
   // Live frames fold into the timeline in history order (chat-stream.ts).
@@ -324,6 +339,24 @@ export function WebChat({
     client: null,
     line: null,
   });
+  // omp's plan mode from `plan_state` (the Pi sends one after every sync reply),
+  // bound to its client like the status line; null until the first frame.
+  const [planState, setPlanState] = useState<{ client: RemotePiRelayClient | null; state: PlanState | null }>({
+    client: null,
+    state: null,
+  });
+  // omp's todo list from `todo_state` (sent on attach, after every sync reply and
+  // on change), bound to its client; [] hides the panel.
+  const [todo, setTodo] = useState<{ client: RemotePiRelayClient | null; phases: TodoPhase[] }>({
+    client: null,
+    phases: [],
+  });
+  // Todo section expanded/collapsed (side column and bottom panel), persisted like the Agents panel.
+  const [todoOpen, setTodoOpenState] = useState(readTodoPanelOpen);
+  const toggleTodoOpen = () => {
+    setTodoOpenState(!todoOpen);
+    writeTodoPanelOpen(!todoOpen);
+  };
 
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -364,6 +397,7 @@ export function WebChat({
   // wires callbacks and subscribes it to the shared relay link.
   const client = useMemo(() => new RemotePiRelayClient(connection, session), [connection, session]);
   const agentBoard = agents.client === client ? agents.board : EMPTY_BOARD;
+  const liveTodo = todo.client === client ? todo.phases : NO_TODOS;
   // The list follows new content only while the reader is at the bottom
   // (scroll-follow.ts). Stick is their intent, not the geometry at event time.
   const contentRef = useRef<HTMLDivElement>(null);
@@ -400,7 +434,7 @@ export function WebChat({
       const unread = unreadRows(laidOut, messages);
       if (unread > 0) setUnreadCount((c) => c + unread);
     }
-  }, [messages, queuedItems, pendingPrompt, agentsOpen, agentBoard, isWorking]);
+  }, [messages, queuedItems, pendingPrompt, agentsOpen, agentBoard, liveTodo, todoOpen, isWorking]);
 
   // The composer growing, a prompt opening or images loading resize the list
   // without a new message: keep a followed list pinned through those too.
@@ -497,6 +531,14 @@ export function WebChat({
       onStatusLine: (line) => {
         setStatusLine({ client, line });
       },
+
+      onPlanState: (state) => {
+        setPlanState({ client, state });
+      },
+
+      onTodoState: (phases) => {
+        setTodo({ client, phases });
+      },
     });
 
     return () => {
@@ -563,6 +605,12 @@ export function WebChat({
     return sent;
   };
 
+  // Stable so the memoized Plan control skips composer keystrokes.
+  const handlePlanMode = useCallback(
+    (mode: PlanModeAction) => onRoomAction({ action: "plan_mode", mode }),
+    [onRoomAction]
+  );
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     // Ctrl+Enter or Cmd+Enter: Queue message for next turn
     if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
@@ -611,6 +659,7 @@ export function WebChat({
   };
 
   const liveStatusLine = statusLine.client === client ? statusLine.line : null;
+  const livePlanState = planState.client === client ? planState.state : null;
 
   return (
     <div className="flex h-screen w-full max-w-5xl lg:max-w-[calc(64rem+300px)] mx-auto">
@@ -763,9 +812,17 @@ export function WebChat({
       </div>
 
       {/* Plan/57 — interactive extension prompt (ask_user / plan review) */}
-      {pendingPrompt && (
-        <ExtensionUiPrompt key={pendingPrompt.request.id} prompt={pendingPrompt} onRespond={handlePromptRespond} />
-      )}
+      {pendingPrompt &&
+        (pendingPrompt.request.plan ? (
+          <PlanReviewPrompt
+            key={pendingPrompt.request.id}
+            prompt={pendingPrompt}
+            plan={pendingPrompt.request.plan}
+            onRespond={handlePromptRespond}
+          />
+        ) : (
+          <ExtensionUiPrompt key={pendingPrompt.request.id} prompt={pendingPrompt} onRespond={handlePromptRespond} />
+        ))}
 
       {/* 3. FLOATING "SCROLL TO BOTTOM" BUTTON */}
       {showScrollBottom && (
@@ -814,6 +871,7 @@ export function WebChat({
       )}
 
       {/* Narrow screens: Agents panel above the composer (wide screens use the side column) */}
+      {agentsOpen && <TodoBottomPanel phases={liveTodo} working={isWorking} open={todoOpen} onToggle={toggleTodoOpen} />}
       {agentsOpen && <AgentsBottomPanel board={agentBoard} onClose={() => setAgentsOpen(false)} />}
 
       {/* 5. COMPACT BOTTOM COMPOSER */}
@@ -916,6 +974,7 @@ export function WebChat({
             >
               /
             </button>
+            {livePlanState && <PlanControl state={livePlanState} onAction={handlePlanMode} />}
           </div>
 
           {/* Compact Input */}
@@ -991,8 +1050,12 @@ export function WebChat({
         )}
       </div>
     </div>
-    {/* Wide screens: persistent Agents column */}
-    {agentsOpen && <AgentsSideColumn board={agentBoard} onClose={() => setAgentsOpen(false)} />}
+    {/* Wide screens: persistent Agents column, with the Todo section on top */}
+    {agentsOpen && (
+      <AgentsSideColumn board={agentBoard} onClose={() => setAgentsOpen(false)}>
+        <TodoSideSection phases={liveTodo} working={isWorking} open={todoOpen} onToggle={toggleTodoOpen} />
+      </AgentsSideColumn>
+    )}
     </div>
   );
 }

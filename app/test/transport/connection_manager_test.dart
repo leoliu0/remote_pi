@@ -1396,6 +1396,9 @@ void _registerRoomsTests() {
 
         final snapshots = <Map<String, List<RoomInfo>>>[];
         final sub = cm.roomsStream.listen(snapshots.add);
+        // The emit is a zero-delay timer behind the handler: wait for it
+        // instead of guessing how long the first (JIT-cold) run takes.
+        final firstEmit = cm.roomsStream.first;
 
         ch.pushControl(const RoomAnnounced(
           peer: 'epkA',
@@ -1408,6 +1411,7 @@ void _registerRoomsTests() {
 
         expect(cm.roomsFor('epkA'), hasLength(1));
         expect(cm.roomsFor('epkA').single.roomId, 'r1');
+        await firstEmit.timeout(const Duration(seconds: 2));
         expect(snapshots, isNotEmpty);
 
         ch.pushControl(const RoomEnded(

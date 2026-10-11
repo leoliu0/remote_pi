@@ -1,9 +1,12 @@
 // Plan/57 — ChatViewModel routing for extension_ui_request (ask_user via
 // pi-ask): open modal, submit-result warning → retry error, completed notify →
-// dismiss, and the offline fail-fast on respond.
+// dismiss, and the offline fail-fast on respond. Also omp's plan review (same
+// lifecycle), `plan_state` → state.planState, and the typed `plan_mode` send.
 
 import 'dart:async';
+import 'dart:convert';
 
+import 'package:app/data/actions/actions_repository.dart';
 import 'package:app/data/local/app_database.dart';
 import 'package:app/data/local/session_store.dart';
 import 'package:app/data/preferences/preferences.dart';
@@ -16,6 +19,11 @@ import 'package:app/protocol/protocol.dart';
 import 'package:app/ui/chat/states/chat_state.dart';
 import 'package:app/ui/chat/viewmodels/chat_viewmodel.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+import '../../protocol/plan_capture_fixtures.dart';
+
+ServerMessage _frame(String json) =>
+    ServerMessage.fromJson(jsonDecode(json) as Map<String, dynamic>);
 
 class _FakeChannel implements IChannel, IControlLink {
   final _ctrl = StreamController<ServerMessage>.broadcast();
@@ -120,7 +128,7 @@ void main() {
 
     conn.adopt(ch, _peer);
     await Future<void>.delayed(const Duration(milliseconds: 30));
-    final vm = ChatViewModel(read, sync, conn, prefs, storage);
+    final vm = ChatViewModel(read, sync, conn, prefs, storage, ActionsRepository(conn));
     await Future<void>.delayed(const Duration(milliseconds: 50));
     return (ch: ch, conn: conn, sync: sync, vm: vm);
   }
@@ -434,6 +442,7 @@ void main() {
       conn,
       prefs,
       storage,
+      ActionsRepository(conn),
     );
     await Future<void>.delayed(const Duration(milliseconds: 50));
     expect(
@@ -447,5 +456,105 @@ void main() {
     vm.dispose();
     sync.dispose();
     conn.dispose();
+  });
+
+  test(
+    'plan review: opens with its plan; warning keeps it with the message; '
+    'same-id close dismisses',
+    () async {
+      final h = await harness();
+
+      h.ch.push(_frame(kPlanReviewRequestFrame));
+      await Future<void>.delayed(const Duration(milliseconds: 30));
+      var state = h.vm.state as ChatReady;
+      expect(state.pendingUiRequest?.id, kPlanReviewId);
+      expect(state.pendingUiRequest?.plan?.title, 'hello-txt');
+
+      await h.vm.respondExtensionUi(
+        ExtensionUiResponse(
+          id: kPlanReviewId,
+          plan: const PlanReviewAnswer(action: PlanReviewAction.approveExecute),
+        ),
+      );
+      expect(
+        h.ch.sent.whereType<ExtensionUiResponse>().single.toJson(),
+        jsonDecode(kPlanApproveExecuteFrame),
+      );
+      state = h.vm.state as ChatReady;
+      expect(state.pendingUiRequest?.id, kPlanReviewId, reason: 'not optimistic');
+
+      h.ch.push(_frame(kPlanWarningFrame));
+      await Future<void>.delayed(const Duration(milliseconds: 30));
+      state = h.vm.state as ChatReady;
+      expect(state.pendingUiRequest?.id, kPlanReviewId);
+      expect(state.pendingUiError, 'Plan mode is no longer active');
+
+      h.ch.push(_frame(kPlanCloseFrame));
+      await Future<void>.delayed(const Duration(milliseconds: 30));
+      state = h.vm.state as ChatReady;
+      expect(state.pendingUiRequest, isNull);
+      expect(state.pendingUiError, isNull);
+
+      h.vm.dispose();
+      h.sync.dispose();
+      h.conn.dispose();
+    },
+  );
+
+  test('plan_state drives state.planState and resets on a room switch', () async {
+    final h = await harness();
+    expect((h.vm.state as ChatReady).planState, isNull);
+
+    h.ch.push(_frame(kPlanStateReviewFrame));
+    await Future<void>.delayed(const Duration(milliseconds: 30));
+    var plan = (h.vm.state as ChatReady).planState;
+    expect(plan?.status, PlanStatus.review);
+    expect(plan?.planFilePath, 'local://hello-txt-plan.md');
+
+    h.ch.push(_frame(kPlanStatePausedFrame));
+    await Future<void>.delayed(const Duration(milliseconds: 30));
+    plan = (h.vm.state as ChatReady).planState;
+    expect(plan?.status, PlanStatus.paused);
+    expect(plan?.planFilePath, isNull);
+
+    await h.sync.activate(_peer.remoteEpk, 'other-room');
+    await Future<void>.delayed(const Duration(milliseconds: 30));
+    expect(
+      (h.vm.state as ChatReady).planState,
+      isNull,
+      reason: "another session's plan state never leaks",
+    );
+
+    h.vm.dispose();
+    h.sync.dispose();
+    h.conn.dispose();
+  });
+
+  test('setPlanMode sends the typed plan_mode action and resolves on ok',
+      () async {
+    final h = await harness();
+
+    final done = h.vm.setPlanMode(PlanModeAction.enter);
+    await Future<void>.delayed(const Duration(milliseconds: 5));
+    final sent = h.ch.sent.whereType<PlanMode>().single;
+    expect(sent.toJson(), {
+      'type': 'plan_mode',
+      'id': sent.id,
+      'action': 'enter',
+    });
+    expect(h.ch.sent.whereType<UserMessage>(), isEmpty, reason: 'no /plan text');
+
+    h.ch.push(
+      ActionOk(
+        inReplyTo: sent.id,
+        action: ActionName.planMode,
+        rawAction: 'plan_mode',
+      ),
+    );
+    await done;
+
+    h.vm.dispose();
+    h.sync.dispose();
+    h.conn.dispose();
   });
 }

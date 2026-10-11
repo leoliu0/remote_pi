@@ -55,6 +55,9 @@ class _FakeRepo implements IActionsRepository {
   }
 
   @override
+  Future<void> setPlanMode(PlanModeAction action) async {}
+
+  @override
   Future<void> setModel(String provider, String modelId) async {
     modelArg = WireModel(
       id: modelId,

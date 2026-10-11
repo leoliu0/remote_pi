@@ -1,0 +1,42 @@
+pmf-omp [service] — ready — up 1m47s — pid 1793994
+ready=true persist=false detached=false
+╭─ Plan Review ─────────────────┬──────────────────────────────────────────────────────────────────────────────────────╮
+│ ▎Context                      │ Context                                                                              │
+│  Approach                     │                                                                                      │
+│                               │ Create one.txt in /tmp/pmf-e2e/proj containing the single line "one".                │
+│                               │                                                                                      │
+│                               │ Approach                                                                             │
+│                               │                                                                                      │
+│                               │ - Write /tmp/pmf-e2e/proj/one.txt with content one\n (overwrite if it exists).       │
+│                               │ - Verify: cat /tmp/pmf-e2e/proj/one.txt prints exactly one.                          │
+│                               │                                                                                      │
+│                               │                                                                                      │
+│                               │                                                                                      │
+│                               │                                                                                      │
+│                               │                                                                                      │
+│                               │                                                                                      │
+│                               │                                                                                      │
+│                               │                                                                                      │
+│                               │                                                                                      │
+│                               │                                                                                      │
+│                               │                                                                                      │
+│                               │                                                                                      │
+│                               │                                                                                      │
+│                               │                                                                                      │
+│                               │                                                                                      │
+│                               │                                                                                      │
+│                               │                                                                                      │
+│                               │                                                                                      │
+│                               │                                                                                      │
+├───────────────────────────────┴──────────────────────────────────────────────────────────────────────────────────────┤
+│ Plan mode - next step                                                                                                │
+│ continue with  ◂  smol   default   ▸                                                                               │
+│   ↳ Claude Sonnet 5.5                                                                                                │
+│  Approve and execute                                                                                                │
+│   Approve and compact context                                                                                        │
+│   Approve and keep context (~17k / 1m)                                                                               │
+│   Refine plan                                                                                                        │
+│   Save and quit                                                                                                      │
+├──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ ↑/↓ select · 󰌑 confirm · ←/→ model · c copy · 󰌒 regions · Ctrl+G editor · 󱊷 cancel                                   │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

@@ -95,6 +95,65 @@ export type AskResponseEnrichmentWire =
     }
   | { flow_id: string; kind: "cancel" };
 
+// ── omp plan mode: plan review + plan state ───────────────────────────────
+// omp (18.8.9 / 18.9.2) finishes planning when the agent writes the plan's
+// slug to `xd://propose`. The `write` tool_execution_end result then carries
+// `details.xdev = { tool: "propose", mode: "execute", inner: { planFilePath,
+// title, planExists } }` and omp aborts the turn (an empty `aborted` assistant
+// message, then agent_end) and opens its "Plan Review" overlay. That overlay is
+// a TUI-only component, not `ctx.ui.select`, so the Pi forwards it as an
+// extension_ui_request carrying the `plan` envelope below and answers it by
+// driving the overlay's own keys (the same keys a terminal user presses).
+
+/** The overlay's choices, in omp's order. `approve_execute` clears the session
+ *  (new session) and runs the plan; `approve_compact` compacts first;
+ *  `approve_keep` runs it in the current context (omp disables it above 95 %
+ *  context); `refine` closes the review and stays in plan mode (the optional
+ *  feedback becomes the next prompt, as a terminal user would type it);
+ *  `save_quit` saves the plan to the cwd, leaves plan mode and starts a new
+ *  session. A `cancelled` response is the overlay's Esc: close the review,
+ *  stay in plan mode. */
+export type PlanReviewAction =
+  | "approve_execute"
+  | "approve_compact"
+  | "approve_keep"
+  | "refine"
+  | "save_quit";
+
+export interface PlanReviewOptionWire {
+  action: PlanReviewAction;
+  /** omp's label, e.g. "Approve and keep context (~19k / 1m)". */
+  label: string;
+  /** omp disables `approve_keep` when the context is over 95 % full. */
+  disabled?: boolean;
+}
+
+/** Present on a plan review's extension_ui_request (`method: "select"`, `id`
+ *  prefixed `plan-review:`). Clients that know it render the plan as markdown
+ *  with these options and a feedback field for `refine`; others fall back to
+ *  the plain select over the same labels. */
+export interface PlanReviewWire {
+  /** omp's plan path, e.g. "local://hello-txt-plan.md". */
+  plan_file_path: string;
+  /** omp's plan title (the slug the agent proposed). */
+  title: string;
+  /** The plan file's markdown; null when it could not be read. */
+  content: string | null;
+  options: PlanReviewOptionWire[];
+}
+
+/** The client's choice on a plan review (`extension_ui_response.plan`). */
+export interface PlanReviewAnswerWire {
+  action: PlanReviewAction;
+  /** `refine` only: sent as the next prompt after the review closes. */
+  feedback?: string;
+}
+
+/** omp's plan mode as the clients show it: `active` = planning (omp mode
+ *  `plan`), `paused` = omp's `plan_paused` (one more `/plan` fully exits),
+ *  `review` = a plan is waiting for a decision, `idle` = off. */
+export type PlanStatus = "idle" | "active" | "paused" | "review";
+
 /** ServerMessage: interactive extension prompt. Mirrors RpcExtensionUIRequest
  *  (select/confirm/input/editor/notify). The `ask` envelope is present when the
  *  prompt originates from a pi-ask flow, carrying the full question schema. */
@@ -106,6 +165,8 @@ export type ExtensionUiRequestWire =
       title: string;
       options: string[];
       ask?: AskEnrichmentWire;
+      /** omp plan review: render the plan and its choices (see PlanReviewWire). */
+      plan?: PlanReviewWire;
     }
   | {
       type: "extension_ui_request";
@@ -170,6 +231,14 @@ export type ExtensionUiResponseWire =
       type: "extension_ui_response";
       id: string;
       ask: AskResponseEnrichmentWire;
+    }
+  // omp plan review answer (request carried `plan`): the chosen overlay
+  // option, plus feedback for `refine`. Cancel uses `cancelled: true`.
+  | {
+      type: "extension_ui_response";
+      id: string;
+      plan: PlanReviewAnswerWire;
+      ask?: AskResponseEnrichmentWire;
     };
 
 export type ClientMessage =
@@ -199,6 +268,13 @@ export type ClientMessage =
   | { type: "thinking_set"; id: string; level: ThinkingLevel }
   | { type: "list_models"; id: string }
   | { type: "reload_plugins"; id: string }
+  // omp plan mode from a client, run as the terminal command would be:
+  // `enter` = `/plan`; `exit` = `/plan` until omp is back to idle (answering
+  // omp's "Exit plan mode?" confirm with Yes — clients ask the user first);
+  // `review` = `/plan-review` (re-opens the review of the latest plan).
+  // Replied with action_ok / action_error (`action: "plan_mode"`); the state
+  // change itself arrives as `plan_state`.
+  | { type: "plan_mode"; id: string; action: "enter" | "exit" | "review" }
   // Mirrors RpcExtensionUIResponse; the optional `ask` envelope carries
   // pi-ask's structured answer so multi/preview/notes survive the round-trip.
   | ExtensionUiResponseWire;
@@ -353,7 +429,19 @@ export type ServerMessage =
   // Plan/57 — interactive extension prompt (ask_user via pi-ask). Mirrors
   // RpcExtensionUIRequest (select/confirm/input/editor/notify); the optional
   // `ask` envelope carries pi-ask's full question so the app renders richly.
-  | ExtensionUiRequestWire;
+  | ExtensionUiRequestWire
+  // omp plan mode state. The relay drops a room_meta `plan` field (its room
+  // meta only knows model/thinking/working/goal/loop), so the state rides the
+  // owner channel: broadcast on every change, and sent after each
+  // session_sync reply. `plan_file_path`/`title` name the latest proposed plan
+  // while one exists (so a client can offer "Review plan").
+  | { type: "plan_state"; status: PlanStatus; plan_file_path?: string; title?: string }
+  // omp's todo list (the TUI's `TODO` panel). Full snapshot of the main
+  // session's list, never a delta: replace local state wholesale. Sent to an
+  // owner on attach and after every session_sync reply (rebuilt from the
+  // session branch, so it survives reconnects and resumes), then broadcast to
+  // active owners on change only (deduped). `phases: []` means hide the panel.
+  | TodoStateMessage;
 
 /**
  * One `status_line` snapshot: the values behind omp's footer segments
@@ -489,7 +577,8 @@ export type ActionName =
   | "session_compact"
   | "model_set"
   | "thinking_set"
-  | "reload_plugins";
+  | "reload_plugins"
+  | "plan_mode";
 /**
  * Plan/28 — Mirror of the SDK's `ThinkingLevel` (defined in
  * `@earendil-works/pi-agent-core/types`). Re-declared locally so the wire
@@ -538,3 +627,34 @@ export interface WireModel {
 }
 
 export type ByeReason = "peer_stop" | "session_replaced" | "shutdown";
+
+/** omp todo task status (`todo` tool). `abandoned` = dropped by the agent. */
+export type TodoStatus = "pending" | "in_progress" | "completed" | "abandoned" | "blocked";
+
+export interface TodoTaskWire {
+  /** Task text; the agent addresses tasks by this exact content. */
+  content: string;
+  status: TodoStatus;
+  /** `blocked` only: the agent's reason, when it gave one. */
+  blocker?: string;
+}
+
+export interface TodoPhaseWire {
+  name: string;
+  /** Never empty: phases without tasks are dropped (omp never draws them). */
+  tasks: TodoTaskWire[];
+}
+
+/**
+ * `todo_state`: the list as omp's TUI panel shows it, phases in order.
+ * omp rules clients mirror: done = `completed` + `abandoned` (the `done/total`
+ * counts); the active phase is the first with a `pending`/`in_progress` task
+ * (else the last); omp keeps exactly one `in_progress` task while any task is
+ * open (it auto-starts the first pending one). `phases: []` also when the TUI
+ * auto-dismissed a fully done list (`todo_hud_state`).
+ */
+export interface TodoStateMessage {
+  type: "todo_state";
+  phases: TodoPhaseWire[];
+  ts: number;
+}

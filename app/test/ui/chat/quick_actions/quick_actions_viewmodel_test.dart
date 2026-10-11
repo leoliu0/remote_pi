@@ -60,6 +60,9 @@ class _FakeActionsRepository implements IActionsRepository {
   }
 
   @override
+  Future<void> setPlanMode(PlanModeAction action) async {}
+
+  @override
   Future<void> setModel(String provider, String modelId) async {
     lastProvider = provider;
     lastModelId = modelId;

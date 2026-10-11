@@ -76,6 +76,7 @@ import {
   createExtensionUiBridge,
   type ExtensionUiBridge,
 } from "./extension_ui_bridge.js";
+import { createPlanReview, localPlanFiles, ompPlanMode, PLAN_MODE_NEEDS_TERMINAL, readPlanFile } from "./plan_review.js";
 import { roomIdFor } from "./rooms.js";
 import { modelMetaFromSession, type LiveModel, type ModelMeta } from "./model_meta.js";
 import {
@@ -84,6 +85,7 @@ import {
   SUBAGENT_LIFECYCLE_CHANNEL,
   SUBAGENT_PROGRESS_CHANNEL,
 } from "./activity.js";
+import { TodoBroadcaster, TodoTracker } from "./todo_state.js";
 import {
   GitStatusCache,
   StatusLineBroadcaster,
@@ -255,7 +257,7 @@ function _isStrictBase64(data: string): boolean {
 let _myRoomId: string | null = null;   // this Pi's room id (derived from cwd)
 // `model` + `thinking` mirror the omp footer (see model_meta.ts); the app's
 // Quick Actions sheet hydrates its thinking control from the same field.
-let _myRoomMeta: { name: string; cwd: string; model?: string; thinking?: ThinkingLevel | null; working?: boolean; goal?: string; loop?: string; plan?: string } | null = null;
+let _myRoomMeta: { name: string; cwd: string; model?: string; thinking?: ThinkingLevel | null; working?: boolean; goal?: string; loop?: string } | null = null;
 let _currentModel: string | undefined = undefined;  // last-published model name
 /** Last-published footer thinking level; null = the footer shows none. */
 let _currentThinking: ThinkingLevel | null | undefined = undefined;
@@ -385,6 +387,8 @@ function _startModelPollTimer(): void {
     if (!_relay || !_myRoomId || _state !== "started") return;
     _syncModelMeta();
     _refreshStatusLine();
+    if (_anyPeerActive()) _refreshTodo();
+    _planReview.refresh();
   }, 1000);
   _modelPollTimer.unref?.();
 }
@@ -1371,6 +1375,7 @@ async function _maybeDrainQueuedItem(): Promise<void> {
   if (trimmedText && _tryExecuteTerminalInput(trimmedText)) {
     if (trimmedText.startsWith("/")) {
       _safeNotify(`[remote-pi] Terminal command: "${trimmedText}"`, "info");
+      _settleSlashTurn(item.id);
     }
     _echoUserMessage(msg, false);
     return;
@@ -1503,6 +1508,7 @@ export function _resetMainSessionForTest(): void {
   _mainPi = null;
   _resetActivity();
   _resetStatusLine();
+  _resetTodo();
 }
 
 /**
@@ -1599,6 +1605,115 @@ let _pi: ExtensionAPI | null = null;
 // extension factory wires it (and null if the SDK exposes no events bus).
 let _extensionUiBridge: ExtensionUiBridge | null = null;
 
+/** The live session's manager and cwd (omp has no event for its plan mode). */
+function _liveSession(): { sessionManager: unknown; cwd: string } {
+  const ctx = _liveCtx() as { sessionManager?: unknown; cwd?: unknown } | null;
+  try {
+    return {
+      sessionManager: ctx?.sessionManager ?? null,
+      cwd: typeof ctx?.cwd === "string" && ctx.cwd ? ctx.cwd : process.cwd(),
+    };
+  } catch {
+    return { sessionManager: null, cwd: process.cwd() };  // stale after a session replacement
+  }
+}
+
+/** omp runs its interactive TUI here: an editor and a stdin key listener.
+ *  Headless daemons (RPC mode) read stdin as a stream and have neither. */
+function _hasInteractiveTerminal(): boolean {
+  const ui = _ctxUi();
+  return process.stdin.listenerCount("data") > 0 &&
+    typeof ui?.setEditorText === "function" &&
+    typeof ui.getEditorText === "function";
+}
+
+// omp plan mode on the paired clients: the plan review is forwarded with omp's
+// own choices and answered with the overlay's keys (see plan_review.ts).
+const _planReview = createPlanReview({
+  broadcast: (msg) => _broadcastToActive(msg),
+  hasTerminal: _hasInteractiveTerminal,
+  isIdle: () => {
+    const ctx = _liveCtx() as { isIdle?: () => boolean } | null;
+    try {
+      return ctx?.isIdle?.() ?? !_agentActive;
+    } catch {
+      return !_agentActive;
+    }
+  },
+  pressKeys: (keys) => {
+    if (process.stdin.listenerCount("data") > 0) process.stdin.emit("data", keys);
+  },
+  typeLine: (text) => _tryExecuteTerminalInput(text),
+  submitPrompt: (text) => {
+    // The typed line is an injection, so the input hook opens no turn for it.
+    const previous = _currentTurnId;
+    const id = `local_${randomUUID()}`;
+    _currentTurnId = id;
+    if (_tryExecuteTerminalInput(text)) _echoUserMessage({ type: "user_message", id, text });
+    else _currentTurnId = previous;
+  },
+  mode: () => ompPlanMode(_liveSession().sessionManager),
+  readPlan: (path) => {
+    const { sessionManager, cwd } = _liveSession();
+    return readPlanFile(path, sessionManager, cwd);
+  },
+  hasPlanFile: (path) => {
+    // omp asks "Exit plan mode?" when the plan path or any local *plan.md is non-empty.
+    const { sessionManager, cwd } = _liveSession();
+    const paths = new Set([...(path ? [path] : []), ...localPlanFiles(sessionManager)]);
+    return [...paths].some((p) => (readPlanFile(p, sessionManager, cwd)?.trim().length ?? 0) > 0);
+  },
+  latestPlanFile: () => localPlanFiles(_liveSession().sessionManager)[0] ?? null,
+  contextUsage: () => {
+    const ctx = _liveCtx() as StatusLineCtx | null;
+    try {
+      const usage = ctx?.getContextUsage?.() as { tokens?: unknown; contextWindow?: unknown; percent?: unknown } | undefined;
+      if (!usage) return null;
+      const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
+      return { tokens: num(usage.tokens), contextWindow: num(usage.contextWindow), percent: num(usage.percent) };
+    } catch {
+      return null;
+    }
+  },
+  setTimer: (fn, ms) => {
+    setTimeout(fn, ms);
+  },
+  now: () => Date.now(),
+});
+
+let _offPlanTerminalInput: (() => void) | null = null;
+
+/** omp drops terminal input listeners with the session: (re)subscribe the
+ *  plan review to the live ctx on every session start / switch. */
+function _bindPlanTerminalInput(ctx: unknown): void {
+  try {
+    _offPlanTerminalInput?.();
+  } catch { /* the previous session's ui is gone */ }
+  _offPlanTerminalInput = null;
+  try {
+    const ui = (ctx as { ui?: { onTerminalInput?: (handler: (data: string) => undefined) => () => void } } | null)?.ui;
+    if (typeof ui?.onTerminalInput !== "function") return;
+    _offPlanTerminalInput = ui.onTerminalInput((data) => {
+      _planReview.onTerminalInput(data);
+      return undefined;
+    });
+  } catch { /* headless or stale ctx */ }
+}
+
+/** A slash command that starts no agent run (`/plan`, `/plan-review`,
+ *  `/model`…) gets no agent_end, so its turn would stay open on the clients
+ *  and turn the next terminal prompt into a "steer". */
+const SLASH_TURN_SETTLE_MS = 2000;
+
+function _settleSlashTurn(turnId: string): void {
+  setTimeout(() => {
+    if (_currentTurnId !== turnId || _agentActive || _turnActive) return;
+    _currentTurnId = null;
+    _broadcastToActive({ type: "agent_done", in_reply_to: turnId });
+    void _maybeDrainQueuedItem();
+  }, SLASH_TURN_SETTLE_MS);
+}
+
 // The main session's `pi`. omp runs `task` subagents in-process and calls the
 // factory again with each subagent's own `pi`, so every handler below also
 // fires for subagent tool calls, streamed text and turn/agent lifecycle.
@@ -1650,6 +1765,43 @@ function _resetActivity(): void {
   _activity.reset();
   _activityBroadcaster.flush();
   _activityBroadcaster.reset();
+}
+
+// omp's todo list (the TUI's TODO panel) → `todo_state` snapshots, main
+// session only. omp emits no event for `/todo` edits, todos changed inside
+// `eval`, or the panel's auto-dismiss, so the 1 s poll re-reads the branch.
+const _todo = new TodoTracker();
+const _todoBroadcaster = new TodoBroadcaster(() => _todo.snapshot(), _broadcastToActive, _anyPeerActive);
+
+/** Rebuild the list from the main session's branch; broadcast if it changed. */
+function _refreshTodo(): void {
+  // `_lastEventCtx` never holds a subagent's ctx.
+  const ctx = _liveCtx() as { sessionManager?: { getBranch?: () => unknown[] } } | null;
+  try {
+    const branch = ctx?.sessionManager?.getBranch?.();
+    if (branch) _todo.syncFromBranch(branch);
+  } catch { /* stale ctx after a session replacement */ }
+  _todoBroadcaster.flush();
+}
+
+/** A main-session tool finished: `todo` carries the new list; `eval` may have edited it. */
+function _onTodoToolEnd(event: { toolCallId: string; toolName: string; result: unknown; isError: boolean }): void {
+  if (event.toolName === "todo") _todo.applyToolResult(event.toolCallId, event.result, event.isError);
+  else if (event.toolName !== "eval") return;
+  _refreshTodo();
+}
+
+/** Main session replaced/ended: hide the panel on every owner right away. */
+function _resetTodo(): void {
+  _todo.reset();
+  _todoBroadcaster.flush();
+  _todoBroadcaster.reset();
+}
+
+/** The current list to one owner (attach / session_sync), fresh from the session. */
+function _sendTodoState(channel: PlainPeerChannel): void {
+  _refreshTodo();
+  channel.send(_todoBroadcaster.message());
 }
 
 // omp's footer row (path, git, context, cost, run timer) → `status_line`
@@ -2578,6 +2730,7 @@ function _installAutoListener(relay: RelayClient): () => void {
       // Current running subagents/jobs and footer row, so both are right before any change.
       channel.send(_activityBroadcaster.message());
       _sendStatusLine(channel);
+      _sendTodoState(channel);
       return;
     }
 
@@ -2705,6 +2858,7 @@ async function _handlePairRequest(
   });
   channel.send(_activityBroadcaster.message());
   _sendStatusLine(channel);
+  _sendTodoState(channel);
 
   // Notify local RPC clients (e.g. Cockpit) that pairing completed, so they can
   // close the QR screen and show the new device. Pure data event (display:false)
@@ -2777,7 +2931,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     // Pi that doesn't use the extension. Dispose any prior bridge first so a
     // factory re-run (new pi session) can't leak subscriptions or double-send.
     _extensionUiBridge?.dispose();
-    _extensionUiBridge = createExtensionUiBridge(pi, _broadcastToActive, _makeExtensionUiBridgeOptions());
+    _extensionUiBridge = createExtensionUiBridge(pi, _broadcastToActive);
   }
   /** True for a subagent's `pi`: its events never reach the paired chat. */
   const fromSubagent = (): boolean => _subagentPis.has(pi);
@@ -2848,6 +3002,9 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
       void _handleControl(event.text.slice(CTRL_PREFIX.length).trim());
       return { action: "handled" } as const;
     }
+    // Every typed or injected line: `/plan-review` re-opens omp's plan
+    // review, anything else means its overlay is closed.
+    _planReview.onInput(event.text);
     const trimmedText = event.text.trim();
     if (trimmedText === "/loop" || trimmedText.startsWith("/loop ")) {
       // User toggled or configured /loop
@@ -2873,6 +3030,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     const turnId = `local_${randomUUID()}`;
     _currentTurnId = turnId;
     _broadcastToActive({ type: "user_input", id: turnId, text: event.text });
+    if (trimmedText.startsWith("/")) _settleSlashTurn(turnId);
     return undefined;
   });
 
@@ -2942,6 +3100,10 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     _agentActive = true;
     _agentRunActive = true;
     _agentRunGeneration += 1;
+    // omp starts some runs itself, with no `input` event (an approved plan's
+    // "Plan approved…" prompt): open a turn so its chunks reach the clients.
+    if (_currentTurnId === null && _anyPeerActive()) _currentTurnId = `local_${randomUUID()}`;
+    _planReview.onAgentStart();
     _refreshActivity();
     _runStartedAt = Date.now();
     _refreshStatusLine();
@@ -3079,48 +3241,29 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     else if (!_emittedToolRequests.has(tcid)) _heldToolCalls.set(tcid, { name, args });
   });
 
-  const _activeToolArgs = new Map<string, unknown>();
-
   pi.on("tool_execution_start", (event) => {
     if (fromSubagent()) return;
-    _activeToolArgs.set(event.toolCallId, event.args);
     _handleToolStart(event.toolCallId, event.toolName, event.args, "intent" in event ? event.intent : undefined);
   });
 
   pi.on("tool_execution_end", (event) => {
     if (fromSubagent()) return;
+    _onTodoToolEnd(event);
     _emittedToolRequests.delete(event.toolCallId);
     _streamedToolArgs.delete(event.toolCallId);
     _heldToolCalls.delete(event.toolCallId);
     // Tools change the repo (edits, `git checkout`): re-read git now.
     _refreshStatusLine(true);
-    const rawArgs = _activeToolArgs.get(event.toolCallId);
-    _activeToolArgs.delete(event.toolCallId);
     // An async bash / detached task just registered a background job.
     _refreshActivity();
+    // omp's plan proposal (`write xd://propose`) opens its plan review.
+    _planReview.onToolEnd(event);
     if (!_anyPeerActive()) return;
     const text = _stringifyToolResult(event.result);
     const msg: ServerMessage = event.isError
       ? { type: "tool_result", tool_call_id: event.toolCallId, error: text }
       : { type: "tool_result", tool_call_id: event.toolCallId, result: text };
     _broadcastToActive(msg);
-
-    // Plan Mode: detect when the agent proposes a plan for review
-    try {
-      const isPropose =
-        event.toolName === "propose" ||
-        (event.toolName === "write" &&
-          rawArgs &&
-          typeof rawArgs === "object" &&
-          String((rawArgs as { path?: unknown }).path ?? "").includes("propose"));
-      if (isPropose && !event.isError) {
-        const details = (event.result as { details?: { planFilePath?: string; title?: string } })?.details;
-        const planFilePath = details?.planFilePath ?? "local://PLAN.md";
-        const title = details?.title ?? "Proposed Plan";
-        _publishPlanStatus("review");
-        _extensionUiBridge?.triggerPlanReview(planFilePath, title);
-      }
-    } catch {}
   });
 
   // Cumulative session buffer fed via `message_end`, which fires once per
@@ -3203,6 +3346,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     // omp drops settled subagent/job rows when the main run ends.
     _activity.clearFinished();
     _refreshActivity();
+    _refreshTodo();
     _runStartedAt = null;
     _refreshStatusLine(true);
     _streamedToolArgs.clear();
@@ -3215,6 +3359,8 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     _lastConsumedSteerText = null;
     _scheduleWorkingMetaOff(_turnActive ? 150 : 0);
     _maybeFinalizeTurn();
+    // omp opens its plan review once the proposing run has ended.
+    _planReview.onAgentEnd();
 
     // agent_end listeners finish before pi-agent-core clears its active run.
     // Defer mesh delivery to the next event-loop turn so triggerTurn cannot
@@ -3289,6 +3435,8 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     // (3) Working ends.
     _publishWorking(false);
     _maybeDrainQueuedItem();
+    // "Approve and compact context" compacts before the approved run starts.
+    _planReview.onSessionChange();
     _refreshStatusLine();
   });
 
@@ -3327,6 +3475,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
       // `pi`: this is the main session now.
       if (_mainPi !== null) {
         _resetActivity();
+        _resetTodo();
         _resetStatusLine();
       }
       _mainPi = pi;
@@ -3335,11 +3484,14 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
         // The factory deferred these while the previous main looked live.
         _pi = pi;
         _extensionUiBridge?.dispose();
-        _extensionUiBridge = createExtensionUiBridge(pi, _broadcastToActive, _makeExtensionUiBridgeOptions());
+        _extensionUiBridge = createExtensionUiBridge(pi, _broadcastToActive);
       }
     }
     if (subagentCtx) return;
     _lastEventCtx = ctx;
+    _bindPlanTerminalInput(ctx);
+    _planReview.onSessionChange();
+    _refreshTodo();
     // A restored session starts with auto thinking unresolved (omp resets it).
     try {
       _sessionStartLeafId = (ctx as ModelMetaCtx | undefined)?.sessionManager?.getLeafId?.() ?? undefined;
@@ -3354,7 +3506,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     // reuses this module instance does NOT re-run the factory, so rebind the
     // bridge here; fresh-module hosts already created theirs in the factory.
     if (!_extensionUiBridge) {
-      _extensionUiBridge = createExtensionUiBridge(pi, _broadcastToActive, _makeExtensionUiBridgeOptions());
+      _extensionUiBridge = createExtensionUiBridge(pi, _broadcastToActive);
     }
     // The rearm above (moved before the subagent gate) carries the replacement
     // authority: `_cmdRoot` waits for any canceled outgoing root to drain, then
@@ -3408,6 +3560,15 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
     }
   });
 
+  // omp replaces the session in place, without session_start, for "Approve
+  // and execute", "Save and quit" and /new: rebind to the live session.
+  (pi as { on: (event: string, handler: (event: unknown, ctx: unknown) => void) => void }).on("session_switch", (_event, ctx) => {
+    if (fromSubagent() || _isSubagentSession(ctx)) return;
+    if (ctx) _lastEventCtx = ctx as typeof _lastEventCtx;
+    _bindPlanTerminalInput(ctx);
+    _planReview.onSessionChange();
+  });
+
   // Tear down THIS instance's live handles when the SDK replaces the session
   // (switch_session / new / fork / reload / quit). This is the fix for the
   // "double mesh connection" the Cockpit hits when it restores a saved
@@ -3444,6 +3605,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
       // replacement session_start binds as main instead of as a subagent.
       _mainPi = null;
       _resetActivity();
+      _resetTodo();
       _resetStatusLine();
     }
     if (_isSubagentSession(ctx)) return;
@@ -3969,149 +4131,6 @@ export function _detectGoalStatus(ctx?: unknown): "active" | "paused" | "idle" |
 
   return undefined;
 }
-/**
- * Resolves the active plan mode status ("active" | "review" | "idle") from the
- * session or recent sessionManager mode_change entries so initial roomMeta
- * and hello payloads reliably report plan state.
- */
-export function _detectPlanStatus(ctx?: unknown): "active" | "review" | "idle" | undefined {
-  if (_myRoomMeta?.plan === "review") return "review";
-  if (!ctx || typeof ctx !== "object") return undefined;
-  const anyCtx = ctx as Record<string, unknown>;
-
-  // 1. Direct getPlanModeState if available on session / context
-  const session = (anyCtx["session"] ?? anyCtx) as {
-    getPlanModeState?: () => { enabled?: boolean; planFilePath?: string };
-  };
-  try {
-    const rawPlan = session?.getPlanModeState?.();
-    if (rawPlan?.enabled === true) return "active";
-  } catch {}
-
-  // 2. Search sessionManager history for the latest mode_change entry
-  const sm = (anyCtx["sessionManager"] ?? (anyCtx["session"] as { sessionManager?: unknown } | undefined)?.sessionManager) as {
-    getEntries?: () => Array<{ type?: string; mode?: string }>;
-  } | undefined;
-  try {
-    const entries = sm?.getEntries?.();
-    if (Array.isArray(entries)) {
-      for (let i = entries.length - 1; i >= 0; i--) {
-        const entry = entries[i];
-        if (entry && entry.type === "mode_change") {
-          if (entry.mode === "plan") return "active";
-          if (entry.mode === "none") return "idle";
-        }
-      }
-    }
-  } catch {}
-
-  return undefined;
-}
-
-/**
- * Injects a raw key sequence into stdin of the terminal (e.g. \r for Enter, \x1b for Esc).
- */
-export function _injectTerminalKey(key: string): boolean {
-  if (typeof process !== "undefined" && process.stdin && process.stdin.listenerCount("data") > 0) {
-    try {
-      process.stdin.emit("data", key);
-      return true;
-    } catch {
-      return false;
-    }
-  }
-  return false;
-}
-
-/**
- * Resolves the plan file content from disk using various search paths.
- */
-export function _resolvePlanContent(planFilePath?: string): string | null {
-  const rawPath = planFilePath || "local://PLAN.md";
-  const rel = rawPath.replace(/^local:\/\//, "");
-  const cwd =
-    (_lastEventCtx as { cwd?: string } | undefined)?.cwd ??
-    (_lastCtx as { cwd?: string } | undefined)?.cwd ??
-    process.cwd();
-
-  // 1. Direct path in cwd
-  const direct = resolve(cwd, rel);
-  if (existsSync(direct)) {
-    try { return readFileSync(direct, "utf8"); } catch {}
-  }
-
-  // 2. SessionManager artifacts dir
-  const sm = ((_lastEventCtx ?? _lastCtx) as { sessionManager?: unknown } | undefined)?.sessionManager as {
-    getArtifactsDir?: () => string | null;
-    getSessionId?: () => string | null;
-  } | undefined;
-  const artDir = sm?.getArtifactsDir?.();
-  if (artDir) {
-    const artPlan = join(artDir, "local", rel);
-    if (existsSync(artPlan)) {
-      try { return readFileSync(artPlan, "utf8"); } catch {}
-    }
-  }
-
-  // 3. /tmp/omp-local/<sessionId>/rel
-  const sid = sm?.getSessionId?.();
-  if (sid) {
-    const tmpPlan = join(tmpdir(), "omp-local", sid, rel);
-    if (existsSync(tmpPlan)) {
-      try { return readFileSync(tmpPlan, "utf8"); } catch {}
-    }
-  }
-
-  // 4. .pi or .omp plans directory
-  const dotPiPlan = join(cwd, ".pi", "plans", rel);
-  if (existsSync(dotPiPlan)) {
-    try { return readFileSync(dotPiPlan, "utf8"); } catch {}
-  }
-  const dotOmpPlan = join(cwd, ".omp", "plans", rel);
-  if (existsSync(dotOmpPlan)) {
-    try { return readFileSync(dotOmpPlan, "utf8"); } catch {}
-  }
-
-  return null;
-}
-
-function _publishPlanStatus(status: string): void {
-  if (_myRoomMeta?.plan === status) return;
-  if (_myRoomMeta) _myRoomMeta = { ..._myRoomMeta, plan: status };
-  if (!_relay || !_myRoomId) return;
-  _relay.sendControl({
-    type: "room_meta_update",
-    room_id: _myRoomId,
-    meta: { plan: status } as any,
-  });
-}
-
-function _makeExtensionUiBridgeOptions() {
-  return {
-    onPlanAction: (action: "approve" | "approve_compact" | "refine" | "reject", feedback?: string) => {
-      if (action === "approve") {
-        _injectTerminalKey("\r");
-        _publishPlanStatus("idle");
-      } else if (action === "approve_compact") {
-        _injectTerminalKey("\x1b[B\r");
-        _publishPlanStatus("idle");
-      } else if (action === "refine") {
-        _injectTerminalKey("\x1b");
-        _publishPlanStatus("active");
-        if (feedback && feedback.trim()) {
-          setTimeout(() => {
-            _tryExecuteTerminalInput(feedback.trim());
-          }, 200);
-        }
-      } else {
-        _injectTerminalKey("\x1b");
-        _publishPlanStatus("idle");
-      }
-    },
-    resolvePlanContent: (path?: string) => _resolvePlanContent(path),
-  };
-}
-
 
 async function _cmdStart(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<void> {
   if (_state !== "idle") {
@@ -4210,7 +4229,7 @@ async function _cmdStart(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<voi
     } catch { /* defensive — never block start on a model lookup */ }
   }
 
-  const roomMeta: { name: string; cwd: string; model?: string; thinking?: ThinkingLevel; goal?: string; loop?: string; plan?: string } = { name: sessionName, cwd };
+  const roomMeta: { name: string; cwd: string; model?: string; thinking?: ThinkingLevel; goal?: string; loop?: string } = { name: sessionName, cwd };
   if (_currentModel) roomMeta.model = _currentModel;
   if (_currentThinking) roomMeta.thinking = _currentThinking;
   try {
@@ -4221,16 +4240,6 @@ async function _cmdStart(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<voi
       _detectGoalStatus(_lastCtx);
     if (detectedGoal) {
       roomMeta.goal = detectedGoal;
-    }
-  } catch {}
-  try {
-    const detectedPlan =
-      _detectPlanStatus(ctx) ??
-      _detectPlanStatus(_pi) ??
-      _detectPlanStatus(_lastEventCtx) ??
-      _detectPlanStatus(_lastCtx);
-    if (detectedPlan) {
-      roomMeta.plan = detectedPlan;
     }
   } catch {}
   // Persist so _attemptReconnect can replay the same hello payload — without
@@ -5863,7 +5872,7 @@ export function _routeClientMessageFrom(
     return;
   }
   if (msg.type === "extension_ui_response") {
-    if (!handleAskResponse(msg)) {
+    if (!handleAskResponse(msg) && !_planReview.respond(msg)) {
       _extensionUiBridge?.respond(msg);
     }
     return;
@@ -5912,6 +5921,17 @@ export function _routeClientMessageFrom(
         break;
       }
 
+      // A line typed now would land on omp's plan review overlay, whose Enter
+      // picks the highlighted option: the review is answered first.
+      if (_planReview.reviewOpen()) {
+        sender.send({
+          type: "error",
+          code: "plan_review_open",
+          in_reply_to: msg.id,
+          message: "omp's plan review is open: choose an option (or Keep planning) first.",
+        });
+        break;
+      }
       const previousTurnId = _currentTurnId;
       const seededTurnId = !shouldSteer || _currentTurnId === null;
       if (seededTurnId) {
@@ -5921,17 +5941,21 @@ export function _routeClientMessageFrom(
       if (trimmedText && _tryExecuteTerminalInput(trimmedText)) {
         if (trimmedText.startsWith("/")) {
           _safeNotify(`[remote-pi] Terminal command: "${trimmedText}"`, "info");
-        }
-        if (trimmedText === "/plan-review") {
-          _publishPlanStatus("review");
-          _extensionUiBridge?.triggerPlanReview();
-        } else if (trimmedText === "/plan") {
-          setTimeout(() => {
-            const current = _detectPlanStatus(_liveCtx()) ?? "idle";
-            _publishPlanStatus(current);
-          }, 300);
+          _settleSlashTurn(msg.id);
         }
         _echoUserMessage(msg, shouldSteer);
+        break;
+      }
+      // omp's plan mode lives in its interactive TUI. A headless daemon (RPC
+      // mode) has no `/plan` command and would hand the line to the model.
+      if (/^\/plan(?:-review)?(?:\s|$)/.test(trimmedText)) {
+        if (seededTurnId) _currentTurnId = previousTurnId;
+        sender.send({
+          type: "error",
+          code: "plan_mode_unavailable",
+          in_reply_to: msg.id,
+          message: PLAN_MODE_NEEDS_TERMINAL,
+        });
         break;
       }
       if (trimmedText === "/restart" && process.env["REMOTE_PI_DAEMON"] === "1") {
@@ -6144,6 +6168,15 @@ export function _routeClientMessageFrom(
         });
       }
       break;
+    case "plan_mode": {
+      const error = _planReview.planMode(msg.action);
+      sender.send(
+        error === null
+          ? { type: "action_ok", in_reply_to: msg.id, action: "plan_mode" }
+          : { type: "action_error", in_reply_to: msg.id, action: "plan_mode", error },
+      );
+      break;
+    }
   }
 }
 /**
@@ -6206,6 +6239,7 @@ function _handleSessionSync(
   // client substitutes its timeline.
   sender.send(_activityBroadcaster.message());
   _sendStatusLine(sender);
+  _sendTodoState(sender);
 
   // Plan/57 — replay ask_user flows still awaiting an answer. The bridge
   // broadcasts `started` once; a peer that connects afterwards would otherwise
@@ -6220,6 +6254,10 @@ function _handleSessionSync(
   }
   for (const req of getPendingAskRequests()) {
     sender.send(req);
+  }
+  // omp plan mode: its state, then a plan review still awaiting an answer.
+  for (const frame of _planReview.syncFrames()) {
+    sender.send(frame);
   }
 
   // Discover live skills dynamically on host and push to client

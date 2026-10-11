@@ -182,6 +182,49 @@ void main() {
       await future;
       s.cm.dispose();
     });
+
+    test('setPlanMode(exit) sends plan_mode and resolves on action_ok', () async {
+      final s = await _setup();
+      final future = s.repo.setPlanMode(PlanModeAction.exit);
+      await Future<void>.delayed(const Duration(milliseconds: 1));
+      final sent = s.ch.sent.single as PlanMode;
+      expect(sent.toJson(), {'type': 'plan_mode', 'id': sent.id, 'action': 'exit'});
+      s.ch.push(
+        ActionOk(
+          inReplyTo: sent.id,
+          action: ActionName.planMode,
+          rawAction: 'plan_mode',
+        ),
+      );
+      await future;
+      s.cm.dispose();
+    });
+
+    test('setPlanMode throws ActionFailure on action_error', () async {
+      final s = await _setup();
+      final future = s.repo.setPlanMode(PlanModeAction.review);
+      await Future<void>.delayed(const Duration(milliseconds: 1));
+      final sent = s.ch.sent.single as PlanMode;
+      s.ch.push(
+        ActionError(
+          inReplyTo: sent.id,
+          action: ActionName.planMode,
+          rawAction: 'plan_mode',
+          error: 'no plan to review',
+        ),
+      );
+      await expectLater(
+        future,
+        throwsA(
+          isA<ActionFailure>().having(
+            (e) => e.message,
+            'message',
+            'no plan to review',
+          ),
+        ),
+      );
+      s.cm.dispose();
+    });
   });
 
   group('ActionsRepository — models catalogue', () {

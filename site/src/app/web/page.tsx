@@ -233,9 +233,13 @@ export default function WebPage() {
     [connection, activeEpk, activeRoomId],
   );
 
-  const handleQuickAction = (cmd: RoomAction) => {
-    runAction(cmd).catch((err: unknown) => setActionError(err instanceof Error ? err.message : String(err)));
-  };
+  // Stable per room: the chat's memoized Plan control sends through it too.
+  const handleQuickAction = useCallback(
+    (cmd: RoomAction) => {
+      runAction(cmd).catch((err: unknown) => setActionError(err instanceof Error ? err.message : String(err)));
+    },
+    [runAction],
+  );
 
   const loadModels = useCallback(
     (): Promise<ModelsCatalogue> =>
@@ -314,6 +318,7 @@ export default function WebPage() {
             onDisconnect={handleCloseChat}
             onOpenSessionInfo={() => setShowSessionInfo(true)}
             onOpenQuickActions={() => setShowQuickActions(true)}
+            onRoomAction={handleQuickAction}
             onOpenSettings={() => setShowSettings(true)}
           />
         )}

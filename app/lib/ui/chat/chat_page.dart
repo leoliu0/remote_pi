@@ -1,3 +1,4 @@
+import 'package:app/data/actions/actions_repository.dart' show ActionFailure;
 import 'package:app/data/preferences/preferences.dart';
 import 'package:app/domain/session_state.dart';
 import 'package:app/pairing/storage.dart';
@@ -16,7 +17,9 @@ import 'package:app/ui/chat/widgets/thinking_block.dart';
 import 'package:app/ui/chat/widgets/streaming_bubble.dart';
 import 'package:app/ui/chat/widgets/tool_request_card.dart';
 import 'package:app/ui/chat/widgets/activity_panel.dart';
+import 'package:app/ui/chat/widgets/todo_panel.dart';
 import 'package:app/ui/chat/widgets/extension_ui_sheet.dart';
+import 'package:app/ui/chat/widgets/plan_review_sheet.dart';
 import 'package:app/ui/settings/settings_sheet.dart';
 import 'package:app_settings/app_settings.dart';
 import 'package:flutter/material.dart';
@@ -139,6 +142,8 @@ class _ChatPageState extends State<ChatPage> {
                 ],
               ),
             ),
+            if (state is ChatReady && state.todo.isNotEmpty)
+              TodoPanel(phases: state.todo, working: state.isWorking),
             if (state is ChatReady && state.activity.isNotEmpty)
               ActivityPanel(jobs: state.activity),
             _buildInput(context, state, vm),
@@ -147,15 +152,16 @@ class _ChatPageState extends State<ChatPage> {
       ),
     );
 
-    // Plan/57 — an interactive extension_ui_request (ask_user via pi-ask)
-    // renders as a full-screen modal layered ABOVE the Scaffold. Purely
-    // reactive: the overlay leaves the tree when the pending request clears
-    // (completed dismiss) — no route lifecycle to manage. `error` carries a
-    // submit-result rejection so the modal can offer a retry instead of a dead
-    // end.
+    // Plan/57 — an interactive extension_ui_request (ask_user via pi-ask, or
+    // omp's plan review) renders as a full-screen modal layered ABOVE the
+    // Scaffold. Purely reactive: the overlay leaves the tree when the pending
+    // request clears (same-id close notify) — no route lifecycle to manage.
+    // `error` carries a submit-result rejection so the modal can offer a retry
+    // instead of a dead end.
     final ready = state is ChatReady ? state : null;
     final uiRequest = ready?.pendingUiRequest;
     if (uiRequest == null) return scaffold;
+    final plan = uiRequest.plan;
     return Stack(
       children: [
         scaffold,
@@ -163,12 +169,20 @@ class _ChatPageState extends State<ChatPage> {
           // Keyed by request id: a new flow must get a fresh State — question
           // ids repeat across flows (e.g. "goal"), so reusing the State would
           // leak old selections/custom text into the new modal.
-          child: ExtensionUiSheet(
-            key: ValueKey(uiRequest.id),
-            request: uiRequest,
-            error: ready?.pendingUiError,
-            onRespond: vm.respondExtensionUi,
-          ),
+          child: plan != null
+              ? PlanReviewSheet(
+                  key: ValueKey(uiRequest.id),
+                  request: uiRequest,
+                  plan: plan,
+                  error: ready?.pendingUiError,
+                  onRespond: vm.respondExtensionUi,
+                )
+              : ExtensionUiSheet(
+                  key: ValueKey(uiRequest.id),
+                  request: uiRequest,
+                  error: ready?.pendingUiError,
+                  onRespond: vm.respondExtensionUi,
+                ),
         ),
       ],
     );
@@ -614,7 +628,10 @@ class _ChatPageState extends State<ChatPage> {
       activeThinking: vm.activeRoom?.thinking?.name,
       goalStatus: vm.activeRoom?.goal,
       loopStatus: vm.activeRoom?.loop,
-      planStatus: vm.activeRoom?.plan,
+      planState: isReady ? state.planState : null,
+      onPlanMode: actionsEnabled
+          ? (action) => _sendPlanMode(context, vm, action)
+          : null,
       onCancel: cancelId != null ? () => vm.cancel(cancelId) : null,
       queuedMessages: isReady ? state.queuedMessages : const [],
       onSetQueued: (text) {
@@ -644,6 +661,35 @@ class _ChatPageState extends State<ChatPage> {
         _scrollToBottom();
       },
     );
+  }
+
+  /// Dispatches a `plan_mode` action; a failure (offline / timeout / the Pi's
+  /// action_error) shows as a snackbar. The new state arrives as `plan_state`.
+  static Future<void> _sendPlanMode(
+    BuildContext context,
+    ChatViewModel vm,
+    PlanModeAction action,
+  ) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final colors = context.colors;
+    try {
+      await vm.setPlanMode(action);
+    } on ActionFailure catch (e) {
+      messenger.showSnackBar(
+        SnackBar(
+          backgroundColor: colors.surface,
+          behavior: SnackBarBehavior.floating,
+          content: Text(
+            'Plan mode: ${e.message}',
+            style: TextStyle(
+              fontFamily: kMonoFamily,
+              fontSize: 12,
+              color: colors.error,
+            ),
+          ),
+        ),
+      );
+    }
   }
 
   /// Open the Camera/Gallery sheet and drive the picker. Captures the

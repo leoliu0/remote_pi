@@ -33,6 +33,25 @@ export interface AskEnrichment {
   questions: AskQuestion[];
 }
 
+/** omp's Plan Review choices (pi-extension `PlanReviewAction`), in omp's order. */
+export type PlanReviewAction = "approve_execute" | "approve_compact" | "approve_keep" | "refine" | "save_quit";
+
+export interface PlanReviewOption {
+  action: PlanReviewAction;
+  label: string;
+  /** omp disables `approve_keep` when the context is over 95 % full. */
+  disabled: boolean;
+}
+
+/** The `plan` envelope of a plan review request (pi-extension `PlanReviewWire`). */
+export interface PlanReview {
+  planFilePath: string;
+  title: string;
+  /** The plan's markdown; null when the Pi could not read the file. */
+  content: string | null;
+  options: PlanReviewOption[];
+}
+
 export interface ExtensionUiRequest {
   id: string;
   method: ExtensionUiMethod;
@@ -43,6 +62,7 @@ export interface ExtensionUiRequest {
   options: string[];
   notifyType?: string;
   ask?: AskEnrichment;
+  plan?: PlanReview;
 }
 
 /** pi-ask RemoteAskAnswer — keys stay camelCase inside the `ask` envelope. */
@@ -63,6 +83,8 @@ export type ExtensionUiResponseWire = {
   value?: string;
   confirmed?: boolean;
   ask?: AskResponseEnrichmentWire;
+  /** Plan review answer; `feedback` only for `refine`. Cancel uses `cancelled`. */
+  plan?: { action: PlanReviewAction; feedback?: string };
 };
 
 const METHODS: readonly ExtensionUiMethod[] = ["select", "confirm", "input", "editor", "notify"];
@@ -114,6 +136,27 @@ function parseAsk(raw: unknown): AskEnrichment | undefined {
   };
 }
 
+const PLAN_ACTIONS: readonly PlanReviewAction[] = ["approve_execute", "approve_compact", "approve_keep", "refine", "save_quit"];
+
+/** The `plan` envelope; undefined when absent or without a usable option (the plain select stays usable). */
+function parsePlan(raw: unknown): PlanReview | undefined {
+  if (typeof raw !== "object" || raw === null) return undefined;
+  const p = raw as Unchecked<"plan_file_path" | "title" | "content" | "options">;
+  const options = (Array.isArray(p.options) ? p.options : []).flatMap((o): PlanReviewOption[] => {
+    if (typeof o !== "object" || o === null) return [];
+    const opt = o as Unchecked<"action" | "label" | "disabled">;
+    const action = PLAN_ACTIONS.find((a) => a === opt.action);
+    return action ? [{ action, label: optString(opt.label) ?? action, disabled: opt.disabled === true }] : [];
+  });
+  if (options.length === 0) return undefined;
+  return {
+    planFilePath: optString(p.plan_file_path) ?? "",
+    title: optString(p.title) ?? "",
+    content: optString(p.content) ?? null,
+    options,
+  };
+}
+
 /** Inbound `extension_ui_request` → typed request (null when not one). */
 export function parseExtensionUiRequest(frame: Record<string, unknown>): ExtensionUiRequest | null {
   if (frame.type !== "extension_ui_request" || typeof frame.id !== "string" || !frame.id) return null;
@@ -129,6 +172,7 @@ export function parseExtensionUiRequest(frame: Record<string, unknown>): Extensi
     options: Array.isArray(frame.options) ? frame.options.map((o) => String(o)) : [],
     notifyType: optString(frame.notify_type),
     ask: parseAsk(frame.ask),
+    plan: parsePlan(frame.plan),
   };
 }
 
@@ -253,5 +297,15 @@ export function buildCancelResponse(req: ExtensionUiRequest): ExtensionUiRespons
     id: req.id,
     cancelled: true,
     ...(req.ask ? { ask: { flow_id: req.ask.flowId, kind: "cancel" as const } } : {}),
+  };
+}
+
+/** The plan review answer: the chosen option, plus trimmed feedback for `refine` (omitted when empty). */
+export function buildPlanResponse(req: ExtensionUiRequest, action: PlanReviewAction, feedback: string): ExtensionUiResponseWire {
+  const text = feedback.trim();
+  return {
+    type: "extension_ui_response",
+    id: req.id,
+    plan: action === "refine" && text ? { action, feedback: text } : { action },
   };
 }

@@ -76,7 +76,7 @@ void main() {
       final read = SessionReadRepository(store);
       final prefs = Preferences(database); // no selected peer
       final actions = ActionsRepository(conn);
-      final vm = ChatViewModel(read, sync, conn, prefs, _FakeStorage());
+      final vm = ChatViewModel(read, sync, conn, prefs, _FakeStorage(), actions);
       final voice = VoiceInputViewModel(_FakeSpeech());
       final attach = AttachmentViewModel(_FakePicker(), actions);
       final sel = SessionSelection();

@@ -28,11 +28,12 @@ interface Props {
   onRespond: (resp: ExtensionUiResponseWire) => boolean;
 }
 
-export function ExtensionUiPrompt({ prompt, onRespond }: Props) {
-  const req = prompt.request;
-  const ask = req.ask;
-  const [askDraft, setAskDraft] = useState<AskDraft>({});
-  const [plain, setPlain] = useState(req.method === "editor" ? req.prefill ?? "" : "");
+/**
+ * Submit state shared by the extension prompts: `send` disables the prompt
+ * until the extension's notify closes it, a rejection (`prompt.error`)
+ * re-enables it, and the 10 s backstop offers retry/cancel.
+ */
+export function usePromptSend(prompt: PendingPrompt, onRespond: Props["onRespond"]) {
   const [submitting, setSubmitting] = useState(false);
   const [awaitHint, setAwaitHint] = useState(false);
   const backstop = useRef<number | null>(null);
@@ -62,6 +63,27 @@ export function ExtensionUiPrompt({ prompt, onRespond }: Props) {
       setAwaitHint(true);
     }, SUBMIT_BACKSTOP_MS);
   };
+
+  return { submitting, awaitHint, send };
+}
+
+/** The rejection, or the backstop's "still waiting" hint, above a prompt's buttons. */
+export function PromptNotice({ error, awaitHint }: { error: string | null; awaitHint: boolean }) {
+  if (error) return <div className="text-[13px] text-[#E5484D]">{error}</div>;
+  if (!awaitHint) return null;
+  return (
+    <div className="text-[13px] text-amber-400">
+      Still waiting for desktop agent to confirm receipt. You can retry or cancel.
+    </div>
+  );
+}
+
+export function ExtensionUiPrompt({ prompt, onRespond }: Props) {
+  const req = prompt.request;
+  const ask = req.ask;
+  const [askDraft, setAskDraft] = useState<AskDraft>({});
+  const [plain, setPlain] = useState(req.method === "editor" ? req.prefill ?? "" : "");
+  const { submitting, awaitHint, send } = usePromptSend(prompt, onRespond);
 
   const plainDraft = { value: plain };
   const submittable = canSubmit(req, askDraft, plainDraft);
@@ -126,13 +148,7 @@ export function ExtensionUiPrompt({ prompt, onRespond }: Props) {
         </div>
 
         <div className="px-4 py-3 border-t border-white/10 space-y-2">
-          {prompt.error ? (
-            <div className="text-[13px] text-[#E5484D]">{prompt.error}</div>
-          ) : awaitHint ? (
-            <div className="text-[13px] text-amber-400">
-              Still waiting for desktop agent to confirm receipt. You can retry or cancel.
-            </div>
-          ) : null}
+          <PromptNotice error={prompt.error} awaitHint={awaitHint} />
           <div className="flex gap-3">
             <button
               type="button"

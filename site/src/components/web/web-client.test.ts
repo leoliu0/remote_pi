@@ -10,6 +10,8 @@ import {
   type WireSkill,
 } from "./web-client.ts";
 import type { PeerPresence } from "./web-client.ts";
+import type { PlanState } from "./plan-state.ts";
+import type { TodoPhase } from "./todo.ts";
 import { EMPTY_CHAT, applyChatEvent, chatEventFromFrame } from "./chat-stream.ts";
 import type { InnerFrame, RelayConnection } from "./relay-connection.ts";
 
@@ -158,4 +160,49 @@ test("an action on a dead link or with no reply fails visibly", async () => {
   const silent = liveConnection([]);
   await assert.rejects(requestRoomAction(silent.conn, SESSION.remoteEpk, SESSION.roomId, { action: "compact" }, 5), /timeout/);
   assert.equal(silent.listeners.size, 0);
+});
+
+// local://plan-capture.md — `plan_mode` actions and their replies.
+test("plan_mode enter/exit/review send the typed action and resolve on its action_ok", async () => {
+  const sent: InnerFrame[] = [];
+  const { conn, push, listeners } = liveConnection(sent);
+  for (const mode of ["enter", "exit", "review"] as const) {
+    const pending = requestRoomAction(conn, SESSION.remoteEpk, SESSION.roomId, { action: "plan_mode", mode });
+    const req = sent.at(-1)!;
+    assert.deepEqual(req, { type: "plan_mode", id: req.id, action: mode });
+    push({ type: "action_ok", in_reply_to: req.id, action: "plan_mode" });
+    assert.equal((await pending).action, "plan_mode");
+  }
+  assert.equal(listeners.size, 0);
+  const failing = requestRoomAction(conn, SESSION.remoteEpk, SESSION.roomId, { action: "plan_mode", mode: "review" });
+  push({ type: "action_error", in_reply_to: sent.at(-1)!.id, action: "plan_mode", error: "No plan to review" });
+  await assert.rejects(failing, /No plan to review/);
+});
+
+test("plan_state frames reach the chat for this room only", () => {
+  const { conn, push } = liveConnection([]);
+  const client = new RemotePiRelayClient(conn, SESSION);
+  const seen: PlanState[] = [];
+  client.connect({ onPlanState: (s) => seen.push(s) });
+  push({ type: "plan_state", status: "review", plan_file_path: "local://hello-txt-plan.md", title: "hello-txt" });
+  push({ type: "plan_state", status: "active" }, "other-room");
+  push({ type: "plan_state", status: "bogus" });
+  push({ type: "plan_state", status: "idle" });
+  assert.deepEqual(seen, [
+    { status: "review", planFilePath: "local://hello-txt-plan.md", title: "hello-txt" },
+    { status: "idle", planFilePath: null, title: null },
+  ]);
+  client.disconnect();
+});
+
+test("todo_state frames reach the chat for this room only; [] clears", () => {
+  const { conn, push } = liveConnection([]);
+  const client = new RemotePiRelayClient(conn, SESSION);
+  const seen: TodoPhase[][] = [];
+  client.connect({ onTodoState: (p) => seen.push(p) });
+  push({ type: "todo_state", ts: 1, phases: [{ name: "Setup", tasks: [{ content: "Create repo", status: "in_progress" }] }] });
+  push({ type: "todo_state", ts: 2, phases: [{ name: "Other", tasks: [{ content: "x", status: "pending" }] }] }, "other-room");
+  push({ type: "todo_state", ts: 3, phases: [] });
+  assert.deepEqual(seen, [[{ name: "Setup", tasks: [{ content: "Create repo", status: "in_progress" }] }], []]);
+  client.disconnect();
 });

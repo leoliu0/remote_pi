@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   applyExtensionUiRequest,
   buildCancelResponse,
+  buildPlanResponse,
   buildSubmitResponse,
   canSubmit,
   parseExtensionUiRequest,
@@ -162,4 +163,71 @@ test("notify: dismiss closes, warning keeps open with message, unmatched ignored
   assert.equal(applyExtensionUiRequest(warned, notify("tool:tc_1")), null);
   // A replayed request replaces the open one and clears the error.
   assert.deepEqual(applyExtensionUiRequest(warned, ask()), { request: ask(), error: null });
+});
+
+// local://plan-capture.md — the plan review request the Pi forwarded from a
+// scratch omp 18.9.2 session (verbatim), and its close notifies.
+const PLAN_FRAME = {"type":"extension_ui_request","id":"plan-review:toolu_019RaxgagFLMnWDaT826y9KG","method":"select","title":"Plan ready for review: hello-txt","options":["Approve and execute","Approve and compact context","Approve and keep context (~19k / 1m)","Refine plan","Save and quit"],"plan":{"plan_file_path":"local://hello-txt-plan.md","title":"hello-txt","content":"# Create hello.txt\n\n- Create the new file `/tmp/pm-e2e/proj/hello.txt` with the `write` tool. The file does not exist yet, so nothing gets overwritten.\n- Content: exactly `hello plan` plus one trailing newline (`hello plan\\n`), and nothing else.\n- Verify in `/tmp/pm-e2e/proj`: `printf 'hello plan\\n' | cmp - hello.txt` exits 0 and prints nothing.\n","options":[{"action":"approve_execute","label":"Approve and execute"},{"action":"approve_compact","label":"Approve and compact context"},{"action":"approve_keep","label":"Approve and keep context (~19k / 1m)"},{"action":"refine","label":"Refine plan"},{"action":"save_quit","label":"Save and quit"}]}};
+const PLAN_ID = "plan-review:toolu_019RaxgagFLMnWDaT826y9KG";
+
+test("parses the captured plan review request: markdown plan and omp's 5 choices in order", () => {
+  const req = parseExtensionUiRequest(PLAN_FRAME)!;
+  assert.equal(req.id, PLAN_ID);
+  assert.equal(req.method, "select");
+  assert.equal(req.ask, undefined);
+  assert.equal(req.plan?.planFilePath, "local://hello-txt-plan.md");
+  assert.equal(req.plan?.title, "hello-txt");
+  assert.equal(req.plan?.content, PLAN_FRAME.plan.content);
+  assert.deepEqual(req.plan?.options, [
+    { action: "approve_execute", label: "Approve and execute", disabled: false },
+    { action: "approve_compact", label: "Approve and compact context", disabled: false },
+    { action: "approve_keep", label: "Approve and keep context (~19k / 1m)", disabled: false },
+    { action: "refine", label: "Refine plan", disabled: false },
+    { action: "save_quit", label: "Save and quit", disabled: false },
+  ]);
+  // Plain requests carry no plan.
+  assert.equal(parseExtensionUiRequest({ type: "extension_ui_request", id: "s1", method: "select", options: ["x"] })?.plan, undefined);
+});
+
+test("plan review: disabled option, unreadable plan, malformed fields", () => {
+  const options = PLAN_FRAME.plan.options.map((o) => (o.action === "approve_keep" ? { ...o, disabled: true } : o));
+  const full = parseExtensionUiRequest({ ...PLAN_FRAME, plan: { ...PLAN_FRAME.plan, content: null, options } })!;
+  assert.equal(full.plan?.content, null);
+  assert.deepEqual(full.plan?.options[2], { action: "approve_keep", label: "Approve and keep context (~19k / 1m)", disabled: true });
+  // Unknown actions and non-object options are dropped; a bad content type reads as unreadable.
+  const odd = parseExtensionUiRequest({
+    ...PLAN_FRAME,
+    plan: { plan_file_path: 7, content: 42, options: [{ action: "teleport", label: "?" }, "x", { action: "refine" }] },
+  })!;
+  assert.deepEqual(odd.plan, { planFilePath: "", title: "", content: null, options: [{ action: "refine", label: "refine", disabled: false }] });
+  // No usable option: no plan envelope, the plain select over the labels stays usable.
+  assert.equal(parseExtensionUiRequest({ ...PLAN_FRAME, plan: { ...PLAN_FRAME.plan, options: [] } })?.plan, undefined);
+  assert.equal(parseExtensionUiRequest({ ...PLAN_FRAME, plan: "nope" })?.plan, undefined);
+});
+
+test("plan answers: approve, refine with trimmed feedback, cancel keeps planning", () => {
+  const req = parseExtensionUiRequest(PLAN_FRAME)!;
+  assert.deepEqual(buildPlanResponse(req, "approve_execute", "ignored"), {
+    type: "extension_ui_response",
+    id: PLAN_ID,
+    plan: { action: "approve_execute" },
+  });
+  assert.deepEqual(buildPlanResponse(req, "refine", "  Also print the file with cat afterwards.\n"), {
+    type: "extension_ui_response",
+    id: PLAN_ID,
+    plan: { action: "refine", feedback: "Also print the file with cat afterwards." },
+  });
+  assert.deepEqual(buildPlanResponse(req, "refine", "   "), { type: "extension_ui_response", id: PLAN_ID, plan: { action: "refine" } });
+  assert.deepEqual(buildCancelResponse(req), { type: "extension_ui_response", id: PLAN_ID, cancelled: true });
+});
+
+test("plan review closes on its same-id notify; a warning keeps it open with the message", () => {
+  const open = applyExtensionUiRequest(null, parseExtensionUiRequest(PLAN_FRAME)!);
+  assert.equal(open?.request.plan?.title, "hello-txt");
+  const notify = (extra: Record<string, unknown>) =>
+    parseExtensionUiRequest({ type: "extension_ui_request", id: PLAN_ID, method: "notify", ...extra })!;
+  const warned = applyExtensionUiRequest(open, notify({ message: "Plan mode is no longer active", notify_type: "warning" }));
+  assert.equal(warned?.error, "Plan mode is no longer active");
+  assert.equal(warned?.request.plan?.title, "hello-txt");
+  assert.equal(applyExtensionUiRequest(warned, notify({ message: "Plan approved." })), null);
 });
