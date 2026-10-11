@@ -2,6 +2,7 @@
 // Uses a fake ConnectionFactory so no real WS or transport is involved.
 
 import 'dart:async';
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:app/data/local/app_database.dart';
@@ -394,6 +395,38 @@ void main() {
     final ch = PlainPeerChannel(transport: t);
     await ch.close();
     expect(t.isClosed, isTrue);
+  });
+
+  // Live report 2026-10-11 (Licensing on uts): a newer extension sends
+  // `status_line` (its omp footer row). The app turned every unknown type into
+  // an ErrorMessage, so the chat showed "⚠ unsupported_type: unknown server
+  // type" and — because an error ends the turn — dropped the working state and
+  // the streaming reply up to once a second. Unknown types must be skipped.
+  test('PlainPeerChannel skips unknown server types and keeps the stream going', () async {
+    final q1 = _Q();
+    final q2 = _Q();
+    final ch = PlainPeerChannel(transport: _T(send: q1, recv: q2));
+    final got = <ServerMessage>[];
+    final sub = ch.serverMessages.listen(got.add);
+
+    q2.add(Uint8List.fromList(utf8.encode(
+      '{"type":"status_line","cwd":"/home/leo/da/Dropbox/private/Licensing",'
+      '"path":"~/da/Dropbox/private/Licensing","scratch":false,'
+      '"git":{"branch":"master","staged":6,"unstaged":49,"untracked":41},'
+      '"context":{"tokens":175000,"window":1000000,"percent":17.5},'
+      '"cost":{"total":517.32,"subagents":481.85,"subscription":true,"premium_requests":0},'
+      '"run_started_at":null,"ts":1791684000000}',
+    )));
+    q2.add(Uint8List.fromList(utf8.encode(
+      '{"type":"agent_chunk","in_reply_to":"t1","delta":"still streaming"}',
+    )));
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+
+    expect(got.whereType<ErrorMessage>(), isEmpty);
+    expect(got, hasLength(1));
+    expect(got.single, isA<AgentChunk>());
+    await sub.cancel();
+    await ch.close();
   });
 
   // ---------------------------------------------------------------------------

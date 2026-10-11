@@ -10,6 +10,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart' show debugPrint;
+
 import 'package:app/data/transport/channel.dart';
 import 'package:app/pairing/pair_request_flow.dart';
 import 'package:app/protocol/codec.dart';
@@ -100,13 +102,12 @@ class PlainPeerChannel implements IChannel, IControlLink {
     try {
       final msg = decodeServer(utf8.decode(bytes));
       if (!_controller.isClosed) _controller.add(msg);
-    } on UnsupportedTypeException {
-      // Forward-compat: surface unknown server types as ErrorMessage.
-      if (!_controller.isClosed) {
-        _controller.add(
-          ErrorMessage(code: 'unsupported_type', message: 'unknown server type'),
-        );
-      }
+    } on UnsupportedTypeException catch (e) {
+      // Forward-compat: a newer Pi sends types this build doesn't know (e.g.
+      // `status_line`). Skip them. Surfacing them as ErrorMessage put a
+      // "⚠ unsupported_type" row in the chat and, since an error ends the
+      // turn, dropped the working state and the streaming reply.
+      debugPrint('[peer_channel] skipped unknown server type "${e.type}"');
     } catch (_) {
       // Malformed frame — drop silently. Previous diagnostic logging
       // for cast / decode errors lived here; we trust upstream codecs
