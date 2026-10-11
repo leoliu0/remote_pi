@@ -140,21 +140,25 @@ function useRunNow(runStartedAt: number | null): number {
   return now;
 }
 
-/** The terminal's footer row under the composer: `π · model · thinking · path · git · context · cost`. */
+/**
+ * The terminal's footer row under the composer: `π · model · thinking · path · git · context · cost`.
+ * Before any `status_line` frame (older extension) it is `π · model · thinking` from room meta.
+ */
 export function StatusLineRow({
   line,
   model,
   thinking,
 }: {
-  line: StatusLine;
+  line: StatusLine | null;
   model?: string | null;
   thinking?: string | null;
 }) {
-  const now = useRunNow(line.runStartedAt);
+  const runStartedAt = line?.runStartedAt ?? null;
+  const now = useRunNow(runStartedAt);
   const m = modelSegment(model, thinking);
-  const git = line.git;
+  const git = line?.git ?? null;
   const counts = git ? gitCounts(git) : [];
-  const cost = costText(line.cost);
+  const cost = line ? costText(line.cost) : null;
   return (
     <div
       role="status"
@@ -163,10 +167,10 @@ export function StatusLineRow({
       className="mt-1 px-1 h-5 flex flex-wrap items-center min-w-0 overflow-hidden whitespace-nowrap font-mono text-[11px] leading-5"
     >
       <span className="inline-flex items-center gap-1 shrink-0" style={{ color: SEP }}>
-        {line.runStartedAt !== null ? (
+        {runStartedAt !== null ? (
           <>
             <BrailleSpinner />
-            <span>{runElapsedText(now - line.runStartedAt)}</span>
+            <span>{runElapsedText(now - runStartedAt)}</span>
           </>
         ) : (
           <span aria-hidden>π</span>
@@ -188,22 +192,24 @@ export function StatusLineRow({
           <span>{m.thinking}</span>
         </Seg>
       )}
-      {/* The path gives way first: it shrinks to ~10ch (head clipped, like
-          omp's leading `…`) before any later segment drops. */}
-      <Seg color={PATH} className="min-w-0 grow basis-[10ch] max-w-max" title={line.cwd}>
-        {line.scratch ? (
-          <Icon>
-            <path d="M3 6h18M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
-          </Icon>
-        ) : (
-          <Icon>
-            <path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2" />
-          </Icon>
-        )}
-        <span dir="rtl" className="truncate min-w-0">
-          <bdi dir="ltr">{line.path}</bdi>
-        </span>
-      </Seg>
+      {line && (
+        // The path gives way first: it shrinks to ~10ch (head clipped, like
+        // omp's leading `…`) before any later segment drops.
+        <Seg color={PATH} className="min-w-0 grow basis-[10ch] max-w-max" title={line.cwd}>
+          {line.scratch ? (
+            <Icon>
+              <path d="M3 6h18M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
+            </Icon>
+          ) : (
+            <Icon>
+              <path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2" />
+            </Icon>
+          )}
+          <span dir="rtl" className="truncate min-w-0">
+            <bdi dir="ltr">{line.path}</bdi>
+          </span>
+        </Seg>
+      )}
       {git && (git.branch || counts.length > 0) && (
         <Seg color={counts.length > 0 ? GIT_DIRTY : GIT_CLEAN}>
           <Icon>
@@ -221,12 +227,14 @@ export function StatusLineRow({
           ))}
         </Seg>
       )}
-      <Seg color={CONTEXT[contextTone(line.context.percent, line.context.window)]}>
-        <Icon>
-          <path d="M3 5.5 10.5 4.5v7H3zM12.5 4.2 21 3v8.5h-8.5zM3 12.5h7.5v7L3 18.5zM12.5 12.5H21V21l-8.5-1.2z" fill="currentColor" stroke="none" />
-        </Icon>
-        <span>{contextText(line.context)}</span>
-      </Seg>
+      {line && (
+        <Seg color={CONTEXT[contextTone(line.context.percent, line.context.window)]}>
+          <Icon>
+            <path d="M3 5.5 10.5 4.5v7H3zM12.5 4.2 21 3v8.5h-8.5zM3 12.5h7.5v7L3 18.5zM12.5 12.5H21V21l-8.5-1.2z" fill="currentColor" stroke="none" />
+          </Icon>
+          <span>{contextText(line.context)}</span>
+        </Seg>
+      )}
       {cost && (
         <Seg color={COST}>
           {cost.subscriptionIcon && (

@@ -9,6 +9,7 @@ import {
   modelSegment,
   parseStatusLine,
   runElapsedText,
+  showStatusRow,
   statusLineText,
 } from "./status-line.ts";
 
@@ -66,6 +67,18 @@ test("the row reads like the terminal footer", () => {
   // Mid-run: the π segment's timer leads the row.
   const running = { ...user, runStartedAt: 1_000 };
   assert.equal(statusLineText(running, "Claude Opus 5.5", "xhigh", 13_500), "12s · Opus 5.5 · xhi · ~/Documents/remote_pi · main · 35.3%/1M");
+});
+
+test("before any status_line frame the row still shows model and thinking from room meta", () => {
+  // An old extension, or a session not restarted yet: no frame, only room meta.
+  assert.equal(statusLineText(null, "Claude Opus 5.5", "xhigh", 0), "Opus 5.5 · xhi");
+  assert.equal(statusLineText(null, "Claude Opus 5.5", null, 0), "Opus 5.5");
+  assert.equal(showStatusRow(null, "Claude Opus 5.5", "xhigh"), true);
+  // Nothing known yet: no row.
+  assert.equal(showStatusRow(null, null, null), false);
+  assert.equal(showStatusRow(null, null, "high"), false);
+  // The frame alone is enough (model not in room meta yet).
+  assert.equal(showStatusRow(parseStatusLine(FRAME), null, null), true);
 });
 
 test("model + thinking use the Home tile labels", () => {

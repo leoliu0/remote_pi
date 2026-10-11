@@ -164,17 +164,33 @@ export function modelSegment(
   return { model, thinking: rawThinking ? thinkingLabel(rawThinking) : null };
 }
 
-/** Plain-text row, exactly as the terminal prints it minus the icons. */
+/**
+ * The row shows whenever there is something to show: the `status_line` frame,
+ * or the model from room meta alone (an older extension sends no frame).
+ */
+export function showStatusRow(
+  line: StatusLine | null,
+  rawModel: string | null | undefined,
+  rawThinking: string | null | undefined
+): boolean {
+  return line !== null || modelSegment(rawModel, rawThinking) !== null;
+}
+
+/**
+ * Plain-text row, exactly as the terminal prints it minus the icons. Without a
+ * `status_line` frame it is the model segment alone.
+ */
 export function statusLineText(
-  line: StatusLine,
+  line: StatusLine | null,
   rawModel: string | null | undefined,
   rawThinking: string | null | undefined,
   now: number
 ): string {
   const segments: string[] = [];
-  if (line.runStartedAt !== null) segments.push(runElapsedText(now - line.runStartedAt));
+  if (line?.runStartedAt != null) segments.push(runElapsedText(now - line.runStartedAt));
   const m = modelSegment(rawModel, rawThinking);
   if (m) segments.push(m.thinking ? `${m.model} · ${m.thinking}` : m.model);
+  if (!line) return segments.join(" · ");
   segments.push(line.path);
   if (line.git) {
     const git = [line.git.branch ?? "", ...gitCounts(line.git).map((c) => c.text)].filter(Boolean).join(" ");

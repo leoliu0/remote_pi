@@ -1,10 +1,11 @@
 "use client";
 
-import { useState, useEffect, useLayoutEffect, useMemo, useRef } from "react";
+import { memo, useCallback, useState, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import {
   PairedSession,
   PeerPresence,
   RemotePiRelayClient,
+  type WebChatMessage,
   type WireSkill,
 } from "./web-client";
 import { AssistantContent } from "./thinking-block";
@@ -23,7 +24,6 @@ import { slashMenuItems } from "./slash-commands";
 import { BrailleSpinner } from "./braille-spinner";
 import type { RelayConnection } from "./relay-connection";
 import { workingLabel } from "./working-label";
-import { modelThinkingText } from "./session-list";
 import { ToolFullCard, ToolPill } from "./tool-card";
 import { ExtensionUiPrompt } from "./extension-ui-prompt";
 import { applyExtensionUiRequest, type ExtensionUiResponseWire, type PendingPrompt } from "./extension-ui";
@@ -38,7 +38,7 @@ import {
   type Recall,
 } from "./composer-history";
 import { StatusLineRow } from "./status-line-row";
-import type { StatusLine } from "./status-line";
+import { showStatusRow, type StatusLine } from "./status-line";
 
 type ToolDisplay = "brief" | "full" | "hidden";
 
@@ -55,7 +55,7 @@ interface WebChatProps {
   connection: RelayConnection;
   /** This room's state from the relay's room/presence frames (Home's source of truth). */
   roomPresence: PeerPresence;
-  /** Room meta model/thinking (relay frames, Home's source), shown like the Home tile. */
+  /** Room meta model/thinking (relay frames, Home's source), shown in the status row under the composer. */
   model?: string | null;
   thinking?: string | null;
   onDisconnect: () => void;
@@ -81,6 +81,169 @@ const READ_ONLY_TOOLS = new Set([
   "mcp__glob",
   "mcp__gemini_search_google_web_search",
 ]);
+
+/** Stable key for a tool row's expanded state. */
+function toolRowKey(m: WebChatMessage): string {
+  return m.id || `${m.tool?.id || "tool"}_${m.timestamp}`;
+}
+
+/**
+ * One timeline row. Memoized by message object: chat-stream.ts keeps unchanged
+ * messages by reference, so a streamed chunk re-renders only its own row.
+ */
+const MessageRow = memo(function MessageRow({
+  m,
+  toolDisplay,
+  showThinking,
+  expanded,
+  onSetToolExpanded,
+}: {
+  m: WebChatMessage;
+  toolDisplay: ToolDisplay;
+  showThinking: boolean;
+  expanded: boolean;
+  onSetToolExpanded: (toolKey: string, expanded: boolean) => void;
+}) {
+  return (
+    <div className="w-full">
+      {/* USER BUBBLE (Mobile Parity: Capped width, #1A1A1A pill) */}
+      {m.role === "user" && (
+        <div className="flex justify-end mb-3">
+          <div className="max-w-[340px] sm:max-w-[420px] rounded-2xl rounded-tr-sm bg-[#1A1A1A] border border-[#262626] px-4 py-2.5 text-white text-sm shadow-xs select-text">
+            {m.image && (
+              // eslint-disable-next-line @next/next/no-img-element -- inline base64 from the Pi, not an optimizable URL
+              <img
+                src={`data:${m.image.mime};base64,${m.image.data}`}
+                alt="Attached image"
+                className="mb-2 max-h-64 max-w-full rounded-lg"
+              />
+            )}
+            {m.text && <div className="whitespace-pre-wrap font-mono text-sm leading-relaxed">{m.text}</div>}
+            <div className="mt-1 text-[10px] text-[#8A8A8A] text-right font-mono flex items-center justify-end gap-1.5">
+              <span>{new Date(m.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+              {m.status === "sending" && <span className="text-[#6B6B6B]">⏳</span>}
+              {m.status === "sent" && <span className="text-[#6CD28A]">✓</span>}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ASSISTANT MESSAGE (Mobile Parity: Full-width Native Markdown) */}
+      {m.role === "assistant" && (
+        <div className="w-full my-2 text-sm leading-relaxed select-text">
+          <AssistantContent text={m.text} isStreaming={m.isStreaming} showThinking={showThinking} />
+        </div>
+      )}
+
+      {/* TOOL CALL (Mobile Parity: Brief Pill / Full Card) */}
+      {m.role === "tool" && m.tool && toolDisplay !== "hidden" && (
+        toolDisplay === "full" ? (
+          <ToolFullCard tool={m.tool} />
+        ) : expanded ? (
+          <ToolFullCard tool={m.tool} onCollapse={() => onSetToolExpanded(toolRowKey(m), false)} />
+        ) : (
+          <ToolPill tool={m.tool} onExpand={() => onSetToolExpanded(toolRowKey(m), true)} />
+        )
+      )}
+
+      {/* COMPACTION MESSAGE (Mobile Parity: Pill with ModelBadge tokens) */}
+      {m.role === "compaction" && (
+        <div className="my-3 flex justify-center">
+          <div className="px-3 py-1 rounded-full bg-[#161616] border border-[#1F1F1F] text-xs font-mono text-[#8A8A8A] flex items-center gap-1.5">
+            <span>📦</span>
+            <span>{m.text}</span>
+            {m.tokensBefore && <span className="text-[#6B6B6B]">({m.tokensBefore.toLocaleString()} tokens)</span>}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+});
+
+/**
+ * The message list and working banner. Memoized so composer keystrokes, which
+ * re-render WebChat, skip the whole list.
+ */
+const ChatTimeline = memo(function ChatTimeline({
+  messages,
+  toolDisplay,
+  showThinking,
+  isWorking,
+  onCancelTurn,
+}: {
+  messages: WebChatMessage[];
+  toolDisplay: ToolDisplay;
+  showThinking: boolean;
+  isWorking: boolean;
+  onCancelTurn: () => void;
+}) {
+  const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
+  const setToolExpanded = useCallback(
+    (toolKey: string, expanded: boolean) =>
+      setExpandedTools((prev) => {
+        const next = new Set(prev);
+        if (expanded) next.add(toolKey);
+        else next.delete(toolKey);
+        return next;
+      }),
+    []
+  );
+  const visibleMessages = messages.filter((m) => {
+    if (m.role !== "tool") return true;
+    if (toolDisplay === "hidden") return false;
+    if (toolDisplay === "brief" && m.tool) {
+      const toolName = m.tool.tool.toLowerCase();
+      return !READ_ONLY_TOOLS.has(toolName);
+    }
+    return true;
+  });
+
+  return (
+    <>
+      {visibleMessages.length === 0 ? (
+        <div className="flex flex-col items-center justify-center h-full text-center p-6 text-[#777]">
+          <div className="w-12 h-12 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-center text-[#4fc3f7] mb-3">
+            <svg className="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <polyline points="4 17 10 11 4 5" />
+              <line x1="12" y1="19" x2="20" y2="19" />
+            </svg>
+          </div>
+          <div className="text-sm font-medium text-white">No messages yet</div>
+          <div className="text-xs text-[#666] font-mono mt-1">
+            Send a prompt below to interact with your Pi agent.
+          </div>
+        </div>
+      ) : (
+        visibleMessages.map((m, idx) => (
+          <MessageRow
+            key={`${m.id || m.timestamp}_${idx}`}
+            m={m}
+            toolDisplay={toolDisplay}
+            showThinking={showThinking}
+            expanded={m.role === "tool" && expandedTools.has(toolRowKey(m))}
+            onSetToolExpanded={setToolExpanded}
+          />
+        ))
+      )}
+
+      {isWorking && (
+        <div className="flex items-center justify-between text-xs font-mono text-[#4fc3f7] py-2 px-3 rounded-xl bg-[#4fc3f7]/10 border border-[#4fc3f7]/20 w-full sm:w-fit max-w-full">
+          <div className="flex items-center gap-2 min-w-0">
+            <BrailleSpinner />
+            <span className="truncate">{workingLabel(messages)}</span>
+          </div>
+          <button
+            type="button"
+            onClick={onCancelTurn}
+            className="ml-4 text-red-400 hover:text-red-300 underline cursor-pointer"
+          >
+            Stop
+          </button>
+        </div>
+      )}
+    </>
+  );
+});
 
 export function WebChat({
   session,
@@ -114,7 +277,6 @@ export function WebChat({
   const [slashMenuOpen, setSlashMenuOpen] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [toolDisplay, setToolDisplay] = useState<ToolDisplay>(readToolDisplay);
-  const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
   const [pendingPrompt, setPendingPrompt] = useState<PendingPrompt | null>(null);
   const [queuedItems, setQueuedItems] = useState<Array<{ id: string; text: string; editable?: boolean }>>([]);
   const [showThinking, setShowThinking] = useState(readShowThinking);
@@ -142,10 +304,13 @@ export function WebChat({
   const isInitialLoadRef = useRef(true);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   // Composer grows with its text like the app's (minLines 1 → maxLines, then
-  // scrolls). Desktop has room, so allow up to ~10 lines.
+  // scrolls). Desktop has room, so allow up to ~10 lines (max-h-[240px]).
+  // `field-sizing: content` sizes it in the frame's own layout; measuring here
+  // instead forced a layout of the whole chat on every keystroke, so only
+  // browsers without it take this path.
   useLayoutEffect(() => {
     const el = inputRef.current;
-    if (!el) return;
+    if (!el || CSS.supports("field-sizing", "content")) return;
     el.style.height = "auto";
     const max = 240;
     el.style.height = `${Math.min(el.scrollHeight, max)}px`;
@@ -329,10 +494,11 @@ export function WebChat({
   };
 
   // Stop works whenever the Pi is working, as in the app (not only once text streams).
-  const handleCancelTurn = () => {
+  // Stable between keystrokes so the memoized timeline skips composer renders.
+  const handleCancelTurn = useCallback(() => {
     const target = cancelTargetId(chat, isWorking);
     if (target) client.cancelTurn(target);
-  };
+  }, [chat, isWorking, client]);
 
   const handlePromptRespond = (resp: ExtensionUiResponseWire): boolean => {
     const sent = client.respondExtensionUi(resp);
@@ -391,7 +557,7 @@ export function WebChat({
     setTimeout(() => setCopiedId(null), 2000);
   };
 
-  const modelThinking = modelThinkingText(model, thinking);
+  const liveStatusLine = statusLine.client === client ? statusLine.line : null;
 
   return (
     <div className="flex h-screen w-full max-w-5xl lg:max-w-[calc(64rem+300px)] mx-auto">
@@ -446,14 +612,6 @@ export function WebChat({
                   {isWorking ? "working…" : presence}
                 </span>
               </div>
-              {modelThinking && (
-                <>
-                  <span className="text-[#444]">&bull;</span>
-                  <span className="truncate text-[11px] text-[#4fc3f7]" title={modelThinking}>
-                    {modelThinking}
-                  </span>
-                </>
-              )}
             </div>
           </div>
         </div>
@@ -532,114 +690,13 @@ export function WebChat({
         onScroll={handleScroll}
         className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4 relative"
       >
-        {(() => {
-          const visibleMessages = messages.filter((m) => {
-            if (m.role !== "tool") return true;
-            if (toolDisplay === "hidden") return false;
-            if (toolDisplay === "brief" && m.tool) {
-              const toolName = m.tool.tool.toLowerCase();
-              return !READ_ONLY_TOOLS.has(toolName);
-            }
-            return true;
-          });
-
-          if (visibleMessages.length === 0) {
-            return (
-              <div className="flex flex-col items-center justify-center h-full text-center p-6 text-[#777]">
-                <div className="w-12 h-12 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-center text-[#4fc3f7] mb-3">
-                  <svg className="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <polyline points="4 17 10 11 4 5" />
-                    <line x1="12" y1="19" x2="20" y2="19" />
-                  </svg>
-                </div>
-                <div className="text-sm font-medium text-white">No messages yet</div>
-                <div className="text-xs text-[#666] font-mono mt-1">
-                  Send a prompt below to interact with your Pi agent.
-                </div>
-              </div>
-            );
-          }
-
-          return visibleMessages.map((m, idx) => {
-          return (
-            <div key={`${m.id || m.timestamp}_${idx}`} className="w-full">
-              {/* USER BUBBLE (Mobile Parity: Capped width, #1A1A1A pill) */}
-              {m.role === "user" && (
-                <div className="flex justify-end mb-3">
-                  <div className="max-w-[340px] sm:max-w-[420px] rounded-2xl rounded-tr-sm bg-[#1A1A1A] border border-[#262626] px-4 py-2.5 text-white text-sm shadow-xs select-text">
-                    {m.image && (
-                      // eslint-disable-next-line @next/next/no-img-element -- inline base64 from the Pi, not an optimizable URL
-                      <img
-                        src={`data:${m.image.mime};base64,${m.image.data}`}
-                        alt="Attached image"
-                        className="mb-2 max-h-64 max-w-full rounded-lg"
-                      />
-                    )}
-                    {m.text && <div className="whitespace-pre-wrap font-mono text-sm leading-relaxed">{m.text}</div>}
-                    <div className="mt-1 text-[10px] text-[#8A8A8A] text-right font-mono flex items-center justify-end gap-1.5">
-                      <span>{new Date(m.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
-                      {m.status === "sending" && <span className="text-[#6B6B6B]">⏳</span>}
-                      {m.status === "sent" && <span className="text-[#6CD28A]">✓</span>}
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* ASSISTANT MESSAGE (Mobile Parity: Full-width Native Markdown) */}
-              {m.role === "assistant" && (
-                <div className="w-full my-2 text-sm leading-relaxed select-text">
-                  <AssistantContent text={m.text} isStreaming={m.isStreaming} showThinking={showThinking} />
-                </div>
-              )}
-
-              {/* TOOL CALL (Mobile Parity: Brief Pill / Full Card) */}
-              {m.role === "tool" && m.tool && toolDisplay !== "hidden" && (() => {
-                const toolKey = m.id || `${m.tool.id || "tool"}_${m.timestamp}`;
-                const setExpanded = (expanded: boolean) =>
-                  setExpandedTools((prev) => {
-                    const next = new Set(prev);
-                    if (expanded) next.add(toolKey);
-                    else next.delete(toolKey);
-                    return next;
-                  });
-                if (toolDisplay === "full") return <ToolFullCard tool={m.tool} />;
-                return expandedTools.has(toolKey) ? (
-                  <ToolFullCard tool={m.tool} onCollapse={() => setExpanded(false)} />
-                ) : (
-                  <ToolPill tool={m.tool} onExpand={() => setExpanded(true)} />
-                );
-              })()}
-
-              {/* COMPACTION MESSAGE (Mobile Parity: Pill with ModelBadge tokens) */}
-              {m.role === "compaction" && (
-                <div className="my-3 flex justify-center">
-                  <div className="px-3 py-1 rounded-full bg-[#161616] border border-[#1F1F1F] text-xs font-mono text-[#8A8A8A] flex items-center gap-1.5">
-                    <span>📦</span>
-                    <span>{m.text}</span>
-                    {m.tokensBefore && <span className="text-[#6B6B6B]">({m.tokensBefore.toLocaleString()} tokens)</span>}
-                  </div>
-                </div>
-              )}
-            </div>
-          );
-        });
-      })()}
-
-        {isWorking && (
-          <div className="flex items-center justify-between text-xs font-mono text-[#4fc3f7] py-2 px-3 rounded-xl bg-[#4fc3f7]/10 border border-[#4fc3f7]/20 w-full sm:w-fit max-w-full">
-            <div className="flex items-center gap-2 min-w-0">
-              <BrailleSpinner />
-              <span className="truncate">{workingLabel(messages)}</span>
-            </div>
-            <button
-              type="button"
-              onClick={handleCancelTurn}
-              className="ml-4 text-red-400 hover:text-red-300 underline cursor-pointer"
-            >
-              Stop
-            </button>
-          </div>
-        )}
+        <ChatTimeline
+          messages={messages}
+          toolDisplay={toolDisplay}
+          showThinking={showThinking}
+          isWorking={isWorking}
+          onCancelTurn={handleCancelTurn}
+        />
       </div>
 
       {/* Plan/57 — interactive extension prompt (ask_user / plan review) */}
@@ -813,7 +870,7 @@ export function WebChat({
                 ? "Agent is working… Enter to steer, Ctrl+Enter to queue"
                 : "Type a prompt, or / for commands…"
             }
-            className="flex-1 self-center bg-transparent py-1 px-1 text-sm text-white placeholder:text-[#555] font-[family-name:var(--ff-body)] resize-none outline-none min-h-[26px] leading-relaxed"
+            className="flex-1 min-w-0 self-center bg-transparent py-1 px-1 text-sm text-white placeholder:text-[#555] font-[family-name:var(--ff-body)] resize-none outline-none min-h-[26px] max-h-[240px] overflow-y-auto [field-sizing:content] leading-relaxed"
           />
 
           {/* Right Buttons */}
@@ -864,9 +921,10 @@ export function WebChat({
           </div>
         </div>
 
-        {/* The terminal's footer row (omp status line), under the composer like the TUI */}
-        {statusLine.client === client && statusLine.line && (
-          <StatusLineRow line={statusLine.line} model={model} thinking={thinking} />
+        {/* The terminal's footer row (omp status line), under the composer like the TUI;
+            model and thinking show from room meta even before the first status_line frame. */}
+        {showStatusRow(liveStatusLine, model, thinking) && (
+          <StatusLineRow line={liveStatusLine} model={model} thinking={thinking} />
         )}
       </div>
     </div>
