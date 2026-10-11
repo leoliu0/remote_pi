@@ -35,6 +35,9 @@ and 27 (see [`plan/`](plan/) directory for design history).
 - Web client: `error`, `cancelled` and `bye` frames now stop the working state and close the streamed reply; `error` shows a `⚠ code: message` row as the app does. Stop works before any text has streamed.
 - Web client: images on `user_message`/`user_input` (live and in history) render in the user bubble. A `tool_result` whose request is outside the history window shows as an `unknown` tool. A resync keeps sends that have not been confirmed yet.
 - Web client: the slash menu lists the Pi's `skills_list`. Quick actions load the Pi's real models (`list_models` → `models_list`), send `model_set` with the picked provider and id, offer each model's `thinking_levels`, and show `action_error`/timeout failures instead of dropping them.
+- Web client: Home session rows have restart and delete icons, like the app's tiles. Restart is shown only for live rooms and sends `/restart`. Delete on a live room sends `/exit` and drops the tile. On an offline room it only removes the cached tile. Both ask for confirmation first and warn when a turn is running.
+- Web client: Home opens on the Online tab, as the app does. If the relay can't be reached, Online shows its empty state instead of spinning forever.
+- Web client: on wide screens the chat has a session sidebar on the left with the same tabs, grouping and status badges as Home. One click switches session. It collapses to a rail of avatars, and that choice is remembered. Home keeps its tab after you leave a chat.
 ### Added
 
 #### Owner-key sync (plan/23)

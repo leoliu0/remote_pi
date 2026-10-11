@@ -1,12 +1,13 @@
 "use client";
 
-import { useState } from "react";
 import type { RelayStatus } from "./relay-connection";
 import { RelayPicker } from "./relay-picker";
 import {
   filterItems,
+  groupItemsByPeer,
   homeCounts,
   homeItems,
+  isItemOnline,
   onlineListPending,
   peerLabel,
   roomDisplayName,
@@ -24,8 +25,17 @@ interface HomeViewProps {
   rooms: RoomsState;
   relayUrl: string;
   relayStatus: RelayStatus;
+  /** The relay link failed and is retrying: no rooms frame is on its way. */
+  relayUnreachable: boolean;
   onRelayChange: (url: string) => void;
   onOpenItem: (item: HomeItem) => void;
+  /** Presence tab, owned by the page so it survives a chat round trip. */
+  filter: HomeFilter;
+  onFilterChange: (filter: HomeFilter) => void;
+  /** Row restart icon; only offered for live (or working) rooms. */
+  onRestartItem: (item: HomeItem) => void;
+  /** Row bin icon: quits a live room, forgets an offline tile. */
+  onDeleteItem: (item: HomeItem) => void;
   /** True until the owner's mesh blob (paired PCs) has been read once. */
   peersLoading: boolean;
   onOpenSettings: () => void;
@@ -37,13 +47,23 @@ const FILTERS: Array<{ id: HomeFilter; label: string }> = [
   { id: "offline", label: "Offline" },
 ];
 
-const FILTER_EMPTY: Record<HomeFilter, { title: string; subtitle: string }> = {
+export const FILTER_EMPTY: Record<HomeFilter, { title: string; subtitle: string }> = {
   online: { title: "No sessions online", subtitle: "Live sessions appear here when a paired Pi is active." },
   offline: { title: "No offline sessions", subtitle: "Sessions you’ve seen before that aren’t live show up here." },
   all: { title: "Nothing here…", subtitle: "When a paired Pi opens a session, it shows up here." },
 };
 
-function Spinner() {
+/** Presence dot colours (the sidebar rail); rows show working/Done as pills via `StatusBadge`. */
+export const STATUS_DOT: Record<TileStatus, string> = {
+  working: "bg-[#38bdf8] animate-pulse",
+  // Finished while unviewed: haloed so it stands apart from a plain online dot.
+  done: "bg-[#5fd38a] ring-2 ring-[#5fd38a]/50",
+  online: "bg-[#5fd38a]",
+  reconnecting: "bg-amber-400",
+  offline: "bg-[#444]",
+};
+
+export function Spinner() {
   return (
     <div className="flex justify-center py-12">
       <div className="w-5 h-5 border-2 border-[#4fc3f7] border-t-transparent rounded-full animate-spin" />
@@ -51,7 +71,7 @@ function Spinner() {
   );
 }
 
-function EmptyNote({ title, subtitle }: { title: string; subtitle: string }) {
+export function EmptyNote({ title, subtitle }: { title: string; subtitle: string }) {
   return (
     <div className="flex flex-col items-center justify-center py-12 px-4 text-center opacity-60">
       <div className="text-xs font-medium text-[#ccc] mb-1">{title}</div>
@@ -60,7 +80,7 @@ function EmptyNote({ title, subtitle }: { title: string; subtitle: string }) {
   );
 }
 
-function StatusBadge({ status }: { status: TileStatus }) {
+export function StatusBadge({ status }: { status: TileStatus }) {
   if (status === "working") {
     return (
       <span className="flex items-center gap-1 px-1.5 py-0.5 rounded-full border border-[#38bdf8] bg-[#38bdf8]/15 text-[10px] text-[#38bdf8]">
@@ -76,8 +96,74 @@ function StatusBadge({ status }: { status: TileStatus }) {
       </span>
     );
   }
-  const color = status === "online" ? "bg-[#5fd38a]" : status === "reconnecting" ? "bg-amber-400" : "bg-[#444]";
-  return <span title={status} aria-label={status} className={`w-2.5 h-2.5 rounded-full ${color}`} />;
+  return <span title={status} aria-label={status} className={`w-2.5 h-2.5 rounded-full shrink-0 ${STATUS_DOT[status]}`} />;
+}
+
+/** Initial-letter avatar shared by Home rows and the session sidebar. */
+export function SessionAvatar({ title, className }: { title: string; className: string }) {
+  return (
+    <span
+      className={`rounded-full bg-[#141822] border border-white/10 flex items-center justify-center text-[#4fc3f7] font-semibold shrink-0 ${className}`}
+    >
+      {title.trim().charAt(0).toUpperCase() || "?"}
+    </span>
+  );
+}
+
+export function FilterTabs({
+  filter,
+  counts,
+  onChange,
+}: {
+  filter: HomeFilter;
+  counts: Record<HomeFilter, number>;
+  onChange: (filter: HomeFilter) => void;
+}) {
+  return (
+    <div className="bg-[#11141a] border border-white/10 rounded-lg p-0.5 flex items-center w-fit">
+      {FILTERS.map((f) => (
+        <button
+          key={f.id}
+          type="button"
+          onClick={() => onChange(f.id)}
+          className={`py-1 px-2.5 rounded-md text-[11px] transition-all flex items-center gap-1.5 cursor-pointer ${
+            filter === f.id ? "bg-[#4fc3f7] text-[#04222e] font-semibold" : "text-[#888] hover:text-white"
+          }`}
+        >
+          <span>{f.label}</span>
+          <span className={`text-[10px] ${filter === f.id ? "text-[#04222e]/70" : "text-[#555]"}`}>{counts[f.id]}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function RowAction({
+  label,
+  danger = false,
+  onClick,
+  children,
+}: {
+  label: string;
+  danger?: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={label}
+      aria-label={label}
+      className={`relative p-1 rounded-lg text-[#666] hover:bg-white/5 transition-colors cursor-pointer ${
+        danger ? "hover:text-red-400" : "hover:text-white"
+      }`}
+    >
+      <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        {children}
+      </svg>
+    </button>
+  );
 }
 
 export function HomeView({
@@ -85,17 +171,21 @@ export function HomeView({
   rooms,
   relayUrl,
   relayStatus,
+  relayUnreachable,
   onRelayChange,
   onOpenItem,
+  filter,
+  onFilterChange,
+  onRestartItem,
+  onDeleteItem,
   peersLoading,
   onOpenSettings,
 }: HomeViewProps) {
-  const [filter, setFilter] = useState<HomeFilter>("all");
   const connected = relayStatus === "online";
   const items = homeItems(peers, rooms);
   const counts = homeCounts(items, rooms, connected);
   const visible = filterItems(items, filter, rooms, connected);
-  const pending = onlineListPending(filter, visible.length, rooms);
+  const pending = onlineListPending(filter, visible.length, rooms, relayUnreachable);
 
   let body: React.ReactNode;
   if (peers.length === 0) {
@@ -111,29 +201,10 @@ export function HomeView({
     // Paired, no rooms at all: no tabs, nothing to filter.
     body = pending ? <Spinner /> : <EmptyNote title="Nothing here…" subtitle="Run /remote-pi on your PC to start a session." />;
   } else {
-    const groups: Array<{ peer: PeerRecord; items: HomeItem[] }> = [];
-    for (const it of visible) {
-      const last = groups[groups.length - 1];
-      if (last && last.peer.remoteEpk === it.peer.remoteEpk) last.items.push(it);
-      else groups.push({ peer: it.peer, items: [it] });
-    }
+    const groups = groupItemsByPeer(visible);
     body = (
       <>
-        <div className="bg-[#11141a] border border-white/10 rounded-lg p-0.5 flex items-center w-fit">
-          {FILTERS.map((f) => (
-            <button
-              key={f.id}
-              type="button"
-              onClick={() => setFilter(f.id)}
-              className={`py-1 px-2.5 rounded-md text-[11px] transition-all flex items-center gap-1.5 cursor-pointer ${
-                filter === f.id ? "bg-[#4fc3f7] text-[#04222e] font-semibold" : "text-[#888] hover:text-white"
-              }`}
-            >
-              <span>{f.label}</span>
-              <span className={`text-[10px] ${filter === f.id ? "text-[#04222e]/70" : "text-[#555]"}`}>{counts[f.id]}</span>
-            </button>
-          ))}
-        </div>
+        <FilterTabs filter={filter} counts={counts} onChange={onFilterChange} />
 
         {visible.length === 0 ? (
           pending ? <Spinner /> : <EmptyNote {...FILTER_EMPTY[filter]} />
@@ -146,16 +217,20 @@ export function HomeView({
                   {groupItems.map((it) => {
                     const title = roomDisplayName(it.peer, it.room);
                     const subtitle = tileSubtitle(it);
+                    const live = connected && isItemOnline(rooms, connected, it);
                     return (
-                      <button
+                      <div
                         key={it.room.roomId}
-                        type="button"
-                        onClick={() => onOpenItem(it)}
-                        className="group w-full flex items-center gap-2.5 py-2.5 px-3 text-left hover:bg-white/[0.035] transition-colors cursor-pointer"
+                        className="group relative flex items-center gap-2.5 py-2.5 px-3 hover:bg-white/[0.035] transition-colors"
                       >
-                        <span className="w-8 h-8 rounded-full bg-[#141822] border border-white/10 flex items-center justify-center text-[#4fc3f7] font-semibold text-xs shrink-0">
-                          {title.trim().charAt(0).toUpperCase() || "?"}
-                        </span>
+                        {/* Whole-row open target; the action buttons sit above it (buttons cannot nest). */}
+                        <button
+                          type="button"
+                          onClick={() => onOpenItem(it)}
+                          aria-label={`Open ${title}`}
+                          className="absolute inset-0 cursor-pointer"
+                        />
+                        <SessionAvatar title={title} className="w-8 h-8 text-xs" />
                         <span className="flex-1 min-w-0">
                           <span className="block text-xs font-medium text-white truncate group-hover:text-[#4fc3f7] transition-colors">
                             {title}
@@ -164,8 +239,21 @@ export function HomeView({
                             {subtitle.text}
                           </span>
                         </span>
+                        {live && (
+                          <RowAction label="Restart session" onClick={() => onRestartItem(it)}>
+                            <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" />
+                            <path d="M21 3v5h-5" />
+                          </RowAction>
+                        )}
+                        <RowAction label="Delete session" danger onClick={() => onDeleteItem(it)}>
+                          <path d="M3 6h18" />
+                          <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
+                          <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
+                          <path d="M10 11v6" />
+                          <path d="M14 11v6" />
+                        </RowAction>
                         <StatusBadge status={tileStatus(rooms, connected, it)} />
-                      </button>
+                      </div>
                     );
                   })}
                 </div>

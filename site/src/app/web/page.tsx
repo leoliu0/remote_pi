@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  buildRoomCommand,
   loadCachedRooms,
   loadOwnerIdentity,
   loadVerifiedMesh,
@@ -26,6 +27,8 @@ import {
   clearLiveState,
   commitWorkingOff,
   emptyRoomsState,
+  forgetRoom,
+  isItemOnline,
   isRoomLive,
   isRoomWorking,
   markRoomViewed,
@@ -34,11 +37,13 @@ import {
   roomDisplayName,
   roomKey,
   WORKING_OFF_DEBOUNCE_MS,
+  type HomeFilter,
   type HomeItem,
   type PeerRecord,
   type RoomsState,
 } from "@/components/web/session-list";
 import { HomeView } from "@/components/web/home-view";
+import { SessionSidebar } from "@/components/web/session-sidebar";
 import { SignInScreen } from "@/components/web/sign-in-screen";
 import { WebChat } from "@/components/web/web-chat";
 import { SessionInfoModal } from "@/components/web/session-info-modal";
@@ -55,6 +60,12 @@ export default function WebPage() {
   const [identity, setIdentity] = useState<OwnerIdentity | null>(null);
   const [relayUrl, setRelayUrl] = useState<string | null>(null);
   const [relayStatus, setRelayStatus] = useState<RelayStatus>("offline");
+  // Sticky across the retry's "connecting" (the app's StatusRetrying): a
+  // socket that closed before or after auth; cleared once the link is up.
+  const [relayUnreachable, setRelayUnreachable] = useState(false);
+  // Home's presence tab, shared with the chat's session sidebar. Opens on
+  // Online like the app; kept in memory while the tab lives.
+  const [homeFilter, setHomeFilter] = useState<HomeFilter>("online");
   const [peers, setPeers] = useState<PeerRecord[]>([]);
   const [peersLoading, setPeersLoading] = useState(true);
   const [rooms, setRooms] = useState<RoomsState>(() => emptyRoomsState());
@@ -128,7 +139,10 @@ export default function WebPage() {
     if (!connection) return;
     const conn = connection;
     const timers = new Set<number>();
-    const offStatus = conn.onStatus(setRelayStatus);
+    const offStatus = conn.onStatus((status) => {
+      setRelayStatus(status);
+      if (status !== "connecting") setRelayUnreachable(status === "offline");
+    });
     const offControl = conn.onControl((raw) => {
       const frame = parseControlFrame(raw);
       if (!frame) return;
@@ -151,6 +165,7 @@ export default function WebPage() {
       conn.stop();
       updateRooms(clearLiveState(roomsRef.current));
       setRelayStatus("offline");
+      setRelayUnreachable(false);
     };
   }, [connection, updateRooms]);
 
@@ -194,11 +209,17 @@ export default function WebPage() {
 
   const handleOpenItem = (item: HomeItem) => {
     const { peer, room } = item;
+    const key = roomKey(peer.remoteEpk, room.roomId);
+    // The sidebar's row for the open chat: nothing to switch.
+    if (key === activeKeyRef.current) return;
     const connected = relayStatus === "online";
     const working = isRoomWorking(rooms, connected, peer.remoteEpk, room.roomId);
     const live = isRoomLive(rooms, connected, peer.remoteEpk, room.roomId);
-    activeKeyRef.current = roomKey(peer.remoteEpk, room.roomId);
-    updateRooms(markRoomViewed(roomsRef.current, peer.remoteEpk, room.roomId));
+    let next = markRoomViewed(roomsRef.current, peer.remoteEpk, room.roomId);
+    // Switching from the sidebar leaves the previous chat as closing it would.
+    if (activeSession) next = markRoomViewed(next, activeSession.remoteEpk, activeSession.roomId);
+    activeKeyRef.current = key;
+    updateRooms(next);
     setActiveSession({
       id: `${peer.remoteEpk}_${room.roomId}`,
       name: roomDisplayName(peer, room),
@@ -221,6 +242,39 @@ export default function WebPage() {
     activeKeyRef.current = null;
     setActiveSession(null);
     setView("home");
+  };
+
+  /** A slash command as a chat line to any room (the app's `restartRoom` / `quitRoom`). */
+  const sendSlashCommand = (item: HomeItem, text: string): boolean =>
+    connection?.sendInner(
+      item.peer.remoteEpk,
+      item.room.roomId,
+      buildRoomCommand({ action: "send_message", id: `cli_${Date.now()}`, text }),
+    ) ?? false;
+
+  const handleRestartItem = (item: HomeItem) => {
+    const working = isRoomWorking(rooms, relayStatus === "online", item.peer.remoteEpk, item.room.roomId);
+    const ok = confirm(
+      "Restart session?\n\nSends /restart to this agent on your PC — omp restarts with the same launch flags, resuming this session." +
+        (working ? " A turn is running and will be interrupted." : ""),
+    );
+    if (ok && !sendSlashCommand(item, "/restart")) setActionError("Not connected");
+  };
+
+  const handleDeleteItem = (item: HomeItem) => {
+    const { peer, room } = item;
+    const connected = relayStatus === "online";
+    const live = connected && isItemOnline(rooms, connected, item);
+    const working = isRoomWorking(rooms, connected, peer.remoteEpk, room.roomId);
+    const ok = confirm(
+      live
+        ? "Quit session?\n\nSends /exit to this agent on your PC — the session process ends and disappears from this list." +
+            (working ? " A turn is running and will be interrupted." : "")
+        : "Delete session?\n\nRemoves the session from this list only. If it is still running on the PC, it reappears.",
+    );
+    if (!ok) return;
+    if (live && !sendSlashCommand(item, "/exit")) setActionError("Not connected");
+    updateRooms(forgetRoom(roomsRef.current, peer.remoteEpk, room.roomId));
   };
 
   const activeEpk = activeSession?.remoteEpk;
@@ -301,26 +355,45 @@ export default function WebPage() {
             rooms={rooms}
             relayUrl={relayUrl}
             relayStatus={relayStatus}
+            relayUnreachable={relayUnreachable}
             onRelayChange={handleRelayChange}
             onOpenItem={handleOpenItem}
+            filter={homeFilter}
+            onFilterChange={setHomeFilter}
+            onRestartItem={handleRestartItem}
+            onDeleteItem={handleDeleteItem}
             onOpenSettings={() => setShowSettings(true)}
           />
         )}
 
         {view === "chat" && activeSession && connection && (
-          <WebChat
-            key={activeSession.id}
-            session={activeSession}
-            connection={connection}
-            roomPresence={roomPresence}
-            model={activeRoom?.model ?? activeSession?.model}
-            thinking={activeRoom?.thinking ?? activeSession?.thinking}
-            onDisconnect={handleCloseChat}
-            onOpenSessionInfo={() => setShowSessionInfo(true)}
-            onOpenQuickActions={() => setShowQuickActions(true)}
-            onRoomAction={handleQuickAction}
-            onOpenSettings={() => setShowSettings(true)}
-          />
+          <div className="flex h-screen">
+            <SessionSidebar
+              peers={peers}
+              rooms={rooms}
+              connected={connected}
+              relayUnreachable={relayUnreachable}
+              filter={homeFilter}
+              onFilterChange={setHomeFilter}
+              activeKey={roomKey(activeSession.remoteEpk, activeSession.roomId)}
+              onOpenItem={handleOpenItem}
+            />
+            <div className="flex-1 min-w-0">
+              <WebChat
+                key={activeSession.id}
+                session={activeSession}
+                connection={connection}
+                roomPresence={roomPresence}
+                model={activeRoom?.model ?? activeSession?.model}
+                thinking={activeRoom?.thinking ?? activeSession?.thinking}
+                onDisconnect={handleCloseChat}
+                onOpenSessionInfo={() => setShowSessionInfo(true)}
+                onOpenQuickActions={() => setShowQuickActions(true)}
+                onRoomAction={handleQuickAction}
+                onOpenSettings={() => setShowSettings(true)}
+              />
+            </div>
+          </div>
         )}
       </div>
 

@@ -556,6 +556,24 @@ export function forgetPeer(state: RoomsState, epk: string): RoomsState {
   };
 }
 
+/**
+ * Bin icon on a Home tile (the app's `deleteCachedRoom`): drops one room from
+ * the list. A room still running on the PC reappears on its next announce.
+ */
+export function forgetRoom(state: RoomsState, epk: string, roomId: string): RoomsState {
+  const key = toStandardB64(epk);
+  const rk = roomKey(epk, roomId);
+  const list = (state.roomsByPeer[key] ?? []).filter((r) => r.roomId !== roomId);
+  const live = (state.liveRoomIds[key] ?? []).filter((id) => id !== roomId);
+  return {
+    ...state,
+    roomsByPeer: list.length > 0 ? { ...state.roomsByPeer, [key]: list } : withoutKey(state.roomsByPeer, key),
+    liveRoomIds: live.length > 0 ? { ...state.liveRoomIds, [key]: live } : withoutKey(state.liveRoomIds, key),
+    workingOff: withoutKey(state.workingOff, rk),
+    unreadFinished: state.unreadFinished.filter((k) => k !== rk),
+  };
+}
+
 // ── queries (ConnectionManager.isRoom*) ──────────────────────────────────────
 
 /** Last relay live-set membership, ignoring link status (Online filter). */
@@ -641,9 +659,28 @@ export function homeCounts(items: HomeItem[], state: RoomsState, connected: bool
   return { all: items.length, online, offline: items.length - online };
 }
 
-/** Spinner instead of "No sessions online" until the relay reported rooms. */
-export function onlineListPending(filter: HomeFilter, visibleCount: number, state: RoomsState): boolean {
-  return filter === "online" && visibleCount === 0 && !state.liveRoomsKnown;
+/** Consecutive items of one PC under its section header (`homeItems` sorts by PC first). */
+export function groupItemsByPeer(items: HomeItem[]): Array<{ peer: PeerRecord; items: HomeItem[] }> {
+  const groups: Array<{ peer: PeerRecord; items: HomeItem[] }> = [];
+  for (const it of items) {
+    const last = groups[groups.length - 1];
+    if (last && last.peer.remoteEpk === it.peer.remoteEpk) last.items.push(it);
+    else groups.push({ peer: it.peer, items: [it] });
+  }
+  return groups;
+}
+
+/**
+ * Spinner instead of "No sessions online" until the relay reported rooms,
+ * unless the relay keeps failing (no rooms frame is coming).
+ */
+export function onlineListPending(
+  filter: HomeFilter,
+  visibleCount: number,
+  state: RoomsState,
+  relayUnreachable: boolean,
+): boolean {
+  return filter === "online" && visibleCount === 0 && !relayUnreachable && !state.liveRoomsKnown;
 }
 
 export type TileStatus = "working" | "done" | "online" | "reconnecting" | "offline";

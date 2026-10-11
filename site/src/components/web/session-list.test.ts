@@ -7,6 +7,7 @@ import {
   emptyRoomsState,
   filterItems,
   forgetPeer,
+  forgetRoom,
   formatModelName,
   modelRowLabel,
   modelThinkingText,
@@ -337,9 +338,15 @@ describe("Home derivations", () => {
   });
 
   it("shows a spinner on Online until the first rooms frame arrives", () => {
-    assert.equal(onlineListPending("online", 0, emptyRoomsState()), true);
-    assert.equal(onlineListPending("online", 0, state()), false);
-    assert.equal(onlineListPending("all", 0, emptyRoomsState()), false);
+    assert.equal(onlineListPending("online", 0, emptyRoomsState(), false), true);
+    assert.equal(onlineListPending("online", 0, state(), false), false);
+    assert.equal(onlineListPending("all", 0, emptyRoomsState(), false), false);
+  });
+
+  it("an unreachable relay ends the Online spinner (Home opens on Online)", () => {
+    // No rooms frame will come while the relay keeps failing: show the empty
+    // state with the All/Offline tabs instead of spinning forever.
+    assert.equal(onlineListPending("online", 0, emptyRoomsState(), true), false);
   });
 
   it("tile status priority: working > Done > reconnecting > online/offline", () => {
@@ -417,5 +424,40 @@ describe("Home derivations", () => {
     assert.equal(s.roomsByPeer[EPK_A], undefined);
     assert.equal(s.liveRoomIds[EPK_A], undefined);
     assert.equal(rooms(s, EPK_B).length, 1);
+  });
+
+  it("forgetRoom (bin icon) drops one tile and its live/working/Done state, siblings stay", () => {
+    let s = apply(emptyRoomsState(), snapshot(EPK_A, [
+      { room_id: "r1", started_at: 1, working: true },
+      { room_id: "r2", started_at: 2 },
+    ])).state;
+    const off = apply(s, { type: "room_meta_updated", peer: EPK_A, room_id: "r1", meta: { working: false } });
+    assert.ok(off.scheduleWorkingOff);
+    s = { ...off.state, unreadFinished: [roomKey(EPK_A, "r1")] };
+
+    s = forgetRoom(s, EPK_A, "r1");
+    assert.deepEqual(rooms(s).map((r) => r.roomId), ["r2"]);
+    assert.equal(isRoomInLiveSet(s, EPK_A, "r1"), false);
+    assert.equal(isRoomWorking(s, true, EPK_A, "r1"), false);
+    assert.equal(isRoomUnreadFinished(s, EPK_A, "r1"), false);
+    assert.equal(isRoomInLiveSet(s, EPK_A, "r2"), true);
+    // The pending debounce firing later must not resurrect a Done badge.
+    s = commitWorkingOff(s, off.scheduleWorkingOff.key, off.scheduleWorkingOff.token, null);
+    assert.equal(isRoomUnreadFinished(s, EPK_A, "r1"), false);
+    // `/exit` → the relay's room_ended for the forgotten room changes nothing.
+    assert.equal(apply(s, { type: "room_ended", peer: EPK_A, room_id: "r1", since_ts: 3 }).state, s);
+
+    s = forgetRoom(s, EPK_A, "r2");
+    assert.equal(s.roomsByPeer[EPK_A], undefined);
+    assert.equal(s.liveRoomIds[EPK_A], undefined);
+    assert.equal(homeItems([peer({ remoteEpk: EPK_A })], s).length, 0);
+  });
+
+  it("a forgotten room still running on the PC reappears on its next announce", () => {
+    let s = apply(emptyRoomsState(), snapshot(EPK_A, [{ room_id: "r1", started_at: 1 }])).state;
+    s = forgetRoom(s, EPK_A, "r1");
+    s = apply(s, { type: "room_announced", peer: EPK_A, room_id: "r1", started_at: 1 }).state;
+    assert.deepEqual(rooms(s).map((r) => r.roomId), ["r1"]);
+    assert.equal(isRoomInLiveSet(s, EPK_A, "r1"), true);
   });
 });
