@@ -39,6 +39,18 @@ import {
 } from "./composer-history";
 import { StatusLineRow } from "./status-line-row";
 import { showStatusRow, type StatusLine } from "./status-line";
+import {
+  distanceFromBottom,
+  keyScrollsUp,
+  pickAnchor,
+  restoredScrollTop,
+  stickAfterScroll,
+  stickAfterUpIntent,
+  touchScrollsUp,
+  unreadRows,
+  wheelScrollsUp,
+  type ScrollAnchor,
+} from "./scroll-follow";
 
 type ToolDisplay = "brief" | "full" | "hidden";
 
@@ -87,6 +99,16 @@ function toolRowKey(m: WebChatMessage): string {
   return m.id || `${m.tool?.id || "tool"}_${m.timestamp}`;
 }
 
+/** The first on-screen row of `list` (rows carry `data-row-id`), to keep across a resync. */
+function captureAnchor(list: HTMLElement, content: HTMLElement | null): ScrollAnchor {
+  const listTop = list.getBoundingClientRect().top;
+  const rows = Array.from(content?.querySelectorAll<HTMLElement>("[data-row-id]") ?? [], (row) => {
+    const box = row.getBoundingClientRect();
+    return { id: row.dataset.rowId ?? "", top: box.top - listTop, bottom: box.bottom - listTop };
+  });
+  return pickAnchor(rows, distanceFromBottom(list));
+}
+
 /**
  * One timeline row. Memoized by message object: chat-stream.ts keeps unchanged
  * messages by reference, so a streamed chunk re-renders only its own row.
@@ -105,7 +127,7 @@ const MessageRow = memo(function MessageRow({
   onSetToolExpanded: (toolKey: string, expanded: boolean) => void;
 }) {
   return (
-    <div className="w-full">
+    <div className="w-full" data-row-id={m.id}>
       {/* USER BUBBLE (Mobile Parity: Capped width, #1A1A1A pill) */}
       {m.role === "user" && (
         <div className="flex justify-end mb-3">
@@ -170,12 +192,15 @@ const ChatTimeline = memo(function ChatTimeline({
   showThinking,
   isWorking,
   onCancelTurn,
+  contentRef,
 }: {
   messages: WebChatMessage[];
   toolDisplay: ToolDisplay;
   showThinking: boolean;
   isWorking: boolean;
   onCancelTurn: () => void;
+  /** The rows' box: its resizes keep a followed list pinned to the bottom. */
+  contentRef: React.RefObject<HTMLDivElement | null>;
 }) {
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
   const setToolExpanded = useCallback(
@@ -199,7 +224,7 @@ const ChatTimeline = memo(function ChatTimeline({
   });
 
   return (
-    <>
+    <div ref={contentRef} className={visibleMessages.length === 0 ? "space-y-4 h-full" : "space-y-4"}>
       {visibleMessages.length === 0 ? (
         <div className="flex flex-col items-center justify-center h-full text-center p-6 text-[#777]">
           <div className="w-12 h-12 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-center text-[#4fc3f7] mb-3">
@@ -241,7 +266,7 @@ const ChatTimeline = memo(function ChatTimeline({
           </button>
         </div>
       )}
-    </>
+    </div>
   );
 });
 
@@ -301,7 +326,6 @@ export function WebChat({
   });
 
   const scrollContainerRef = useRef<HTMLDivElement>(null);
-  const isInitialLoadRef = useRef(true);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   // Composer grows with its text like the app's (minLines 1 → maxLines, then
   // scrolls). Desktop has room, so allow up to ~10 lines (max-h-[240px]).
@@ -340,36 +364,79 @@ export function WebChat({
   // wires callbacks and subscribes it to the shared relay link.
   const client = useMemo(() => new RemotePiRelayClient(connection, session), [connection, session]);
   const agentBoard = agents.client === client ? agents.board : EMPTY_BOARD;
-  // Synchronously position at the bottom before browser paints
-  useLayoutEffect(() => {
-    if (isInitialLoadRef.current && messages.length > 0 && scrollContainerRef.current) {
-      scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight;
-      isInitialLoadRef.current = false;
-    }
-  }, [messages]);
+  // The list follows new content only while the reader is at the bottom
+  // (scroll-follow.ts). Stick is their intent, not the geometry at event time.
+  const contentRef = useRef<HTMLDivElement>(null);
+  const stickRef = useRef(true);
+  const lastScrollTopRef = useRef(0);
+  const touchYRef = useRef(0);
+  // Messages as last laid out, to count rows that arrived while scrolled up.
+  const laidOutMessagesRef = useRef(messages);
+  // Set by a history resync: where the reader was before its rows replaced the old ones.
+  const resyncAnchorRef = useRef<ScrollAnchor | null>(null);
 
-  // Scroll detection for "Scroll to bottom" button
-  const handleScroll = () => {
-    if (!scrollContainerRef.current) return;
-    const { scrollTop, scrollHeight, clientHeight } = scrollContainerRef.current;
-    const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
-    const isFar = distanceFromBottom > 120;
-    setShowScrollBottom(isFar);
-    if (!isFar) setUnreadCount(0);
+  const setStick = (stick: boolean) => {
+    stickRef.current = stick;
+    setShowScrollBottom(!stick);
+    if (stick) setUnreadCount(0);
   };
 
-  const scrollToBottom = (smooth = true) => {
-    if (!scrollContainerRef.current) return;
-    if (!smooth) {
-      scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight;
-    } else {
-      scrollContainerRef.current.scrollTo({
-        top: scrollContainerRef.current.scrollHeight,
-        behavior: "smooth",
-      });
+  // After content changes: pin a followed list instantly; otherwise keep the
+  // reader's place across a resync and count the new rows on the button.
+  useLayoutEffect(() => {
+    const el = scrollContainerRef.current;
+    const laidOut = laidOutMessagesRef.current;
+    laidOutMessagesRef.current = messages;
+    const anchor = resyncAnchorRef.current;
+    resyncAnchorRef.current = null;
+    if (!el) return;
+    if (stickRef.current) {
+      el.scrollTop = el.scrollHeight;
+    } else if (anchor) {
+      const row = anchor.id ? contentRef.current?.querySelector(`[data-row-id="${CSS.escape(anchor.id)}"]`) : null;
+      const rowTop = row ? row.getBoundingClientRect().top - el.getBoundingClientRect().top : null;
+      el.scrollTop = restoredScrollTop(anchor, rowTop, el);
+    } else if (laidOut !== messages) {
+      const unread = unreadRows(laidOut, messages);
+      if (unread > 0) setUnreadCount((c) => c + unread);
     }
-    setUnreadCount(0);
-    setShowScrollBottom(false);
+  }, [messages, queuedItems, pendingPrompt, agentsOpen, agentBoard, isWorking]);
+
+  // The composer growing, a prompt opening or images loading resize the list
+  // without a new message: keep a followed list pinned through those too.
+  useEffect(() => {
+    const el = scrollContainerRef.current;
+    const content = contentRef.current;
+    if (!el || !content) return;
+    const observer = new ResizeObserver(() => {
+      if (stickRef.current) el.scrollTop = el.scrollHeight;
+    });
+    observer.observe(el);
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, []);
+
+  const handleScroll = () => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    const stick = stickAfterScroll(stickRef.current, lastScrollTopRef.current, el);
+    lastScrollTopRef.current = el.scrollTop;
+    setStick(stick);
+  };
+
+  // Wheel, touch and keys going up let go before their scroll event lands.
+  const handleUpIntent = () => {
+    const el = scrollContainerRef.current;
+    if (el && stickRef.current && !stickAfterUpIntent(true, el)) setStick(false);
+  };
+
+  /** Explicit "take me to the latest": sending, queueing, the scroll-to-bottom button. */
+  const followBottom = (smooth: boolean) => {
+    setStick(true);
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    if (smooth) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+    else el.scrollTop = el.scrollHeight;
   };
 
   // Bind the chat client to this room; history arrives via session_sync, like the app.
@@ -388,39 +455,24 @@ export function WebChat({
       onChatEvent: (event) => {
         const now = Date.now();
         setChat((prev) => applyChatEvent(prev, event, now));
-        const el = scrollContainerRef.current;
-        const nearBottom = !!el && el.scrollHeight - el.scrollTop - el.clientHeight <= 120;
         switch (event.type) {
-          case "history":
+          case "history": {
             // Prompts still open on the Pi are replayed right after the history,
             // so one resolved while this tab was away must not linger.
             setPendingPrompt(null);
-            if (event.messages.length > 0) {
-              requestAnimationFrame(() => {
-                if (scrollContainerRef.current) {
-                  scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight;
-                }
-              });
+            // A reader scrolled up keeps their place; a followed list is pinned after layout.
+            const el = scrollContainerRef.current;
+            if (event.messages.length > 0 && el && !stickRef.current) {
+              resyncAnchorRef.current ??= captureAnchor(el, contentRef.current);
             }
             break;
-          case "user":
-          case "error":
-            // Count it as unread when scrolled up, else follow it.
-            if (!el) break;
-            if (nearBottom) setTimeout(() => scrollToBottom(true), 50);
-            else setUnreadCount((c) => c + 1);
-            break;
+          }
           case "chunk":
+          case "tool_request":
             setIsWorking(true);
-            if (nearBottom) scrollToBottom(true);
             break;
           case "done":
             setIsWorking(false);
-            setTimeout(() => scrollToBottom(true), 50);
-            break;
-          case "tool_request":
-            setIsWorking(true);
-            setTimeout(() => scrollToBottom(true), 50);
             break;
         }
       },
@@ -461,6 +513,7 @@ export function WebChat({
     setLocalHistory((prev) => [...prev, text]);
     setHistoryNav(HISTORY_IDLE);
     setInputText("");
+    followBottom(false);
   };
 
   const handleEditQueued = (item: { id: string; text: string }) => {
@@ -489,8 +542,8 @@ export function WebChat({
     // A new message starts a fresh Finished list (running rows stay).
     setAgents((prev) => ({ ...prev, board: clearFinished(prev.board) }));
 
-    // Auto-scroll to bottom immediately
-    setTimeout(() => scrollToBottom(true), 50);
+    // The reader's own message: jump to it (the layout effect pins after the bubble renders).
+    followBottom(false);
   };
 
   // Stop works whenever the Pi is working, as in the app (not only once text streams).
@@ -681,14 +734,23 @@ export function WebChat({
 
       {/* 2. CHAT TIMELINE / MESSAGE LIST */}
       <div
-        ref={(el) => {
-          scrollContainerRef.current = el;
-          if (el && isInitialLoadRef.current && messages.length > 0) {
-            el.scrollTop = el.scrollHeight;
-          }
-        }}
+        ref={scrollContainerRef}
         onScroll={handleScroll}
-        className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4 relative"
+        onWheel={(e) => {
+          if (wheelScrollsUp(e.deltaY)) handleUpIntent();
+        }}
+        onTouchStart={(e) => {
+          touchYRef.current = e.touches[0]?.clientY ?? 0;
+        }}
+        onTouchMove={(e) => {
+          const y = e.touches[0]?.clientY ?? touchYRef.current;
+          if (touchScrollsUp(touchYRef.current, y)) handleUpIntent();
+          touchYRef.current = y;
+        }}
+        onKeyDown={(e) => {
+          if (keyScrollsUp(e.key, e.shiftKey)) handleUpIntent();
+        }}
+        className="flex-1 overflow-y-auto p-4 sm:p-6 relative"
       >
         <ChatTimeline
           messages={messages}
@@ -696,6 +758,7 @@ export function WebChat({
           showThinking={showThinking}
           isWorking={isWorking}
           onCancelTurn={handleCancelTurn}
+          contentRef={contentRef}
         />
       </div>
 
@@ -708,7 +771,7 @@ export function WebChat({
       {showScrollBottom && (
         <button
           type="button"
-          onClick={() => scrollToBottom(true)}
+          onClick={() => followBottom(true)}
           className="absolute right-6 bottom-24 z-30 p-2.5 rounded-full bg-[#16202c] hover:bg-[#1e2c3c] border border-[#4fc3f7]/40 text-white shadow-xl transition-all hover:scale-105 active:scale-95 cursor-pointer flex items-center justify-center group"
           title="Scroll to bottom"
         >
@@ -717,7 +780,7 @@ export function WebChat({
             <polyline points="19 12 12 19 5 12" />
           </svg>
           {unreadCount > 0 && (
-            <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-[#4fc3f7] text-[#04222e] text-[10px] font-bold flex items-center justify-center">
+            <span className="absolute -top-1 -right-1 min-w-4 h-4 px-1 rounded-full bg-[#4fc3f7] text-[#04222e] text-[10px] font-bold flex items-center justify-center">
               {unreadCount}
             </span>
           )}

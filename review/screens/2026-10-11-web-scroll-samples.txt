@@ -1,0 +1,370 @@
+Web chat scroll-follow — sampled scrollTop (production build, headless /usr/bin/chromium 1440x900, harness /web-scroll-smoke, 212 real history rows).
+Each row: event, scrollTop, scrollHeight, fromBottom, scroll-to-bottom button shown, unread badge. Sampled 50 ms after each frame.
+
+===== BEFORE (HEAD web-chat.tsx) =====
+PASS A initial at bottom — fromBottom 0
+FAIL A follows every chunk/tool/done/resync — 69 samples, max fromBottom 173, scrollTop 43651 → 44317
+FAIL B 1 notch unsticks — scrollTop 43842, fromBottom 32
+FAIL B 1 notch: scrollTop fixed through chunks+tool — 24 samples, scrollTop values 43846,43873,43874,43878,43904,43905,43909,43936,43937,43941,43967,43968,43981,43983,43986,44048,44053,44057,44084
+FAIL B 5 notches: scrollTop fixed through chunks, tools, done, error, resync — 43585; values 43585,43596,43715,43971,44103,44149,44152,44245,44249,44291,44296,44300,44326,44327,44331,44359,44363,44389,44390,44317,44356
+FAIL B unread badge counts new rows — badge 0 after 5 notches → 0 at end
+FAIL B sliding resync keeps the reader's row in place — "undefined…" at undefinedpx → "undefined…" at undefinedpx (row id undefined → undefined; scrollTop 44317 → 43175)
+PASS B resync growing below keeps scrollTop and row — scrollTop 43175 → 43175, scrollHeight 43933 → 44248, row offset undefined → undefined
+FAIL B no scroll-to-bottom button to click
+FAIL B button returns to bottom — fromBottom 315, button false
+FAIL B following resumes — max fromBottom 601
+FAIL C send jumps to bottom — scrollTop 43151 → 43529, fromBottom 205
+FAIL C queue jumps to bottom — scrollTop 43434 → 43434
+--- before A ---
+initial                                  top=43651   height=44409   fromBottom=0     button=n badge=-
+user                                     top=43651   height=44530   fromBottom=121   button=n badge=-
+chunk s0 #0                              top=43669   height=44600   fromBottom=173   button=n badge=-
+chunk s0 #1                              top=43750   height=44600   fromBottom=92    button=n badge=-
+chunk s0 #2                              top=43772   height=44600   fromBottom=70    button=n badge=-
+chunk s0 #3                              top=43831   height=44600   fromBottom=11    button=n badge=-
+chunk s0 #4                              top=43841   height=44632   fromBottom=33    button=n badge=-
+chunk s0 #5                              top=43845   height=44632   fromBottom=29    button=n badge=-
+chunk s0 #6                              top=43874   height=44632   fromBottom=0     button=n badge=-
+chunk s0 #7                              top=43874   height=44632   fromBottom=0     button=n badge=-
+chunk s0 #8                              top=43874   height=44663   fromBottom=31    button=n badge=-
+chunk s0 #9                              top=43878   height=44663   fromBottom=27    button=n badge=-
+chunk s0 #10                             top=43904   height=44663   fromBottom=1     button=n badge=-
+chunk s0 #11                             top=43905   height=44663   fromBottom=0     button=n badge=-
+chunk s0 #12                             top=43905   height=44695   fromBottom=32    button=n badge=-
+chunk s0 #13                             top=43909   height=44695   fromBottom=28    button=n badge=-
+chunk s0 #14                             top=43937   height=44695   fromBottom=0     button=n badge=-
+chunk s0 #15                             top=43937   height=44695   fromBottom=0     button=n badge=-
+chunk s0 #16                             top=43937   height=44726   fromBottom=31    button=n badge=-
+chunk s0 #17                             top=43941   height=44726   fromBottom=27    button=n badge=-
+chunk s0 #18                             top=43968   height=44726   fromBottom=0     button=n badge=-
+chunk s0 #19                             top=43968   height=44726   fromBottom=0     button=n badge=-
+tool_request rA-t0                       top=43968   height=44741   fromBottom=15    button=n badge=-
+tool_result rA-t0                        top=43981   height=44741   fromBottom=2     button=n badge=-
+chunk s1 #0                              top=43983   height=44811   fromBottom=70    button=n badge=-
+chunk s1 #1                              top=43986   height=44811   fromBottom=67    button=n badge=-
+chunk s1 #2                              top=44042   height=44811   fromBottom=11    button=n badge=-
+chunk s1 #3                              top=44053   height=44811   fromBottom=0     button=n badge=-
+chunk s1 #4                              top=44053   height=44843   fromBottom=32    button=n badge=-
+chunk s1 #5                              top=44057   height=44843   fromBottom=28    button=n badge=-
+chunk s1 #6                              top=44084   height=44843   fromBottom=1     button=n badge=-
+chunk s1 #7                              top=44085   height=44843   fromBottom=0     button=n badge=-
+chunk s1 #8                              top=44085   height=44874   fromBottom=31    button=n badge=-
+chunk s1 #9                              top=44089   height=44874   fromBottom=27    button=n badge=-
+chunk s1 #10                             top=44115   height=44874   fromBottom=1     button=n badge=-
+chunk s1 #11                             top=44116   height=44874   fromBottom=0     button=n badge=-
+chunk s1 #12                             top=44116   height=44906   fromBottom=32    button=n badge=-
+chunk s1 #13                             top=44120   height=44906   fromBottom=28    button=n badge=-
+chunk s1 #14                             top=44148   height=44906   fromBottom=0     button=n badge=-
+chunk s1 #15                             top=44148   height=44906   fromBottom=0     button=n badge=-
+chunk s1 #16                             top=44148   height=44937   fromBottom=31    button=n badge=-
+chunk s1 #17                             top=44170   height=44937   fromBottom=9     button=n badge=-
+chunk s1 #18                             top=44179   height=44937   fromBottom=0     button=n badge=-
+chunk s1 #19                             top=44179   height=44937   fromBottom=0     button=n badge=-
+tool_request rA-t1                       top=44179   height=44952   fromBottom=15    button=n badge=-
+tool_result rA-t1                        top=44192   height=44952   fromBottom=2     button=n badge=-
+chunk s2 #0                              top=44194   height=45022   fromBottom=70    button=n badge=-
+chunk s2 #1                              top=44197   height=45022   fromBottom=67    button=n badge=-
+chunk s2 #2                              top=44259   height=45022   fromBottom=5     button=n badge=-
+chunk s2 #3                              top=44264   height=45022   fromBottom=0     button=n badge=-
+chunk s2 #4                              top=44264   height=45054   fromBottom=32    button=n badge=-
+chunk s2 #5                              top=44268   height=45054   fromBottom=28    button=n badge=-
+chunk s2 #6                              top=44296   height=45054   fromBottom=0     button=n badge=-
+chunk s2 #7                              top=44296   height=45054   fromBottom=0     button=n badge=-
+chunk s2 #8                              top=44296   height=45085   fromBottom=31    button=n badge=-
+chunk s2 #9                              top=44318   height=45085   fromBottom=9     button=n badge=-
+chunk s2 #10                             top=44327   height=45085   fromBottom=0     button=n badge=-
+chunk s2 #11                             top=44327   height=45085   fromBottom=0     button=n badge=-
+chunk s2 #12                             top=44327   height=45117   fromBottom=32    button=n badge=-
+chunk s2 #13                             top=44349   height=45117   fromBottom=10    button=n badge=-
+chunk s2 #14                             top=44359   height=45117   fromBottom=0     button=n badge=-
+chunk s2 #15                             top=44359   height=45117   fromBottom=0     button=n badge=-
+chunk s2 #16                             top=44359   height=45148   fromBottom=31    button=n badge=-
+chunk s2 #17                             top=44363   height=45148   fromBottom=27    button=n badge=-
+chunk s2 #18                             top=44389   height=45148   fromBottom=1     button=n badge=-
+chunk s2 #19                             top=44390   height=45148   fromBottom=0     button=n badge=-
+done                                     top=44317   height=45075   fromBottom=0     button=n badge=-
+resync                                   top=44317   height=45075   fromBottom=0     button=n badge=-
+settled                                  top=44317   height=45075   fromBottom=0     button=n badge=-
+--- before B ---
+initial                                  top=43651   height=44409   fromBottom=0     button=n badge=-
+user                                     top=43651   height=44530   fromBottom=121   button=n badge=-
+chunk s0 #0                              top=43669   height=44600   fromBottom=173   button=y badge=-
+chunk s0 #1                              top=43750   height=44600   fromBottom=92    button=n badge=-
+chunk s0 #2                              top=43762   height=44600   fromBottom=80    button=n badge=-
+chunk s0 #3                              top=43826   height=44600   fromBottom=16    button=n badge=-
+chunk s0 #4                              top=43842   height=44632   fromBottom=32    button=n badge=-
+wheel up 1 notch                         top=43842   height=44632   fromBottom=32    button=n badge=-
+chunk s0 #5                              top=43846   height=44632   fromBottom=28    button=n badge=-
+chunk s0 #6                              top=43873   height=44632   fromBottom=1     button=n badge=-
+chunk s0 #7                              top=43874   height=44632   fromBottom=0     button=n badge=-
+chunk s0 #8                              top=43874   height=44663   fromBottom=31    button=n badge=-
+chunk s0 #9                              top=43878   height=44663   fromBottom=27    button=n badge=-
+chunk s0 #10                             top=43904   height=44663   fromBottom=1     button=n badge=-
+chunk s0 #11                             top=43905   height=44663   fromBottom=0     button=n badge=-
+chunk s0 #12                             top=43905   height=44695   fromBottom=32    button=n badge=-
+chunk s0 #13                             top=43909   height=44695   fromBottom=28    button=n badge=-
+chunk s0 #14                             top=43936   height=44695   fromBottom=1     button=n badge=-
+chunk s0 #15                             top=43937   height=44695   fromBottom=0     button=n badge=-
+chunk s0 #16                             top=43937   height=44726   fromBottom=31    button=n badge=-
+chunk s0 #17                             top=43941   height=44726   fromBottom=27    button=n badge=-
+chunk s0 #18                             top=43967   height=44726   fromBottom=1     button=n badge=-
+chunk s0 #19                             top=43968   height=44726   fromBottom=0     button=n badge=-
+tool_request rB-t0                       top=43968   height=44741   fromBottom=15    button=n badge=-
+tool_result rB-t0                        top=43981   height=44741   fromBottom=2     button=n badge=-
+chunk s1 #0                              top=43983   height=44811   fromBottom=70    button=n badge=-
+chunk s1 #1                              top=43986   height=44811   fromBottom=67    button=n badge=-
+chunk s1 #2                              top=44048   height=44811   fromBottom=5     button=n badge=-
+chunk s1 #3                              top=44053   height=44811   fromBottom=0     button=n badge=-
+chunk s1 #4                              top=44053   height=44843   fromBottom=32    button=n badge=-
+chunk s1 #5                              top=44057   height=44843   fromBottom=28    button=n badge=-
+chunk s1 #6                              top=44084   height=44843   fromBottom=1     button=n badge=-
+wheel up 5 notches                       top=43585   height=44843   fromBottom=500   button=y badge=-
+chunk s1 #7                              top=43585   height=44843   fromBottom=500   button=y badge=-
+chunk s1 #8                              top=43585   height=44874   fromBottom=531   button=y badge=-
+chunk s1 #9                              top=43585   height=44874   fromBottom=531   button=y badge=-
+chunk s1 #10                             top=43585   height=44874   fromBottom=531   button=y badge=-
+chunk s1 #11                             top=43585   height=44874   fromBottom=531   button=y badge=-
+chunk s1 #12                             top=43585   height=44906   fromBottom=563   button=y badge=-
+chunk s1 #13                             top=43585   height=44906   fromBottom=563   button=y badge=-
+chunk s1 #14                             top=43585   height=44906   fromBottom=563   button=y badge=-
+chunk s1 #15                             top=43585   height=44906   fromBottom=563   button=y badge=-
+chunk s1 #16                             top=43585   height=44937   fromBottom=594   button=y badge=-
+chunk s1 #17                             top=43585   height=44937   fromBottom=594   button=y badge=-
+chunk s1 #18                             top=43585   height=44937   fromBottom=594   button=y badge=-
+chunk s1 #19                             top=43585   height=44937   fromBottom=594   button=y badge=-
+tool_request rB-t1                       top=43585   height=44952   fromBottom=609   button=y badge=-
+tool_result rB-t1                        top=43596   height=44952   fromBottom=598   button=y badge=-
+chunk s2 #0                              top=43715   height=45022   fromBottom=549   button=y badge=-
+chunk s2 #1                              top=43971   height=45022   fromBottom=293   button=y badge=-
+chunk s2 #2                              top=44103   height=45022   fromBottom=161   button=y badge=-
+chunk s2 #3                              top=44149   height=45022   fromBottom=115   button=y badge=-
+chunk s2 #4                              top=44152   height=45054   fromBottom=144   button=y badge=-
+chunk s2 #5                              top=44245   height=45054   fromBottom=51    button=n badge=-
+chunk s2 #6                              top=44249   height=45054   fromBottom=47    button=n badge=-
+chunk s2 #7                              top=44291   height=45054   fromBottom=5     button=n badge=-
+chunk s2 #8                              top=44296   height=45085   fromBottom=31    button=n badge=-
+chunk s2 #9                              top=44300   height=45085   fromBottom=27    button=n badge=-
+chunk s2 #10                             top=44326   height=45085   fromBottom=1     button=n badge=-
+chunk s2 #11                             top=44327   height=45085   fromBottom=0     button=n badge=-
+chunk s2 #12                             top=44327   height=45117   fromBottom=32    button=n badge=-
+chunk s2 #13                             top=44331   height=45117   fromBottom=28    button=n badge=-
+chunk s2 #14                             top=44359   height=45117   fromBottom=0     button=n badge=-
+chunk s2 #15                             top=44359   height=45117   fromBottom=0     button=n badge=-
+chunk s2 #16                             top=44359   height=45148   fromBottom=31    button=n badge=-
+chunk s2 #17                             top=44363   height=45148   fromBottom=27    button=n badge=-
+chunk s2 #18                             top=44389   height=45148   fromBottom=1     button=n badge=-
+chunk s2 #19                             top=44390   height=45148   fromBottom=0     button=n badge=-
+done                                     top=44317   height=45075   fromBottom=0     button=n badge=-
+error                                    top=44356   height=45114   fromBottom=0     button=n badge=-
+resync (same window)                     top=44317   height=45075   fromBottom=0     button=n badge=-
+settled                                  top=44317   height=45075   fromBottom=0     button=n badge=-
+resync (window slid by 12 events)        top=43175   height=43933   fromBottom=0     button=n badge=-
+after sliding resync                     top=43175   height=43933   fromBottom=0     button=n badge=-
+resync (tail grew below the reader)      top=43175   height=44248   fromBottom=315   button=n badge=-
+clicked scroll-to-bottom                 top=43175   height=44248   fromBottom=315   button=n badge=-
+resume user                              top=43175   height=44369   fromBottom=436   button=n badge=-
+resume chunk s0 #0                       top=43175   height=44439   fromBottom=506   button=n badge=-
+resume chunk s0 #1                       top=43175   height=44439   fromBottom=506   button=n badge=-
+resume chunk s0 #2                       top=43175   height=44439   fromBottom=506   button=n badge=-
+resume chunk s0 #3                       top=43175   height=44439   fromBottom=506   button=n badge=-
+resume chunk s0 #4                       top=43175   height=44471   fromBottom=538   button=n badge=-
+resume chunk s0 #5                       top=43175   height=44471   fromBottom=538   button=n badge=-
+resume chunk s0 #6                       top=43175   height=44471   fromBottom=538   button=n badge=-
+resume chunk s0 #7                       top=43175   height=44471   fromBottom=538   button=n badge=-
+resume chunk s0 #8                       top=43175   height=44502   fromBottom=569   button=n badge=-
+resume chunk s0 #9                       top=43175   height=44502   fromBottom=569   button=n badge=-
+resume chunk s0 #10                      top=43175   height=44502   fromBottom=569   button=n badge=-
+resume chunk s0 #11                      top=43175   height=44502   fromBottom=569   button=n badge=-
+resume chunk s0 #12                      top=43175   height=44534   fromBottom=601   button=n badge=-
+resume chunk s0 #13                      top=43175   height=44534   fromBottom=601   button=n badge=-
+resume chunk s0 #14                      top=43175   height=44534   fromBottom=601   button=n badge=-
+resume done                              top=43175   height=44460   fromBottom=527   button=n badge=-
+--- before C ---
+scrolled up                              top=43151   height=44409   fromBottom=500   button=y badge=-
+sent                                     top=43529   height=44492   fromBottom=205   button=y badge=-
+scrolled up again                        top=43434   height=44492   fromBottom=300   button=y badge=-
+queued                                   top=43434   height=44492   fromBottom=300   button=y badge=-
+
+===== AFTER (stick-to-bottom fix) =====
+PASS A initial at bottom — fromBottom 0
+PASS A follows every chunk/tool/done/resync — 69 samples, max fromBottom 0, scrollTop 43772 → 44317
+PASS B 1 notch unsticks — scrollTop 43774, fromBottom 100
+PASS B 1 notch: scrollTop fixed through chunks+tool — 24 samples, scrollTop values 43774
+PASS B 5 notches: scrollTop fixed through chunks, tools, done, error, resync — 43274; values 43274
+PASS B unread badge counts new rows — badge 1 after 5 notches → 3 at end
+PASS B sliding resync keeps the reader's row in place — "▾ThinkingOnly the 2 pre-existi…" at -140px → "▾ThinkingOnly the 2 pre-existi…" at -140px (row id hist-asst-1789971030290-347 → hist-asst-1789971030290-335; scrollTop 43274 → 42132)
+PASS B resync growing below keeps scrollTop and row — scrollTop 42132 → 42132, scrollHeight 43933 → 44248, row offset -140 → -140
+PASS B button returns to bottom — fromBottom 0, button false
+PASS B following resumes — max fromBottom 0
+PASS C send jumps to bottom — scrollTop 43151 → 43734, fromBottom 0
+PASS C queue jumps to bottom — scrollTop 43234 → 43734
+--- after A ---
+initial                                  top=43651   height=44409   fromBottom=0     button=n badge=-
+user                                     top=43772   height=44530   fromBottom=0     button=n badge=-
+chunk s0 #0                              top=43842   height=44600   fromBottom=0     button=n badge=-
+chunk s0 #1                              top=43842   height=44600   fromBottom=0     button=n badge=-
+chunk s0 #2                              top=43842   height=44600   fromBottom=0     button=n badge=-
+chunk s0 #3                              top=43842   height=44600   fromBottom=0     button=n badge=-
+chunk s0 #4                              top=43874   height=44632   fromBottom=0     button=n badge=-
+chunk s0 #5                              top=43874   height=44632   fromBottom=0     button=n badge=-
+chunk s0 #6                              top=43874   height=44632   fromBottom=0     button=n badge=-
+chunk s0 #7                              top=43874   height=44632   fromBottom=0     button=n badge=-
+chunk s0 #8                              top=43905   height=44663   fromBottom=0     button=n badge=-
+chunk s0 #9                              top=43905   height=44663   fromBottom=0     button=n badge=-
+chunk s0 #10                             top=43905   height=44663   fromBottom=0     button=n badge=-
+chunk s0 #11                             top=43905   height=44663   fromBottom=0     button=n badge=-
+chunk s0 #12                             top=43937   height=44695   fromBottom=0     button=n badge=-
+chunk s0 #13                             top=43937   height=44695   fromBottom=0     button=n badge=-
+chunk s0 #14                             top=43937   height=44695   fromBottom=0     button=n badge=-
+chunk s0 #15                             top=43937   height=44695   fromBottom=0     button=n badge=-
+chunk s0 #16                             top=43968   height=44726   fromBottom=0     button=n badge=-
+chunk s0 #17                             top=43968   height=44726   fromBottom=0     button=n badge=-
+chunk s0 #18                             top=43968   height=44726   fromBottom=0     button=n badge=-
+chunk s0 #19                             top=43968   height=44726   fromBottom=0     button=n badge=-
+tool_request rA-t0                       top=43983   height=44741   fromBottom=0     button=n badge=-
+tool_result rA-t0                        top=43983   height=44741   fromBottom=0     button=n badge=-
+chunk s1 #0                              top=44053   height=44811   fromBottom=0     button=n badge=-
+chunk s1 #1                              top=44053   height=44811   fromBottom=0     button=n badge=-
+chunk s1 #2                              top=44053   height=44811   fromBottom=0     button=n badge=-
+chunk s1 #3                              top=44053   height=44811   fromBottom=0     button=n badge=-
+chunk s1 #4                              top=44085   height=44843   fromBottom=0     button=n badge=-
+chunk s1 #5                              top=44085   height=44843   fromBottom=0     button=n badge=-
+chunk s1 #6                              top=44085   height=44843   fromBottom=0     button=n badge=-
+chunk s1 #7                              top=44085   height=44843   fromBottom=0     button=n badge=-
+chunk s1 #8                              top=44116   height=44874   fromBottom=0     button=n badge=-
+chunk s1 #9                              top=44116   height=44874   fromBottom=0     button=n badge=-
+chunk s1 #10                             top=44116   height=44874   fromBottom=0     button=n badge=-
+chunk s1 #11                             top=44116   height=44874   fromBottom=0     button=n badge=-
+chunk s1 #12                             top=44148   height=44906   fromBottom=0     button=n badge=-
+chunk s1 #13                             top=44148   height=44906   fromBottom=0     button=n badge=-
+chunk s1 #14                             top=44148   height=44906   fromBottom=0     button=n badge=-
+chunk s1 #15                             top=44148   height=44906   fromBottom=0     button=n badge=-
+chunk s1 #16                             top=44179   height=44937   fromBottom=0     button=n badge=-
+chunk s1 #17                             top=44179   height=44937   fromBottom=0     button=n badge=-
+chunk s1 #18                             top=44179   height=44937   fromBottom=0     button=n badge=-
+chunk s1 #19                             top=44179   height=44937   fromBottom=0     button=n badge=-
+tool_request rA-t1                       top=44194   height=44952   fromBottom=0     button=n badge=-
+tool_result rA-t1                        top=44194   height=44952   fromBottom=0     button=n badge=-
+chunk s2 #0                              top=44264   height=45022   fromBottom=0     button=n badge=-
+chunk s2 #1                              top=44264   height=45022   fromBottom=0     button=n badge=-
+chunk s2 #2                              top=44264   height=45022   fromBottom=0     button=n badge=-
+chunk s2 #3                              top=44264   height=45022   fromBottom=0     button=n badge=-
+chunk s2 #4                              top=44296   height=45054   fromBottom=0     button=n badge=-
+chunk s2 #5                              top=44296   height=45054   fromBottom=0     button=n badge=-
+chunk s2 #6                              top=44296   height=45054   fromBottom=0     button=n badge=-
+chunk s2 #7                              top=44296   height=45054   fromBottom=0     button=n badge=-
+chunk s2 #8                              top=44327   height=45085   fromBottom=0     button=n badge=-
+chunk s2 #9                              top=44327   height=45085   fromBottom=0     button=n badge=-
+chunk s2 #10                             top=44327   height=45085   fromBottom=0     button=n badge=-
+chunk s2 #11                             top=44327   height=45085   fromBottom=0     button=n badge=-
+chunk s2 #12                             top=44359   height=45117   fromBottom=0     button=n badge=-
+chunk s2 #13                             top=44359   height=45117   fromBottom=0     button=n badge=-
+chunk s2 #14                             top=44359   height=45117   fromBottom=0     button=n badge=-
+chunk s2 #15                             top=44359   height=45117   fromBottom=0     button=n badge=-
+chunk s2 #16                             top=44390   height=45148   fromBottom=0     button=n badge=-
+chunk s2 #17                             top=44390   height=45148   fromBottom=0     button=n badge=-
+chunk s2 #18                             top=44390   height=45148   fromBottom=0     button=n badge=-
+chunk s2 #19                             top=44390   height=45148   fromBottom=0     button=n badge=-
+done                                     top=44317   height=45075   fromBottom=0     button=n badge=-
+resync                                   top=44317   height=45075   fromBottom=0     button=n badge=-
+settled                                  top=44317   height=45075   fromBottom=0     button=n badge=-
+--- after B ---
+initial                                  top=43651   height=44409   fromBottom=0     button=n badge=-
+user                                     top=43772   height=44530   fromBottom=0     button=n badge=-
+chunk s0 #0                              top=43842   height=44600   fromBottom=0     button=n badge=-
+chunk s0 #1                              top=43842   height=44600   fromBottom=0     button=n badge=-
+chunk s0 #2                              top=43842   height=44600   fromBottom=0     button=n badge=-
+chunk s0 #3                              top=43842   height=44600   fromBottom=0     button=n badge=-
+chunk s0 #4                              top=43874   height=44632   fromBottom=0     button=n badge=-
+wheel up 1 notch                         top=43774   height=44632   fromBottom=100   button=y badge=-
+chunk s0 #5                              top=43774   height=44632   fromBottom=100   button=y badge=-
+chunk s0 #6                              top=43774   height=44632   fromBottom=100   button=y badge=-
+chunk s0 #7                              top=43774   height=44632   fromBottom=100   button=y badge=-
+chunk s0 #8                              top=43774   height=44663   fromBottom=131   button=y badge=-
+chunk s0 #9                              top=43774   height=44663   fromBottom=131   button=y badge=-
+chunk s0 #10                             top=43774   height=44663   fromBottom=131   button=y badge=-
+chunk s0 #11                             top=43774   height=44663   fromBottom=131   button=y badge=-
+chunk s0 #12                             top=43774   height=44695   fromBottom=163   button=y badge=-
+chunk s0 #13                             top=43774   height=44695   fromBottom=163   button=y badge=-
+chunk s0 #14                             top=43774   height=44695   fromBottom=163   button=y badge=-
+chunk s0 #15                             top=43774   height=44695   fromBottom=163   button=y badge=-
+chunk s0 #16                             top=43774   height=44726   fromBottom=194   button=y badge=-
+chunk s0 #17                             top=43774   height=44726   fromBottom=194   button=y badge=-
+chunk s0 #18                             top=43774   height=44726   fromBottom=194   button=y badge=-
+chunk s0 #19                             top=43774   height=44726   fromBottom=194   button=y badge=-
+tool_request rB-t0                       top=43774   height=44741   fromBottom=209   button=y badge=-
+tool_result rB-t0                        top=43774   height=44741   fromBottom=209   button=y badge=-
+chunk s1 #0                              top=43774   height=44811   fromBottom=279   button=y badge=1
+chunk s1 #1                              top=43774   height=44811   fromBottom=279   button=y badge=1
+chunk s1 #2                              top=43774   height=44811   fromBottom=279   button=y badge=1
+chunk s1 #3                              top=43774   height=44811   fromBottom=279   button=y badge=1
+chunk s1 #4                              top=43774   height=44843   fromBottom=311   button=y badge=1
+chunk s1 #5                              top=43774   height=44843   fromBottom=311   button=y badge=1
+chunk s1 #6                              top=43774   height=44843   fromBottom=311   button=y badge=1
+wheel up 5 notches                       top=43274   height=44843   fromBottom=811   button=y badge=1
+chunk s1 #7                              top=43274   height=44843   fromBottom=811   button=y badge=1
+chunk s1 #8                              top=43274   height=44874   fromBottom=842   button=y badge=1
+chunk s1 #9                              top=43274   height=44874   fromBottom=842   button=y badge=1
+chunk s1 #10                             top=43274   height=44874   fromBottom=842   button=y badge=1
+chunk s1 #11                             top=43274   height=44874   fromBottom=842   button=y badge=1
+chunk s1 #12                             top=43274   height=44906   fromBottom=874   button=y badge=1
+chunk s1 #13                             top=43274   height=44906   fromBottom=874   button=y badge=1
+chunk s1 #14                             top=43274   height=44906   fromBottom=874   button=y badge=1
+chunk s1 #15                             top=43274   height=44906   fromBottom=874   button=y badge=1
+chunk s1 #16                             top=43274   height=44937   fromBottom=905   button=y badge=1
+chunk s1 #17                             top=43274   height=44937   fromBottom=905   button=y badge=1
+chunk s1 #18                             top=43274   height=44937   fromBottom=905   button=y badge=1
+chunk s1 #19                             top=43274   height=44937   fromBottom=905   button=y badge=1
+tool_request rB-t1                       top=43274   height=44952   fromBottom=920   button=y badge=1
+tool_result rB-t1                        top=43274   height=44952   fromBottom=920   button=y badge=1
+chunk s2 #0                              top=43274   height=45022   fromBottom=990   button=y badge=2
+chunk s2 #1                              top=43274   height=45022   fromBottom=990   button=y badge=2
+chunk s2 #2                              top=43274   height=45022   fromBottom=990   button=y badge=2
+chunk s2 #3                              top=43274   height=45022   fromBottom=990   button=y badge=2
+chunk s2 #4                              top=43274   height=45054   fromBottom=1022  button=y badge=2
+chunk s2 #5                              top=43274   height=45054   fromBottom=1022  button=y badge=2
+chunk s2 #6                              top=43274   height=45054   fromBottom=1022  button=y badge=2
+chunk s2 #7                              top=43274   height=45054   fromBottom=1022  button=y badge=2
+chunk s2 #8                              top=43274   height=45085   fromBottom=1053  button=y badge=2
+chunk s2 #9                              top=43274   height=45085   fromBottom=1053  button=y badge=2
+chunk s2 #10                             top=43274   height=45085   fromBottom=1053  button=y badge=2
+chunk s2 #11                             top=43274   height=45085   fromBottom=1053  button=y badge=2
+chunk s2 #12                             top=43274   height=45117   fromBottom=1085  button=y badge=2
+chunk s2 #13                             top=43274   height=45117   fromBottom=1085  button=y badge=2
+chunk s2 #14                             top=43274   height=45117   fromBottom=1085  button=y badge=2
+chunk s2 #15                             top=43274   height=45117   fromBottom=1085  button=y badge=2
+chunk s2 #16                             top=43274   height=45148   fromBottom=1116  button=y badge=2
+chunk s2 #17                             top=43274   height=45148   fromBottom=1116  button=y badge=2
+chunk s2 #18                             top=43274   height=45148   fromBottom=1116  button=y badge=2
+chunk s2 #19                             top=43274   height=45148   fromBottom=1116  button=y badge=2
+done                                     top=43274   height=45075   fromBottom=1043  button=y badge=2
+error                                    top=43274   height=45114   fromBottom=1082  button=y badge=3
+resync (same window)                     top=43274   height=45075   fromBottom=1043  button=y badge=3
+settled                                  top=43274   height=45075   fromBottom=1043  button=y badge=3
+resync (window slid by 12 events)        top=42132   height=43933   fromBottom=1043  button=y badge=3
+after sliding resync                     top=42132   height=43933   fromBottom=1043  button=y badge=3
+resync (tail grew below the reader)      top=42132   height=44248   fromBottom=1358  button=y badge=3
+clicked scroll-to-bottom                 top=43490   height=44248   fromBottom=0     button=n badge=-
+resume user                              top=43611   height=44369   fromBottom=0     button=n badge=-
+resume chunk s0 #0                       top=43681   height=44439   fromBottom=0     button=n badge=-
+resume chunk s0 #1                       top=43681   height=44439   fromBottom=0     button=n badge=-
+resume chunk s0 #2                       top=43681   height=44439   fromBottom=0     button=n badge=-
+resume chunk s0 #3                       top=43681   height=44439   fromBottom=0     button=n badge=-
+resume chunk s0 #4                       top=43713   height=44471   fromBottom=0     button=n badge=-
+resume chunk s0 #5                       top=43713   height=44471   fromBottom=0     button=n badge=-
+resume chunk s0 #6                       top=43713   height=44471   fromBottom=0     button=n badge=-
+resume chunk s0 #7                       top=43713   height=44471   fromBottom=0     button=n badge=-
+resume chunk s0 #8                       top=43744   height=44502   fromBottom=0     button=n badge=-
+resume chunk s0 #9                       top=43744   height=44502   fromBottom=0     button=n badge=-
+resume chunk s0 #10                      top=43744   height=44502   fromBottom=0     button=n badge=-
+resume chunk s0 #11                      top=43744   height=44502   fromBottom=0     button=n badge=-
+resume chunk s0 #12                      top=43776   height=44534   fromBottom=0     button=n badge=-
+resume chunk s0 #13                      top=43776   height=44534   fromBottom=0     button=n badge=-
+resume chunk s0 #14                      top=43776   height=44534   fromBottom=0     button=n badge=-
+resume done                              top=43702   height=44460   fromBottom=0     button=n badge=-
+--- after C ---
+scrolled up                              top=43151   height=44409   fromBottom=500   button=y badge=-
+sent                                     top=43734   height=44492   fromBottom=0     button=n badge=-
+scrolled up again                        top=43234   height=44492   fromBottom=500   button=y badge=-
+queued                                   top=43734   height=44492   fromBottom=0     button=n badge=-
+
