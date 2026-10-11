@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { BrailleSpinner } from "./braille-spinner";
 import { agentRowView, agentsSummary, type AgentActivityJob, type AgentBoard } from "./activity";
 
@@ -151,8 +151,8 @@ function RunningPill({ count }: { count: number }) {
   );
 }
 
-/** Wide screens: the `Agents` column beside the chat, closable. */
-export function AgentsSideColumn({ board, onClose }: { board: AgentBoard; onClose: () => void }) {
+/** Wide screens: the `Agents` column beside the chat, closable. `children` (the Todo section) sit above the rows. */
+export function AgentsSideColumn({ board, onClose, children }: { board: AgentBoard; onClose: () => void; children?: ReactNode }) {
   const now = useNow(board);
   const empty = board.running.length === 0 && board.finished.length === 0;
   return (
@@ -165,6 +165,7 @@ export function AgentsSideColumn({ board, onClose }: { board: AgentBoard; onClos
         <CloseButton onClose={onClose} />
       </div>
       <div className="flex-1 overflow-y-auto p-3">
+        {children}
         {empty ? (
           <div className="text-xs text-[#666] text-center mt-6">No subagents or background jobs</div>
         ) : (

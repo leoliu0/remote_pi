@@ -1,0 +1,41 @@
+╭───  Todo 5 tasks ───────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ I. Setup  0/2                                                                                                        │
+│   ├─  Create repo                                                                                                   │
+│   └─  Add CI                                                                                                        │
+│ II. Build  0/3                                                                                                       │
+│   ├─  Write parser                                                                                                  │
+│   ├─  Write tests                                                                                                   │
+│   └─  Ship                                                                                                          │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+ok
+
+
+  5 incomplete todos - reminder 1/3
+
+    Create repo
+    Add CI
+    Write parser
+    Write tests
+    Ship
+
+
+The user explicitly said this is a test and not to do real work, so marking the todo complete would be dishonest. I've
+already made the required tool call, so I'll just respond explaining these items are intentionally left open per the
+user's test instructions.
+
+ok. I've left all 5 items open on purpose. You asked for a test of the todo tool only, with one init call and no real
+work, so none of them have been done and none are marked complete.
+
+TODO
+ ├─ I. Setup · 0/2
+ │  ├─  Create repo
+ │  └─  Add CI
+ ├─ II. Build · 0/3
+ └─────
+
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+❯
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+ 󰵗 ·  Opus 5.5 · 󰪟 low ·  rp-todo/proj ·  1.5%/1M 󰁨 · 󰙺 0.02
+🟢 relay 📡 local (1) 📱 /vcN3u48

@@ -1,0 +1,41 @@
+╭───  • · (210ms) ────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ await tool.todo({"op": "done", "task": "Add CI"})                                                                    │
+├─── Output ───────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ {'text': 'Remaining items (2):\n  - Write parser [in_progress] (Build)\n  - Write docs [pending] (Build)\nOverall:   │
+│ 3/6 done, 2 open, 1 blocked.\nActive phase 2/2 "Build" (1/4).\n  Setup:\n    - [X] Create repo\n    - [X] Add CI\n   │
+│ Build:\n    - [ ] Write parser (in progress)\n    - [ ] Write tests (blocked: waiting on fixtures)\n    - [ ] Ship   │
+│ (dropped)\n    - [ ] Write docs', 'details': {'op': 'done', 'phases': [{'name': 'Setup', 'tasks': [{'content':       │
+│ 'Create repo', 'status': 'completed'}, {'content': 'Add CI', 'status': 'completed'}]}, {'name': 'Build', 'tasks':    │
+│ [{'content': 'Write parser', 'status': 'in_progress'}, {'content': 'Write tests', 'status': 'blocked', 'blocker':    │
+│ 'waiting on fixtures'}, {'content': 'Ship', 'status': 'abandoned'}, {'content': …                                    │
+│ Status                                                                                                               │
+│ └─  todo                                                                                                            │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+ok
+
+
+  2 incomplete todos - reminder 1/3
+
+    Write parser
+    Write docs
+
+
+This just needs a short, direct answer without using any tools.
+
+The eval call worked: "Add CI" is marked done and Setup is complete. Write parser (in progress) and Write docs are still
+open on purpose, since this is a test and no real work was done.
+
+TODO
+ ├─ II. Build · 1/4
+ │  ├─  Ship
+ │  ├─  Write parser
+ │  ├─  Write tests (blocked)
+ │  └─  Write docs
+ └─────
+
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+❯
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+ 󰵗 ·  Opus 5.5 · 󰪟 low ·  rp-todo/proj ·  1.9%/1M 󰁨 · 󰙺 0.12
+🟢 relay 📡 local (1) 📱 /vcN3u48

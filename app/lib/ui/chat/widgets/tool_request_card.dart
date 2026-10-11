@@ -1,6 +1,7 @@
 import 'package:app/domain/session_state.dart';
 import 'package:app/protocol/protocol.dart';
 import 'package:app/ui/chat/widgets/bash_tool_format.dart';
+import 'package:app/ui/chat/widgets/todo_panel.dart' show todoPillText;
 import 'package:app/ui/core/themes/themes.dart';
 import 'package:flutter/material.dart';
 
@@ -54,6 +55,9 @@ class _ToolRequestCardState extends State<ToolRequestCard> {
   @override
   Widget build(BuildContext context) {
     final color = _statusColor(context);
+    // `todo` calls stay one line in every mode (the list lives in the todo
+    // panel); tapping shows the full card.
+    if (_isTodo && !_expanded) return _buildTodoPill(context, color);
     if (widget.brief && !_expanded) {
       return _buildBriefPill(context, color);
     }
@@ -99,6 +103,8 @@ class _ToolRequestCardState extends State<ToolRequestCard> {
   }
 
   bool get _isBash => tool.tool.toLowerCase() == 'bash';
+
+  bool get _isTodo => tool.tool.toLowerCase() == 'todo';
 
   bool get _isRunning =>
       tool.status == ToolEventStatus.pending ||
@@ -199,6 +205,68 @@ class _ToolRequestCardState extends State<ToolRequestCard> {
         ),
       ],
     ];
+  }
+
+  /// `☑ Todo · 3/7  done · Write parser`.
+  Widget _buildTodoPill(BuildContext context, Color color) {
+    final colors = context.colors;
+    final settled = !_isRunning;
+    final (label, detail) = todoPillText(
+      tool.args,
+      settled ? toolOutputText(tool.result, tool.error) : null,
+      tool.status,
+    );
+    final monoFont = context.typo.mono.fontFamily ?? kMonoFamily;
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          key: const Key('todo-tool-pill'),
+          onTap: () => setState(() => _expanded = true),
+          borderRadius: BorderRadius.circular(14),
+          child: Container(
+            decoration: BoxDecoration(
+              color: colors.codeBg,
+              border: Border.all(color: color.withValues(alpha: 0.4)),
+              borderRadius: BorderRadius.circular(14),
+            ),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(LucideIcons.listChecks, size: 13, color: color),
+                const SizedBox(width: 6),
+                Text(
+                  label,
+                  style: TextStyle(
+                    fontFamily: monoFont,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: colors.text,
+                  ),
+                ),
+                if (detail.isNotEmpty) ...[
+                  const SizedBox(width: 8),
+                  Flexible(
+                    child: Text(
+                      detail,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontFamily: monoFont,
+                        fontSize: 12,
+                        color: colors.muted,
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   Widget _buildBriefPill(BuildContext context, Color color) {
@@ -335,7 +403,7 @@ class _ToolRequestCardState extends State<ToolRequestCard> {
             letterSpacing: 0.4,
           ),
         ),
-        if (widget.brief && _expanded) ...[
+        if ((widget.brief || _isTodo) && _expanded) ...[
           const SizedBox(width: 6),
           GestureDetector(
             onTap: () => setState(() => _expanded = false),

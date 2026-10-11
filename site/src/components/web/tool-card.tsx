@@ -2,6 +2,7 @@
 
 import type { ToolCallData } from "./web-client";
 import { argRows, bashCard, toolSummary } from "./tool-output";
+import { todoPill } from "./todo";
 
 const STATUS_COLOR: Record<ToolCallData["status"], string> = {
   pending: "#00D4FF",
@@ -55,6 +56,27 @@ export function ToolPill({ tool, onExpand }: { tool: ToolCallData; onExpand: () 
           </span>
           <span className="text-[#666] group-hover:text-white transition-colors text-[10px]">▾</span>
         </div>
+      </button>
+    </div>
+  );
+}
+
+/** `todo` calls in every mode: one line `☑ Todo · 3/7  done · Write parser`; the list lives in the Todo panel. */
+export function TodoToolPill({ tool, onExpand }: { tool: ToolCallData; onExpand: () => void }) {
+  const color = STATUS_COLOR[tool.status];
+  const pill = todoPill(tool.args, tool.output, tool.status);
+  return (
+    <div className="my-1">
+      <button
+        type="button"
+        onClick={onExpand}
+        title="Show the todo call"
+        className="inline-flex max-w-[95%] sm:max-w-[90%] items-center gap-2 rounded-full bg-[#050505] px-2.5 py-0.5 font-mono text-[11px] cursor-pointer hover:bg-[#0f0f0f] transition-colors"
+        style={{ border: `1px solid ${color}40` }}
+      >
+        <span className="shrink-0" style={{ color }}>☑</span>
+        <span className="shrink-0 font-semibold text-[#C8C8C8]">{pill.label}</span>
+        {pill.detail && <span className="min-w-0 truncate text-[#7A7A7A]">{pill.detail}</span>}
       </button>
     </div>
   );

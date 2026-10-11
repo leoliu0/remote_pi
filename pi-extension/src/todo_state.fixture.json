@@ -1,0 +1,1328 @@
+{
+ "_comment": "Captured from a scratch omp v18.9.2 (Opus 5.5) session in /tmp/rp-todo/proj, 2026-10-11: todo init (2 phases), done, start (out of order), block, append, view, failed done, drop, a todo call inside eval (persisted as user_todo_edit), done-all, then the TUI auto-dismiss 60 s later (todo_hud_state). toolExecutions: tool_execution_start args + tool_execution_end payloads in order; branch: the todo-relevant session entries in order.",
+ "toolExecutions": [
+  {
+   "args": {
+    "op": "init",
+    "list": [
+     {
+      "phase": "Setup",
+      "items": [
+       "Create repo",
+       "Add CI"
+      ]
+     },
+     {
+      "phase": "Build",
+      "items": [
+       "Write parser",
+       "Write tests",
+       "Ship"
+      ]
+     }
+    ]
+   },
+   "toolCallId": "toolu_01GQgcLRW5Pxbe5hzCovU2Eh",
+   "toolName": "todo",
+   "result": {
+    "content": [
+     {
+      "type": "text",
+      "text": "Remaining items (5):\n  - Create repo [in_progress] (Setup)\n  - Add CI [pending] (Setup)\n  - Write parser [pending] (Build)\n  - Write tests [pending] (Build)\n  - Ship [pending] (Build)\nOverall: 0/5 done, 5 open.\nActive phase 1/2 \"Setup\" (0/2).\n  Setup:\n    - [ ] Create repo (in progress)\n    - [ ] Add CI\n  Build:\n    - [ ] Write parser\n    - [ ] Write tests\n    - [ ] Ship"
+     }
+    ],
+    "details": {
+     "op": "init",
+     "phases": [
+      {
+       "name": "Setup",
+       "tasks": [
+        {
+         "content": "Create repo",
+         "status": "in_progress"
+        },
+        {
+         "content": "Add CI",
+         "status": "pending"
+        }
+       ]
+      },
+      {
+       "name": "Build",
+       "tasks": [
+        {
+         "content": "Write parser",
+         "status": "pending"
+        },
+        {
+         "content": "Write tests",
+         "status": "pending"
+        },
+        {
+         "content": "Ship",
+         "status": "pending"
+        }
+       ]
+      }
+     ],
+     "storage": "session"
+    }
+   },
+   "isError": false
+  },
+  {
+   "args": {
+    "op": "done",
+    "task": "Create repo"
+   },
+   "toolCallId": "toolu_01Cvv5wRQJGLVZNDvwDuHkMe",
+   "toolName": "todo",
+   "result": {
+    "content": [
+     {
+      "type": "text",
+      "text": "Remaining items (4):\n  - Add CI [in_progress] (Setup)\n  - Write parser [pending] (Build)\n  - Write tests [pending] (Build)\n  - Ship [pending] (Build)\nOverall: 1/5 done, 4 open.\nActive phase 1/2 \"Setup\" (1/2).\n  Setup:\n    - [X] Create repo\n    - [ ] Add CI (in progress)\n  Build:\n    - [ ] Write parser\n    - [ ] Write tests\n    - [ ] Ship"
+     }
+    ],
+    "details": {
+     "op": "done",
+     "phases": [
+      {
+       "name": "Setup",
+       "tasks": [
+        {
+         "content": "Create repo",
+         "status": "completed"
+        },
+        {
+         "content": "Add CI",
+         "status": "in_progress"
+        }
+       ]
+      },
+      {
+       "name": "Build",
+       "tasks": [
+        {
+         "content": "Write parser",
+         "status": "pending"
+        },
+        {
+         "content": "Write tests",
+         "status": "pending"
+        },
+        {
+         "content": "Ship",
+         "status": "pending"
+        }
+       ]
+      }
+     ],
+     "storage": "session",
+     "completedTasks": [
+      {
+       "phase": "Setup",
+       "content": "Create repo"
+      }
+     ]
+    }
+   },
+   "isError": false
+  },
+  {
+   "args": {
+    "op": "start",
+    "task": "Write parser"
+   },
+   "toolCallId": "toolu_01VBvqQEHaqPxuJELiWFvs25",
+   "toolName": "todo",
+   "result": {
+    "content": [
+     {
+      "type": "text",
+      "text": "Remaining items (4):\n  - Add CI [pending] (Setup)\n  - Write parser [in_progress] (Build)\n  - Write tests [pending] (Build)\n  - Ship [pending] (Build)\nOverall: 1/5 done, 4 open.\nActive phase 1/2 \"Setup\" (1/2).\n  Setup:\n    - [X] Create repo\n    - [ ] Add CI\n  Build:\n    - [ ] Write parser (in progress)\n    - [ ] Write tests\n    - [ ] Ship"
+     }
+    ],
+    "details": {
+     "op": "start",
+     "phases": [
+      {
+       "name": "Setup",
+       "tasks": [
+        {
+         "content": "Create repo",
+         "status": "completed"
+        },
+        {
+         "content": "Add CI",
+         "status": "pending"
+        }
+       ]
+      },
+      {
+       "name": "Build",
+       "tasks": [
+        {
+         "content": "Write parser",
+         "status": "in_progress"
+        },
+        {
+         "content": "Write tests",
+         "status": "pending"
+        },
+        {
+         "content": "Ship",
+         "status": "pending"
+        }
+       ]
+      }
+     ],
+     "storage": "session"
+    }
+   },
+   "isError": false
+  },
+  {
+   "args": {
+    "op": "block",
+    "task": "Write tests",
+    "reason": "waiting on fixtures"
+   },
+   "toolCallId": "toolu_019pEetVua7EiBVtncpoM8wH",
+   "toolName": "todo",
+   "result": {
+    "content": [
+     {
+      "type": "text",
+      "text": "Remaining items (3):\n  - Add CI [pending] (Setup)\n  - Write parser [in_progress] (Build)\n  - Ship [pending] (Build)\nOverall: 1/5 done, 3 open, 1 blocked.\nActive phase 1/2 \"Setup\" (1/2).\n  Setup:\n    - [X] Create repo\n    - [ ] Add CI\n  Build:\n    - [ ] Write parser (in progress)\n    - [ ] Write tests (blocked: waiting on fixtures)\n    - [ ] Ship"
+     }
+    ],
+    "details": {
+     "op": "block",
+     "phases": [
+      {
+       "name": "Setup",
+       "tasks": [
+        {
+         "content": "Create repo",
+         "status": "completed"
+        },
+        {
+         "content": "Add CI",
+         "status": "pending"
+        }
+       ]
+      },
+      {
+       "name": "Build",
+       "tasks": [
+        {
+         "content": "Write parser",
+         "status": "in_progress"
+        },
+        {
+         "content": "Write tests",
+         "status": "blocked",
+         "blocker": "waiting on fixtures"
+        },
+        {
+         "content": "Ship",
+         "status": "pending"
+        }
+       ]
+      }
+     ],
+     "storage": "session"
+    }
+   },
+   "isError": false
+  },
+  {
+   "args": {
+    "op": "append",
+    "phase": "Build",
+    "items": [
+     "Write docs"
+    ]
+   },
+   "toolCallId": "toolu_01L8ETCxi8wnL3toiRJrTpqS",
+   "toolName": "todo",
+   "result": {
+    "content": [
+     {
+      "type": "text",
+      "text": "Remaining items (4):\n  - Add CI [pending] (Setup)\n  - Write parser [in_progress] (Build)\n  - Ship [pending] (Build)\n  - Write docs [pending] (Build)\nOverall: 1/6 done, 4 open, 1 blocked.\nActive phase 1/2 \"Setup\" (1/2).\n  Setup:\n    - [X] Create repo\n    - [ ] Add CI\n  Build:\n    - [ ] Write parser (in progress)\n    - [ ] Write tests (blocked: waiting on fixtures)\n    - [ ] Ship\n    - [ ] Write docs"
+     }
+    ],
+    "details": {
+     "op": "append",
+     "phases": [
+      {
+       "name": "Setup",
+       "tasks": [
+        {
+         "content": "Create repo",
+         "status": "completed"
+        },
+        {
+         "content": "Add CI",
+         "status": "pending"
+        }
+       ]
+      },
+      {
+       "name": "Build",
+       "tasks": [
+        {
+         "content": "Write parser",
+         "status": "in_progress"
+        },
+        {
+         "content": "Write tests",
+         "status": "blocked",
+         "blocker": "waiting on fixtures"
+        },
+        {
+         "content": "Ship",
+         "status": "pending"
+        },
+        {
+         "content": "Write docs",
+         "status": "pending"
+        }
+       ]
+      }
+     ],
+     "storage": "session"
+    }
+   },
+   "isError": false
+  },
+  {
+   "args": {
+    "op": "view"
+   },
+   "toolCallId": "toolu_01QTDo46VsLB2JFYP3YhVVeN",
+   "toolName": "todo",
+   "result": {
+    "content": [
+     {
+      "type": "text",
+      "text": "Remaining items (4):\n  - Add CI [pending] (Setup)\n  - Write parser [in_progress] (Build)\n  - Ship [pending] (Build)\n  - Write docs [pending] (Build)\nOverall: 1/6 done, 4 open, 1 blocked.\nActive phase 1/2 \"Setup\" (1/2).\n  Setup:\n    - [X] Create repo\n    - [ ] Add CI\n  Build:\n    - [ ] Write parser (in progress)\n    - [ ] Write tests (blocked: waiting on fixtures)\n    - [ ] Ship\n    - [ ] Write docs"
+     }
+    ],
+    "details": {
+     "op": "view",
+     "phases": [
+      {
+       "name": "Setup",
+       "tasks": [
+        {
+         "content": "Create repo",
+         "status": "completed"
+        },
+        {
+         "content": "Add CI",
+         "status": "pending"
+        }
+       ]
+      },
+      {
+       "name": "Build",
+       "tasks": [
+        {
+         "content": "Write parser",
+         "status": "in_progress"
+        },
+        {
+         "content": "Write tests",
+         "status": "blocked",
+         "blocker": "waiting on fixtures"
+        },
+        {
+         "content": "Ship",
+         "status": "pending"
+        },
+        {
+         "content": "Write docs",
+         "status": "pending"
+        }
+       ]
+      }
+     ],
+     "storage": "session"
+    }
+   },
+   "isError": false
+  },
+  {
+   "args": {
+    "op": "done",
+    "task": "No such task"
+   },
+   "toolCallId": "toolu_011URhUGprW3dieDV9hAesU8",
+   "toolName": "todo",
+   "result": {
+    "content": [
+     {
+      "type": "text",
+      "text": "Errors: Task \"No such task\" not found\nRemaining items (4):\n  - Add CI [pending] (Setup)\n  - Write parser [in_progress] (Build)\n  - Ship [pending] (Build)\n  - Write docs [pending] (Build)\nOverall: 1/6 done, 4 open, 1 blocked.\nActive phase 1/2 \"Setup\" (1/2).\n  Setup:\n    - [X] Create repo\n    - [ ] Add CI\n  Build:\n    - [ ] Write parser (in progress)\n    - [ ] Write tests (blocked: waiting on fixtures)\n    - [ ] Ship\n    - [ ] Write docs"
+     }
+    ],
+    "details": {
+     "op": "done",
+     "phases": [
+      {
+       "name": "Setup",
+       "tasks": [
+        {
+         "content": "Create repo",
+         "status": "completed"
+        },
+        {
+         "content": "Add CI",
+         "status": "pending"
+        }
+       ]
+      },
+      {
+       "name": "Build",
+       "tasks": [
+        {
+         "content": "Write parser",
+         "status": "in_progress"
+        },
+        {
+         "content": "Write tests",
+         "status": "blocked",
+         "blocker": "waiting on fixtures"
+        },
+        {
+         "content": "Ship",
+         "status": "pending"
+        },
+        {
+         "content": "Write docs",
+         "status": "pending"
+        }
+       ]
+      }
+     ],
+     "storage": "session"
+    },
+    "isError": true
+   },
+   "isError": true
+  },
+  {
+   "args": {
+    "op": "drop",
+    "task": "Ship"
+   },
+   "toolCallId": "toolu_01FB2EA2igyTY2sCgCZpK3SA",
+   "toolName": "todo",
+   "result": {
+    "content": [
+     {
+      "type": "text",
+      "text": "Remaining items (3):\n  - Add CI [pending] (Setup)\n  - Write parser [in_progress] (Build)\n  - Write docs [pending] (Build)\nOverall: 2/6 done, 3 open, 1 blocked.\nActive phase 1/2 \"Setup\" (1/2) \u2014 earliest phase with open tasks; the in-progress pointer auto-advances to the earliest open task on each completion, so it can sit behind out-of-order work (nothing was un-completed).\n  Setup:\n    - [X] Create repo\n    - [ ] Add CI\n  Build:\n    - [ ] Write parser (in progress)\n    - [ ] Write tests (blocked: waiting on fixtures)\n    - [ ] Ship (dropped)\n    - [ ] Write docs"
+     }
+    ],
+    "details": {
+     "op": "drop",
+     "phases": [
+      {
+       "name": "Setup",
+       "tasks": [
+        {
+         "content": "Create repo",
+         "status": "completed"
+        },
+        {
+         "content": "Add CI",
+         "status": "pending"
+        }
+       ]
+      },
+      {
+       "name": "Build",
+       "tasks": [
+        {
+         "content": "Write parser",
+         "status": "in_progress"
+        },
+        {
+         "content": "Write tests",
+         "status": "blocked",
+         "blocker": "waiting on fixtures"
+        },
+        {
+         "content": "Ship",
+         "status": "abandoned"
+        },
+        {
+         "content": "Write docs",
+         "status": "pending"
+        }
+       ]
+      }
+     ],
+     "storage": "session"
+    }
+   },
+   "isError": false
+  },
+  {
+   "args": {
+    "language": "py",
+    "code": "r = await tool.todo({\"op\": \"done\", \"task\": \"Add CI\"})\nprint(r)"
+   },
+   "toolCallId": "toolu_01BUEarLxwnCNWYMPSn3kAFc",
+   "toolName": "eval",
+   "result": {
+    "content": [
+     {
+      "type": "text",
+      "text": "(eval output trimmed)"
+     }
+    ],
+    "details": {
+     "language": "python"
+    }
+   },
+   "isError": false
+  },
+  {
+   "args": {
+    "op": "done"
+   },
+   "toolCallId": "toolu_01VBep1J9b3Ss2EJrBjqvk6S",
+   "toolName": "todo",
+   "result": {
+    "content": [
+     {
+      "type": "text",
+      "text": "Remaining items: none.\nOverall: 6/6 done, 0 open.\nActive phase 2/2 \"Build\" (4/4).\n  Setup:\n    - [X] Create repo\n    - [X] Add CI\n  Build:\n    - [X] Write parser\n    - [X] Write tests\n    - [X] Ship\n    - [X] Write docs"
+     }
+    ],
+    "details": {
+     "op": "done",
+     "phases": [
+      {
+       "name": "Setup",
+       "tasks": [
+        {
+         "content": "Create repo",
+         "status": "completed"
+        },
+        {
+         "content": "Add CI",
+         "status": "completed"
+        }
+       ]
+      },
+      {
+       "name": "Build",
+       "tasks": [
+        {
+         "content": "Write parser",
+         "status": "completed"
+        },
+        {
+         "content": "Write tests",
+         "status": "completed",
+         "blocker": "waiting on fixtures"
+        },
+        {
+         "content": "Ship",
+         "status": "completed"
+        },
+        {
+         "content": "Write docs",
+         "status": "completed"
+        }
+       ]
+      }
+     ],
+     "storage": "session",
+     "completedTasks": [
+      {
+       "phase": "Build",
+       "content": "Write parser"
+      },
+      {
+       "phase": "Build",
+       "content": "Write tests"
+      },
+      {
+       "phase": "Build",
+       "content": "Ship"
+      },
+      {
+       "phase": "Build",
+       "content": "Write docs"
+      }
+     ]
+    }
+   },
+   "isError": false
+  }
+ ],
+ "branch": [
+  {
+   "type": "custom",
+   "customType": "tool_execution_start",
+   "data": {
+    "toolCallId": "toolu_01GQgcLRW5Pxbe5hzCovU2Eh",
+    "toolName": "todo",
+    "startedAt": "2026-10-11T21:04:15.189Z",
+    "intent": "Initializing test todo list"
+   },
+   "id": "ffdfa3bf",
+   "parentId": "0a31a8bc",
+   "timestamp": "2026-10-11T21:04:15.189Z"
+  },
+  {
+   "type": "message",
+   "id": "674867f2",
+   "parentId": "7320c682",
+   "timestamp": "2026-10-11T21:04:15.194Z",
+   "message": {
+    "role": "toolResult",
+    "toolCallId": "toolu_01GQgcLRW5Pxbe5hzCovU2Eh",
+    "toolName": "todo",
+    "content": [
+     {
+      "type": "text",
+      "text": "Remaining items (5):\n  - Create repo [in_progress] (Setup)\n  - Add CI [pending] (Setup)\n  - Write parser [pending] (Build)\n  - Write tests [pending] (Build)\n  - Ship [pending] (Build)\nOverall: 0/5 done, 5 open.\nActive phase 1/2 \"Setup\" (0/2).\n  Setup:\n    - [ ] Create repo (in progress)\n    - [ ] Add CI\n  Build:\n    - [ ] Write parser\n    - [ ] Write tests\n    - [ ] Ship"
+     }
+    ],
+    "details": {
+     "op": "init",
+     "phases": [
+      {
+       "name": "Setup",
+       "tasks": [
+        {
+         "content": "Create repo",
+         "status": "in_progress"
+        },
+        {
+         "content": "Add CI",
+         "status": "pending"
+        }
+       ]
+      },
+      {
+       "name": "Build",
+       "tasks": [
+        {
+         "content": "Write parser",
+         "status": "pending"
+        },
+        {
+         "content": "Write tests",
+         "status": "pending"
+        },
+        {
+         "content": "Ship",
+         "status": "pending"
+        }
+       ]
+      }
+     ],
+     "storage": "session"
+    },
+    "isError": false,
+    "timestamp": 1791752655191
+   }
+  },
+  {
+   "type": "custom",
+   "customType": "tool_execution_start",
+   "data": {
+    "toolCallId": "toolu_01Cvv5wRQJGLVZNDvwDuHkMe",
+    "toolName": "todo",
+    "startedAt": "2026-10-11T21:05:10.458Z",
+    "intent": "Marking repo creation done"
+   },
+   "id": "fa667312",
+   "parentId": "7ba25b82",
+   "timestamp": "2026-10-11T21:05:10.458Z"
+  },
+  {
+   "type": "message",
+   "id": "53001907",
+   "parentId": "fa667312",
+   "timestamp": "2026-10-11T21:05:10.462Z",
+   "message": {
+    "role": "toolResult",
+    "toolCallId": "toolu_01Cvv5wRQJGLVZNDvwDuHkMe",
+    "toolName": "todo",
+    "content": [
+     {
+      "type": "text",
+      "text": "Remaining items (4):\n  - Add CI [in_progress] (Setup)\n  - Write parser [pending] (Build)\n  - Write tests [pending] (Build)\n  - Ship [pending] (Build)\nOverall: 1/5 done, 4 open.\nActive phase 1/2 \"Setup\" (1/2).\n  Setup:\n    - [X] Create repo\n    - [ ] Add CI (in progress)\n  Build:\n    - [ ] Write parser\n    - [ ] Write tests\n    - [ ] Ship"
+     }
+    ],
+    "details": {
+     "op": "done",
+     "phases": [
+      {
+       "name": "Setup",
+       "tasks": [
+        {
+         "content": "Create repo",
+         "status": "completed"
+        },
+        {
+         "content": "Add CI",
+         "status": "in_progress"
+        }
+       ]
+      },
+      {
+       "name": "Build",
+       "tasks": [
+        {
+         "content": "Write parser",
+         "status": "pending"
+        },
+        {
+         "content": "Write tests",
+         "status": "pending"
+        },
+        {
+         "content": "Ship",
+         "status": "pending"
+        }
+       ]
+      }
+     ],
+     "storage": "session",
+     "completedTasks": [
+      {
+       "phase": "Setup",
+       "content": "Create repo"
+      }
+     ]
+    },
+    "isError": false,
+    "timestamp": 1791752710460
+   }
+  },
+  {
+   "type": "custom",
+   "customType": "tool_execution_start",
+   "data": {
+    "toolCallId": "toolu_01VBvqQEHaqPxuJELiWFvs25",
+    "toolName": "todo",
+    "startedAt": "2026-10-11T21:05:11.892Z",
+    "intent": "Starting parser task"
+   },
+   "id": "ffa42a50",
+   "parentId": "c7ff1d8b",
+   "timestamp": "2026-10-11T21:05:11.892Z"
+  },
+  {
+   "type": "message",
+   "id": "6fb8e540",
+   "parentId": "ffa42a50",
+   "timestamp": "2026-10-11T21:05:11.895Z",
+   "message": {
+    "role": "toolResult",
+    "toolCallId": "toolu_01VBvqQEHaqPxuJELiWFvs25",
+    "toolName": "todo",
+    "content": [
+     {
+      "type": "text",
+      "text": "Remaining items (4):\n  - Add CI [pending] (Setup)\n  - Write parser [in_progress] (Build)\n  - Write tests [pending] (Build)\n  - Ship [pending] (Build)\nOverall: 1/5 done, 4 open.\nActive phase 1/2 \"Setup\" (1/2).\n  Setup:\n    - [X] Create repo\n    - [ ] Add CI\n  Build:\n    - [ ] Write parser (in progress)\n    - [ ] Write tests\n    - [ ] Ship"
+     }
+    ],
+    "details": {
+     "op": "start",
+     "phases": [
+      {
+       "name": "Setup",
+       "tasks": [
+        {
+         "content": "Create repo",
+         "status": "completed"
+        },
+        {
+         "content": "Add CI",
+         "status": "pending"
+        }
+       ]
+      },
+      {
+       "name": "Build",
+       "tasks": [
+        {
+         "content": "Write parser",
+         "status": "in_progress"
+        },
+        {
+         "content": "Write tests",
+         "status": "pending"
+        },
+        {
+         "content": "Ship",
+         "status": "pending"
+        }
+       ]
+      }
+     ],
+     "storage": "session"
+    },
+    "isError": false,
+    "timestamp": 1791752711893
+   }
+  },
+  {
+   "type": "custom",
+   "customType": "tool_execution_start",
+   "data": {
+    "toolCallId": "toolu_019pEetVua7EiBVtncpoM8wH",
+    "toolName": "todo",
+    "startedAt": "2026-10-11T21:05:13.588Z",
+    "intent": "Blocking tests task"
+   },
+   "id": "d00c0594",
+   "parentId": "8b7c2a24",
+   "timestamp": "2026-10-11T21:05:13.588Z"
+  },
+  {
+   "type": "message",
+   "id": "d39b9fbc",
+   "parentId": "d00c0594",
+   "timestamp": "2026-10-11T21:05:13.591Z",
+   "message": {
+    "role": "toolResult",
+    "toolCallId": "toolu_019pEetVua7EiBVtncpoM8wH",
+    "toolName": "todo",
+    "content": [
+     {
+      "type": "text",
+      "text": "Remaining items (3):\n  - Add CI [pending] (Setup)\n  - Write parser [in_progress] (Build)\n  - Ship [pending] (Build)\nOverall: 1/5 done, 3 open, 1 blocked.\nActive phase 1/2 \"Setup\" (1/2).\n  Setup:\n    - [X] Create repo\n    - [ ] Add CI\n  Build:\n    - [ ] Write parser (in progress)\n    - [ ] Write tests (blocked: waiting on fixtures)\n    - [ ] Ship"
+     }
+    ],
+    "details": {
+     "op": "block",
+     "phases": [
+      {
+       "name": "Setup",
+       "tasks": [
+        {
+         "content": "Create repo",
+         "status": "completed"
+        },
+        {
+         "content": "Add CI",
+         "status": "pending"
+        }
+       ]
+      },
+      {
+       "name": "Build",
+       "tasks": [
+        {
+         "content": "Write parser",
+         "status": "in_progress"
+        },
+        {
+         "content": "Write tests",
+         "status": "blocked",
+         "blocker": "waiting on fixtures"
+        },
+        {
+         "content": "Ship",
+         "status": "pending"
+        }
+       ]
+      }
+     ],
+     "storage": "session"
+    },
+    "isError": false,
+    "timestamp": 1791752713589
+   }
+  },
+  {
+   "type": "custom",
+   "customType": "tool_execution_start",
+   "data": {
+    "toolCallId": "toolu_01L8ETCxi8wnL3toiRJrTpqS",
+    "toolName": "todo",
+    "startedAt": "2026-10-11T21:05:15.213Z",
+    "intent": "Appending docs task"
+   },
+   "id": "18f163b3",
+   "parentId": "769ad8ec",
+   "timestamp": "2026-10-11T21:05:15.213Z"
+  },
+  {
+   "type": "message",
+   "id": "fe11ded5",
+   "parentId": "18f163b3",
+   "timestamp": "2026-10-11T21:05:15.215Z",
+   "message": {
+    "role": "toolResult",
+    "toolCallId": "toolu_01L8ETCxi8wnL3toiRJrTpqS",
+    "toolName": "todo",
+    "content": [
+     {
+      "type": "text",
+      "text": "Remaining items (4):\n  - Add CI [pending] (Setup)\n  - Write parser [in_progress] (Build)\n  - Ship [pending] (Build)\n  - Write docs [pending] (Build)\nOverall: 1/6 done, 4 open, 1 blocked.\nActive phase 1/2 \"Setup\" (1/2).\n  Setup:\n    - [X] Create repo\n    - [ ] Add CI\n  Build:\n    - [ ] Write parser (in progress)\n    - [ ] Write tests (blocked: waiting on fixtures)\n    - [ ] Ship\n    - [ ] Write docs"
+     }
+    ],
+    "details": {
+     "op": "append",
+     "phases": [
+      {
+       "name": "Setup",
+       "tasks": [
+        {
+         "content": "Create repo",
+         "status": "completed"
+        },
+        {
+         "content": "Add CI",
+         "status": "pending"
+        }
+       ]
+      },
+      {
+       "name": "Build",
+       "tasks": [
+        {
+         "content": "Write parser",
+         "status": "in_progress"
+        },
+        {
+         "content": "Write tests",
+         "status": "blocked",
+         "blocker": "waiting on fixtures"
+        },
+        {
+         "content": "Ship",
+         "status": "pending"
+        },
+        {
+         "content": "Write docs",
+         "status": "pending"
+        }
+       ]
+      }
+     ],
+     "storage": "session"
+    },
+    "isError": false,
+    "timestamp": 1791752715213
+   }
+  },
+  {
+   "type": "custom",
+   "customType": "tool_execution_start",
+   "data": {
+    "toolCallId": "toolu_01QTDo46VsLB2JFYP3YhVVeN",
+    "toolName": "todo",
+    "startedAt": "2026-10-11T21:05:16.493Z",
+    "intent": "Viewing todo list"
+   },
+   "id": "44c9b70a",
+   "parentId": "51e8849e",
+   "timestamp": "2026-10-11T21:05:16.493Z"
+  },
+  {
+   "type": "message",
+   "id": "3e86c133",
+   "parentId": "44c9b70a",
+   "timestamp": "2026-10-11T21:05:16.494Z",
+   "message": {
+    "role": "toolResult",
+    "toolCallId": "toolu_01QTDo46VsLB2JFYP3YhVVeN",
+    "toolName": "todo",
+    "content": [
+     {
+      "type": "text",
+      "text": "Remaining items (4):\n  - Add CI [pending] (Setup)\n  - Write parser [in_progress] (Build)\n  - Ship [pending] (Build)\n  - Write docs [pending] (Build)\nOverall: 1/6 done, 4 open, 1 blocked.\nActive phase 1/2 \"Setup\" (1/2).\n  Setup:\n    - [X] Create repo\n    - [ ] Add CI\n  Build:\n    - [ ] Write parser (in progress)\n    - [ ] Write tests (blocked: waiting on fixtures)\n    - [ ] Ship\n    - [ ] Write docs"
+     }
+    ],
+    "details": {
+     "op": "view",
+     "phases": [
+      {
+       "name": "Setup",
+       "tasks": [
+        {
+         "content": "Create repo",
+         "status": "completed"
+        },
+        {
+         "content": "Add CI",
+         "status": "pending"
+        }
+       ]
+      },
+      {
+       "name": "Build",
+       "tasks": [
+        {
+         "content": "Write parser",
+         "status": "in_progress"
+        },
+        {
+         "content": "Write tests",
+         "status": "blocked",
+         "blocker": "waiting on fixtures"
+        },
+        {
+         "content": "Ship",
+         "status": "pending"
+        },
+        {
+         "content": "Write docs",
+         "status": "pending"
+        }
+       ]
+      }
+     ],
+     "storage": "session"
+    },
+    "isError": false,
+    "timestamp": 1791752716493
+   }
+  },
+  {
+   "type": "custom",
+   "customType": "tool_execution_start",
+   "data": {
+    "toolCallId": "toolu_011URhUGprW3dieDV9hAesU8",
+    "toolName": "todo",
+    "startedAt": "2026-10-11T21:05:18.058Z",
+    "intent": "Marking nonexistent task done"
+   },
+   "id": "d720a47e",
+   "parentId": "a17a2119",
+   "timestamp": "2026-10-11T21:05:18.059Z"
+  },
+  {
+   "type": "message",
+   "id": "3613731b",
+   "parentId": "d720a47e",
+   "timestamp": "2026-10-11T21:05:18.061Z",
+   "message": {
+    "role": "toolResult",
+    "toolCallId": "toolu_011URhUGprW3dieDV9hAesU8",
+    "toolName": "todo",
+    "content": [
+     {
+      "type": "text",
+      "text": "Errors: Task \"No such task\" not found\nRemaining items (4):\n  - Add CI [pending] (Setup)\n  - Write parser [in_progress] (Build)\n  - Ship [pending] (Build)\n  - Write docs [pending] (Build)\nOverall: 1/6 done, 4 open, 1 blocked.\nActive phase 1/2 \"Setup\" (1/2).\n  Setup:\n    - [X] Create repo\n    - [ ] Add CI\n  Build:\n    - [ ] Write parser (in progress)\n    - [ ] Write tests (blocked: waiting on fixtures)\n    - [ ] Ship\n    - [ ] Write docs"
+     }
+    ],
+    "details": {
+     "op": "done",
+     "phases": [
+      {
+       "name": "Setup",
+       "tasks": [
+        {
+         "content": "Create repo",
+         "status": "completed"
+        },
+        {
+         "content": "Add CI",
+         "status": "pending"
+        }
+       ]
+      },
+      {
+       "name": "Build",
+       "tasks": [
+        {
+         "content": "Write parser",
+         "status": "in_progress"
+        },
+        {
+         "content": "Write tests",
+         "status": "blocked",
+         "blocker": "waiting on fixtures"
+        },
+        {
+         "content": "Ship",
+         "status": "pending"
+        },
+        {
+         "content": "Write docs",
+         "status": "pending"
+        }
+       ]
+      }
+     ],
+     "storage": "session"
+    },
+    "isError": true,
+    "timestamp": 1791752718059
+   }
+  },
+  {
+   "type": "custom",
+   "customType": "tool_execution_start",
+   "data": {
+    "toolCallId": "toolu_01FB2EA2igyTY2sCgCZpK3SA",
+    "toolName": "todo",
+    "startedAt": "2026-10-11T21:05:19.490Z",
+    "intent": "Dropping ship task"
+   },
+   "id": "73578131",
+   "parentId": "dbc74c25",
+   "timestamp": "2026-10-11T21:05:19.490Z"
+  },
+  {
+   "type": "message",
+   "id": "6b36f51a",
+   "parentId": "73578131",
+   "timestamp": "2026-10-11T21:05:19.493Z",
+   "message": {
+    "role": "toolResult",
+    "toolCallId": "toolu_01FB2EA2igyTY2sCgCZpK3SA",
+    "toolName": "todo",
+    "content": [
+     {
+      "type": "text",
+      "text": "Remaining items (3):\n  - Add CI [pending] (Setup)\n  - Write parser [in_progress] (Build)\n  - Write docs [pending] (Build)\nOverall: 2/6 done, 3 open, 1 blocked.\nActive phase 1/2 \"Setup\" (1/2) \u2014 earliest phase with open tasks; the in-progress pointer auto-advances to the earliest open task on each completion, so it can sit behind out-of-order work (nothing was un-completed).\n  Setup:\n    - [X] Create repo\n    - [ ] Add CI\n  Build:\n    - [ ] Write parser (in progress)\n    - [ ] Write tests (blocked: waiting on fixtures)\n    - [ ] Ship (dropped)\n    - [ ] Write docs"
+     }
+    ],
+    "details": {
+     "op": "drop",
+     "phases": [
+      {
+       "name": "Setup",
+       "tasks": [
+        {
+         "content": "Create repo",
+         "status": "completed"
+        },
+        {
+         "content": "Add CI",
+         "status": "pending"
+        }
+       ]
+      },
+      {
+       "name": "Build",
+       "tasks": [
+        {
+         "content": "Write parser",
+         "status": "in_progress"
+        },
+        {
+         "content": "Write tests",
+         "status": "blocked",
+         "blocker": "waiting on fixtures"
+        },
+        {
+         "content": "Ship",
+         "status": "abandoned"
+        },
+        {
+         "content": "Write docs",
+         "status": "pending"
+        }
+       ]
+      }
+     ],
+     "storage": "session"
+    },
+    "isError": false,
+    "timestamp": 1791752719491
+   }
+  },
+  {
+   "type": "custom",
+   "customType": "tool_execution_start",
+   "data": {
+    "toolCallId": "toolu_01BUEarLxwnCNWYMPSn3kAFc",
+    "toolName": "eval",
+    "startedAt": "2026-10-11T21:05:47.669Z",
+    "intent": "running python"
+   },
+   "id": "41f0d94b",
+   "parentId": "712277e6",
+   "timestamp": "2026-10-11T21:05:47.669Z"
+  },
+  {
+   "type": "custom",
+   "customType": "user_todo_edit",
+   "data": {
+    "phases": [
+     {
+      "name": "Setup",
+      "tasks": [
+       {
+        "content": "Create repo",
+        "status": "completed"
+       },
+       {
+        "content": "Add CI",
+        "status": "completed"
+       }
+      ]
+     },
+     {
+      "name": "Build",
+      "tasks": [
+       {
+        "content": "Write parser",
+        "status": "in_progress"
+       },
+       {
+        "content": "Write tests",
+        "status": "blocked",
+        "blocker": "waiting on fixtures"
+       },
+       {
+        "content": "Ship",
+        "status": "abandoned"
+       },
+       {
+        "content": "Write docs",
+        "status": "pending"
+       }
+      ]
+     }
+    ]
+   },
+   "id": "c0650bdb",
+   "parentId": "41f0d94b",
+   "timestamp": "2026-10-11T21:05:47.810Z"
+  },
+  {
+   "type": "message",
+   "id": "7959daf7",
+   "parentId": "c0650bdb",
+   "timestamp": "2026-10-11T21:05:47.814Z",
+   "message": {
+    "role": "toolResult",
+    "toolCallId": "toolu_01BUEarLxwnCNWYMPSn3kAFc",
+    "toolName": "eval",
+    "content": [
+     {
+      "type": "text",
+      "text": "{'text': 'Remaining items (2):\\n  - Write parser [in_progress] (Build)\\n  - Write docs [pending] (Build)\\nOverall: 3/6 done, 2 open, 1 blocked.\\nActive phase 2/2 \"Build\" (1/4).\\n  Setup:\\n    - [X] Create repo\\n    - [X] Add CI\\n  Build:\\n    - [ ] Write parser (in progress)\\n    - [ ] Write tests (blocked: waiting on fixtures)\\n    - [ ] Ship (dropped)\\n    - [ ] Write docs', 'details': {'op': 'done', 'phases': [{'name': 'Setup', 'tasks': [{'content': 'Create repo', 'status': 'completed'}, {'content': 'Add CI', 'status': 'completed'}]}, {'name': 'Build', 'tasks': [{'content': 'Write parser', 'status': 'in_progress'}, {'content': 'Write tests', 'status': 'blocked', 'blocker': 'waiting on fixtures'}, {'content': 'Ship', 'status': 'abandoned'}, {'content': \u2026\n\n[Some lines truncated to 768 bytes. Use artifact://0:raw:1-1 to read line 1 whole]"
+     }
+    ],
+    "details": {
+     "language": "python"
+    },
+    "isError": false,
+    "timestamp": 1791752747813
+   }
+  },
+  {
+   "type": "custom",
+   "customType": "tool_execution_start",
+   "data": {
+    "toolCallId": "toolu_01VBep1J9b3Ss2EJrBjqvk6S",
+    "toolName": "todo",
+    "startedAt": "2026-10-11T21:08:16.633Z",
+    "intent": "Marking all tasks done"
+   },
+   "id": "2f249304",
+   "parentId": "08c0f2b1",
+   "timestamp": "2026-10-11T21:08:16.633Z"
+  },
+  {
+   "type": "message",
+   "id": "3cca73f1",
+   "parentId": "2f249304",
+   "timestamp": "2026-10-11T21:08:16.637Z",
+   "message": {
+    "role": "toolResult",
+    "toolCallId": "toolu_01VBep1J9b3Ss2EJrBjqvk6S",
+    "toolName": "todo",
+    "content": [
+     {
+      "type": "text",
+      "text": "Remaining items: none.\nOverall: 6/6 done, 0 open.\nActive phase 2/2 \"Build\" (4/4).\n  Setup:\n    - [X] Create repo\n    - [X] Add CI\n  Build:\n    - [X] Write parser\n    - [X] Write tests\n    - [X] Ship\n    - [X] Write docs"
+     }
+    ],
+    "details": {
+     "op": "done",
+     "phases": [
+      {
+       "name": "Setup",
+       "tasks": [
+        {
+         "content": "Create repo",
+         "status": "completed"
+        },
+        {
+         "content": "Add CI",
+         "status": "completed"
+        }
+       ]
+      },
+      {
+       "name": "Build",
+       "tasks": [
+        {
+         "content": "Write parser",
+         "status": "completed"
+        },
+        {
+         "content": "Write tests",
+         "status": "completed",
+         "blocker": "waiting on fixtures"
+        },
+        {
+         "content": "Ship",
+         "status": "completed"
+        },
+        {
+         "content": "Write docs",
+         "status": "completed"
+        }
+       ]
+      }
+     ],
+     "storage": "session",
+     "completedTasks": [
+      {
+       "phase": "Build",
+       "content": "Write parser"
+      },
+      {
+       "phase": "Build",
+       "content": "Write tests"
+      },
+      {
+       "phase": "Build",
+       "content": "Ship"
+      },
+      {
+       "phase": "Build",
+       "content": "Write docs"
+      }
+     ]
+    },
+    "isError": false,
+    "timestamp": 1791752896634
+   }
+  },
+  {
+   "type": "custom",
+   "customType": "todo_hud_state",
+   "data": {
+    "sourceEntryId": "3cca73f1",
+    "fingerprint": "[{\"name\":\"Setup\",\"tasks\":[{\"content\":\"Create repo\",\"status\":\"completed\"},{\"content\":\"Add CI\",\"status\":\"completed\"}]},{\"name\":\"Build\",\"tasks\":[{\"content\":\"Write parser\",\"status\":\"completed\"},{\"content\":\"Write tests\",\"status\":\"completed\",\"blocker\":\"waiting on fixtures\"},{\"content\":\"Ship\",\"status\":\"completed\"},{\"content\":\"Write docs\",\"status\":\"completed\"}]}]",
+    "visibility": "dismissed"
+   },
+   "id": "dae9cc01",
+   "parentId": "b809a612",
+   "timestamp": "2026-10-11T21:09:16.638Z"
+  }
+ ]
+}

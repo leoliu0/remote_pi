@@ -1,0 +1,41 @@
+
+
+ Still the todo test, nothing else: call todo op "append" phase "Build" items ["Write docs"], then todo op "drop" task
+ "Ship". Reply "ok".
+
+
+╭───  Todo 6 tasks ───────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ I. Setup  1/2                                                                                                        │
+│   ├─  Create repo                                                                                                   │
+│   └─  Add CI                                                                                                        │
+│ II. Build  1/4                                                                                                       │
+│   ├─  Write parser                                                                                                  │
+│   ├─  Write tests (blocked: waiting on fixtures)                                                                    │
+│   ├─  Ship                                                                                                          │
+│   └─  Write docs                                                                                                    │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+I notice "2/6 done" is counting dropped items as done, which seems odd but might be intentional rather than a reporting
+error — I'll just reply "ok" rather than flagging it.
+
+ok
+
+I made the two calls you asked for: "Write docs" is added to Build and "Ship" is dropped. Add CI, Write parser and Write
+docs are still open on purpose, since this is a test and no real work was done.
+
+The tool's summary now says 2/6 done, so it counts the dropped "Ship" as done.
+
+[remote-pi] Owner attached: peer=/vcN3u48, name=TD Web Owner (1 active)
+
+TODO
+ ├─ I. Setup · 1/2
+ │  ├─  Create repo
+ │  └─  Add CI
+ ├─ II. Build · 1/4
+ └─────
+
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+❯
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+ 󰵗 ·  Opus 5.5 · 󰪟 low ·  rp-todo/proj ·  1.8%/1M 󰁨 · 󰙺 0.10
+🟢 relay 📡 local (1) 📱 /vcN3u48

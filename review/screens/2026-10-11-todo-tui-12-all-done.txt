@@ -1,0 +1,41 @@
+This just needs a short, direct answer without using any tools.
+
+The eval call worked: "Add CI" is marked done and Setup is complete. Write parser (in progress) and Write docs are still
+open on purpose, since this is a test and no real work was done.
+
+
+ Still the todo test: one todo call, op "done" with no task and no phase. Reply "ok".
+
+
+╭───  Todo 6 tasks ───────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ I. Setup  2/2                                                                                                        │
+│   ├─  Create repo                                                                                                   │
+│   └─  Add CI                                                                                                        │
+│ II. Build  4/4                                                                                                       │
+│   ├─  Write parser                                                                                                  │
+│   ├─  Write tests                                                                                                   │
+│   ├─  Ship                                                                                                          │
+│   └─  Write docs                                                                                                    │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+I notice everything got marked done, even the blocked "write tests" item that was supposedly dropped — that's worth
+flagging. Since the user just wants "ok," I should add a brief note pointing out this discrepancy.
+
+ok
+
+The done call with no task or phase marked every item complete. That includes the blocked "Write tests" and the dropped
+"Ship", which both now show as done (6/6), so the blocked reason and the dropped status were overwritten.
+
+TODO
+ ├─ II. Build · 4/4
+ │  ├─  Write parser
+ │  ├─  Write tests
+ │  ├─  Ship
+ │  └─  Write docs
+ └─────
+
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+❯
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+ 󰵗 ·  Opus 5.5 · 󰪟 low ·  rp-todo/proj ·  1.9%/1M 󰁨 · 󰙺 0.13
+🟢 relay 📡 local (1) 📱 /vcN3u48
