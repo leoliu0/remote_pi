@@ -833,3 +833,58 @@ Existing stored duplicates are not purged by this fix.
 - Live (scratch omp 18.9.2, fake HOME, patched extension, live relay 178.157.59.181, local `next dev` :3100 signed in via the real QR flow with a throwaway owner, isolated headless Chromium); each approval streamed `agent_chunk`s on the web and ended with `agent_done` + `agent_message`, matching the TUI: [enter](screens/2026-10-11-plan-after-01-enter-plan-mode.png), [review prompt](screens/2026-10-11-plan-after-02-review-prompt.png) ([tui](screens/2026-10-11-plan-after-02-review-tui.txt)), [approve+execute](screens/2026-10-11-plan-after-04-execute-done.png) ([tui](screens/2026-10-11-plan-after-04-execute-tui.txt)), [approve+compact](screens/2026-10-11-plan-after-06-compact-done.png) ([tui](screens/2026-10-11-plan-after-06-compact-tui.txt)), [keep context](screens/2026-10-11-plan-after-07-keep-context-done.png), [refine feedback](screens/2026-10-11-plan-after-08-refine-feedback.png) → [re-proposed](screens/2026-10-11-plan-after-09-refine-reproposed.png) ([tui](screens/2026-10-11-plan-after-09-refine-reproposed-tui.txt)), [terminal choice before](screens/2026-10-11-plan-after-11-terminal-choice-before.png) ([tui](screens/2026-10-11-plan-after-11-terminal-choice-tui.txt)) / [after: web prompt closed, run streamed](screens/2026-10-11-plan-after-12-terminal-choice-after.png), [save and quit](screens/2026-10-11-plan-after-13-save-quit-done.png) ([tui](screens/2026-10-11-plan-after-13-save-quit-tui.txt)), [keep planning](screens/2026-10-11-plan-after-14-keep-planning.png) ([tui](screens/2026-10-11-plan-after-14-keep-planning-tui.txt)) → [plan menu](screens/2026-10-11-plan-after-15-plan-menu.png) → [review re-opened](screens/2026-10-11-plan-after-16-review-reopened.png) ([tui](screens/2026-10-11-plan-after-16-review-reopened-tui.txt)), [exit confirm (web)](screens/2026-10-11-plan-after-17-exit-confirm.png) + [omp confirm answered Yes](screens/2026-10-11-plan-after-18-exit-confirm-tui.txt) → [exited](screens/2026-10-11-plan-after-19-exited.png) ([tui](screens/2026-10-11-plan-after-19-exited-tui.txt)), [bare /plan turn settled](screens/2026-10-11-plan-after-20-bare-slash-settled.png).
 - Headless daemon (`REMOTE_PI_DAEMON=1 omp --mode rpc`): omp RPC mode has no `/plan` or `/plan-review` (`get_available_commands`: 112 commands, none plan; `/plan` has only a TUI handler, so RPC would pass the line to the model) and never opens a plan review. The Plan control now gets `action_error` and a typed `/plan` gets an `error` frame with a clear message: [plan control](screens/2026-10-11-plan-after-21-daemon-plan-mode-error.png), [typed /plan](screens/2026-10-11-plan-after-22-daemon-typed-plan-error.png).
 - Not yet checked: the phone app on a device (needs an app + extension release).
+
+### 2026-10-12 - Web Home rows: restart and delete buttons ("web version session list need delete and restart button too")
+- Change: `home-view.tsx` rows now carry the app's SessionTile actions. Restart (rotate icon) shows only when the room is live or working. Delete (bin) shows on every row. The row stays fully clickable through an `absolute inset-0` open button, with the action buttons layered above it. `page.tsx` confirms with the app's dialog wording (PC instead of Mac) and sends `user_message` `/restart` or `/exit` to that `(peer, room)` through `sendInner`, as `ConnectionManager.restartRoom`/`quitRoom` do. Delete then calls the new `forgetRoom` in `session-list.ts`, the web counterpart of `deleteCachedRoom`, which drops the tile, its live/working/Done state and its cache entry.
+- Tests: `session-list.test.ts` adds 2 `forgetRoom` cases. Before the change the suite failed to load because `forgetRoom` was not exported. After it, site 184/184 pass, tsc is clean, eslint has 0 errors (2 old warnings in web-chat.tsx), and the build is OK.
+- Surface: the real `/web` page under `next dev` :3998 in headless Chromium. A throwaway owner and a signed mesh were seeded in localStorage. A fake relay WebSocket answered `hello`/`rooms_check` with r1 live, r2 working and r3 cached offline, and recorded every envelope. The script was deleted afterwards. All 15 checks passed:
+  - restart shows on r1 and r2 only; delete shows on all 3 rows
+  - cancelling restart on the working r2 shows "A turn is running…" and sends nothing
+  - restart on r1 sends `{type:user_message,text:/restart}` to r1 and does not open the chat
+  - live delete on r1 shows "Quit session?" and sends `/exit`; the tile stays gone after the relay's `room_ended`
+  - offline delete on r3 shows "Delete session?" and sends no frame
+  - the cache keeps only r2, and still does after a reload
+  - a real pointer click on a row title still opens the chat
+  - no page errors
+- Screenshots: [home](screens/2026-10-12-web-session-row-actions-1-home.png), [after deletes](screens/2026-10-12-web-session-row-actions-2-after-delete.png), [390px](screens/2026-10-12-web-session-row-actions-3-narrow.png).
+- Deployed via `install-vps.sh` (build `yhTPpWWGA_-wkLMRJqBEs`, not yet committed). `/web` returns 200, and the live chunk `14-.l-zgi7__s.js` contains `Restart session`, `Delete session` and `Quit session?`. The site, caddy and relay services are active, and relay `/health` returns 200.
+- Not yet checked: a real omp session restarting or exiting from the web. The send path is the same `user_message` the app uses (pinned by `connection_manager_test` and extension `restartSession` tests).
+
+### 2026-10-12 - Web Home opens on Online ("default the page to online sessions, not all")
+- Change: the `home-view.tsx` filter now defaults to `online`, matching the app's `HomeList.filter`. With that default, a relay that never answers would have left the Online tab spinning forever, because no rooms frame arrives. `page.tsx` now tracks `relayUnreachable`, the app's `StatusRetrying`: it is set when the link reports `offline`, kept through the retry's `connecting`, and cleared on `online` or a relay switch. `onlineListPending` takes that flag, as the app's `_relayUnreachable` guard does.
+- Tests: a new `session-list.test.ts` case covers the unreachable relay. It failed before the change and passes after. Site 185/185, tsc clean, eslint 0 errors (2 old warnings), build OK.
+- Surface: the real `/web` page under `next dev` :3998 in headless Chromium, with the same seeded owner and fake relay WebSocket as above. The script was deleted afterwards. All 7 checks passed:
+  - Reachable relay: Home opens with Online 2 selected and lists only papers and site; All still lists 3 ([live](screens/2026-10-12-web-home-online-default-1-live.png)).
+  - Relay whose socket always closes: Online 0 with "No sessions online" and no spinner; All 3 and Offline 3 are still one tap away ([relay down](screens/2026-10-12-web-home-online-default-2-relay-down.png)).
+  - No page errors.
+- Deployed via `install-vps.sh` (build `KreTSYqt4rj4WyoqAl_mM`, not yet committed). `/web` returns 200 and the live chunk `0zs0gmdryzkpq.js` contains `useState)("online")`. All three services are active and relay `/health` returns 200.
+
+### 2026-10-12 - Web chat: session sidebar on the left ("add side bar on the left to web so I can switch session quicker")
+- Change: new `session-sidebar.tsx`, shown on wide screens (`lg`, ≥1024px), to the left of the chat. This is the app's tablet list pane.
+  - Layout: a "Sessions" header, the All/Online/Offline tabs, then rows grouped by PC (small avatar, title, model · thinking, status badge). The open chat has the accent left bar and `aria-current`.
+  - Switching: a click opens that session.
+  - Rail: the panel collapses to a 56px rail of avatars with status dots, which can still switch sessions. The choice persists in `remotepi_sessions_sidebar`.
+  - Narrow screens: unchanged; no sidebar.
+- Shared with Home:
+  - From `home-view.tsx`: `FilterTabs`, `StatusBadge`, `SessionAvatar`, `STATUS_DOT`, `Spinner`, `EmptyNote` and `FILTER_EMPTY`.
+  - From `session-list.ts`: the new `groupItemsByPeer`.
+  - The presence tab now lives in `page.tsx`, so Home and the sidebar share it and Home keeps it after a chat (app parity).
+  - `handleOpenItem` does nothing for the session that is already open. When switching, it marks the previous room viewed, as closing the chat does.
+- Checks: site 185/185, tsc clean, eslint 0 errors (2 old warnings), build OK.
+- Surface: the real `/web` page under `next dev` :3998 in headless Chromium at 1440px. A fake relay WebSocket answered each room's `session_sync` with its own history ("answer in r1/r2/r3"); the script was deleted afterwards. The final run passed all 16 checks; the first run's one FAIL was a wrong locator in the script, and the screenshot showed the header was right.
+  - The sidebar opens on Online with papers and site, and papers is current ([1](screens/2026-10-12-web-sidebar-1-papers.png)).
+  - One click on site loads r2's history; the header and the current row follow ([2](screens/2026-10-12-web-sidebar-2-switched.png)).
+  - Clicking the open session sends no new `session_sync`.
+  - The All tab reaches the offline old-thing.
+  - Collapse gives a 56px rail, and a rail avatar switches session ([3](screens/2026-10-12-web-sidebar-3-rail.png)).
+  - Back on Home, the All tab is kept. After a reload the rail is still collapsed, and it expands again.
+  - At 820px the sidebar is hidden ([4](screens/2026-10-12-web-sidebar-4-narrow.png)).
+  - No page errors.
+- Deployed via `install-vps.sh` (build `YKdBWJoe320PrHSO3OJA2`, not yet committed). `/web` returns 200 and the live chunk `0a0kjg70nzjh7.js` contains `Hide sessions`/`Show sessions`. All three services are active and relay `/health` returns 200.
+
+### 2026-10-12 - Code review of the three web changes above
+- Independent reviewer pass over the site diff. Its verdict was "correct", with nothing blocking: restart and delete match the app, `forgetRoom` is right, `relayUnreachable` is right, and the WebChat key remount, the `activeKeyRef` early return, the client-only localStorage read and the flex/`h-screen` wrapper are all sound. It raised two minor findings about the collapsed rail, and both are fixed:
+  1. A session that finished while unviewed looked the same as an idle online one. `STATUS_DOT.done` now gets a halo (`ring-2 ring-[#5fd38a]/50`).
+  2. The rail has no tabs, so a filter that hid the open chat left nothing marked current. The rail now puts the open chat first when the filter hides it.
+- Check: real `/web` page under `next dev` in headless Chromium with a fake relay; the script was deleted afterwards. All 6 checks passed: Online lists papers and site; with old-thing (offline) open, the rail shows `old-thing, papers, site` and marks old-thing current; after a pushed `room_meta_updated working:false` for site, its dot has the halo and papers' does not; no page errors ([rail](screens/2026-10-12-web-sidebar-5-rail-done-and-offline-active.png)). Site 185/185, tsc clean, eslint 0 errors, build OK.
+- Deployed via `install-vps.sh` (build `4RM5swvNGB4CgPleuEXNC`). `/web` returns 200 and the live chunk contains `ring-[#5fd38a]/50`. All three services are active and relay `/health` returns 200.
