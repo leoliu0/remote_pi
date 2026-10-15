@@ -43,9 +43,12 @@ export interface AskParams {
   }>;
 }
 
+type AskResult = { content: Array<{ type: "text"; text: string }>; details: Record<string, unknown> };
+type InvokeNativeTool = (params: AskParams, options: { signal?: AbortSignal }) => Promise<AskResult>;
+
 interface PendingAsk {
   flowId: string;
-  resolve: (res: { content: Array<{ type: "text"; text: string }>; details: Record<string, unknown> }) => void;
+  resolve: (res: AskResult) => void;
   reject: (err: Error) => void;
   questions: AskParams["questions"];
 }
@@ -174,6 +177,30 @@ function createAskRequestWire(flowId: string, questions: AskParams["questions"])
   };
 }
 
+/** Broadcasts the question to mobile peers; settles on their response or `signal` abort. */
+function askRemotely(
+  flowId: string,
+  questions: AskParams["questions"],
+  broadcast: (msg: ServerMessage) => void,
+  signal: AbortSignal | undefined,
+): Promise<AskResult> {
+  // Executor form: `Promise.withResolvers` needs Node 22 / lib es2024; this package targets Node 20.
+  return new Promise<AskResult>((resolve, reject) => {
+    activeAsks.set(flowId, { flowId, resolve, reject, questions });
+    broadcast(createAskRequestWire(flowId, questions));
+    signal?.addEventListener(
+      "abort",
+      () => {
+        if (activeAsks.delete(flowId)) {
+          broadcastDismiss(flowId);
+          reject(new Error("Ask tool aborted"));
+        }
+      },
+      { once: true },
+    );
+  });
+}
+
 export function registerAskWrapperTool(
   pi: ExtensionAPI,
   broadcast: (msg: ServerMessage) => void,
@@ -187,49 +214,34 @@ export function registerAskWrapperTool(
     description: "Ask the user clarifying questions during execution.",
     parameters: AskParamsSchema,
     execute: async (toolCallId, params, signal, _onUpdate, context) => {
-      // If mobile peer is active, bridge to mobile modal
+      const invokeTool: unknown = context && "invokeTool" in context ? context.invokeTool : undefined;
+      // omp-only `ctx.invokeTool` runs the native built-in `ask` this tool shadows; the upstream SDK types lack it.
+      const invokeNative = typeof invokeTool === "function" ? (invokeTool as InvokeNativeTool) : undefined;
+
+      // Mobile peer active: offer the question on the phone, and keep the native
+      // terminal dialog up too — a paired phone is not proof the user is looking
+      // at it. First answer wins; the other side is dismissed.
       if (hasActivePeers()) {
         const flowId = `ask_${toolCallId || Date.now().toString(36)}`;
-        const req = createAskRequestWire(flowId, params.questions);
-        broadcast(req);
+        const remote = askRemotely(flowId, params.questions, broadcast, signal);
+        if (!invokeNative) return remote;
 
-        let resolve!: (res: { content: Array<{ type: "text"; text: string }>; details: Record<string, unknown> }) => void;
-        let reject!: (err: Error) => void;
-        const promise = new Promise<{
-          content: Array<{ type: "text"; text: string }>;
-          details: Record<string, unknown>;
-        }>((res, rej) => {
-          resolve = res;
-          reject = rej;
-        });
-
-        const pending: PendingAsk = {
-          flowId,
-          resolve,
-          reject,
-          questions: params.questions,
-        };
-        activeAsks.set(flowId, pending);
-
-        if (signal) {
-          signal.addEventListener("abort", () => {
-            if (activeAsks.delete(flowId)) {
-              broadcastDismiss(flowId);
-              reject(new Error("Ask tool aborted"));
-            }
-          });
+        const localAbort = new AbortController();
+        const localSignal = signal ? AbortSignal.any([signal, localAbort.signal]) : localAbort.signal;
+        const local = invokeNative(params, { signal: localSignal });
+        // The losing side settles after the race (aborted local dialog throws,
+        // dismissed mobile ask never resolves); nothing awaits it.
+        local.catch(() => {});
+        try {
+          return await Promise.race([local, remote]);
+        } finally {
+          localAbort.abort();
+          if (activeAsks.delete(flowId)) broadcastDismiss(flowId);
         }
-        return promise;
       }
 
-      // If no mobile peer is active, delegate to native ask tool if available
-      const invokeTool = (context as { invokeTool?: (p: unknown, opt?: unknown) => Promise<unknown> })?.invokeTool;
-      if (typeof invokeTool === "function") {
-        return invokeTool(params, { signal }) as Promise<{
-          content: Array<{ type: "text"; text: string }>;
-          details: Record<string, unknown>;
-        }>;
-      }
+      // No mobile peer: native ask tool when available.
+      if (invokeNative) return invokeNative(params, { signal });
       // Fallback if headless / no peer
       const questionsSummary = params.questions.map((q) => q.question).join("; ");
       return {

@@ -26,6 +26,7 @@ and 27 (see [`plan/`](plan/) directory for design history).
 
 ### Fixed
 
+- `ask` with a paired phone connected no longer leaves the terminal without a selector: the native dialog opens alongside the mobile modal and the first answer wins, dismissing the other. Previously the question went only to the phone and the terminal showed it as plain text.
 - Mobile prompts now inject directly into the interactive terminal editor and input pipeline (`_tryExecuteTerminalInput`), executing natively as interactive turns or steers instead of bypassing the prompt and steering background subagents.
 - Mobile prompts no longer remain queued without starting an idle OMP session.
 - Fixed queue draining head-of-line blocking on wake failures in `pi-extension`.

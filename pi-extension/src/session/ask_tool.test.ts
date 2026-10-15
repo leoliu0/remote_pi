@@ -131,4 +131,61 @@ describe("ask_tool", () => {
     expect(res.content[0].text).toContain("User cancelled");
     expect(res.details.cancelled).toBe(true);
   });
+
+  it("shows the native dialog alongside the mobile ask; a local answer dismisses the phone", async () => {
+    const broadcasts: ServerMessage[] = [];
+    let localSignal: AbortSignal | undefined;
+    const invokeTool = vi.fn((_params: unknown, opts: { signal?: AbortSignal }) => {
+      localSignal = opts.signal;
+      return Promise.resolve({ content: [{ type: "text", text: "User selected: Yes" }], details: {} });
+    });
+    registerAskWrapperTool(mockPi, (m) => broadcasts.push(m), () => true);
+
+    const res = await registeredTool.execute(
+      "call_local",
+      { questions: [{ id: "q1", question: "Proceed?", options: [{ label: "Yes" }] }] },
+      undefined,
+      undefined,
+      { invokeTool },
+    );
+
+    expect(invokeTool).toHaveBeenCalledTimes(1);
+    expect(res.content[0].text).toBe("User selected: Yes");
+    expect(localSignal?.aborted).toBe(true);
+    expect(getPendingAskRequests()).toHaveLength(0);
+    expect(broadcasts.map((m) => m.type === "extension_ui_request" && m.method)).toEqual(["select", "notify"]);
+    // A late phone answer no longer matches a pending ask.
+    expect(handleAskResponse({ type: "extension_ui_response", id: "ask_call_local", value: "Yes" })).toBe(false);
+  });
+
+  it("a mobile answer closes the native dialog", async () => {
+    let localSignal: AbortSignal | undefined;
+    const invokeTool = vi.fn(
+      (_params: unknown, opts: { signal?: AbortSignal }) =>
+        new Promise((_resolve, reject) => {
+          localSignal = opts.signal;
+          opts.signal?.addEventListener("abort", () => reject(new Error("Ask input was cancelled")));
+        }),
+    );
+    registerAskWrapperTool(mockPi, vi.fn(), () => true);
+
+    const executePromise = registeredTool.execute(
+      "call_remote",
+      { questions: [{ id: "q1", question: "Proceed?", options: [{ label: "Yes" }, { label: "No" }] }] },
+      undefined,
+      undefined,
+      { invokeTool },
+    );
+    expect(localSignal?.aborted).toBe(false);
+
+    handleAskResponse({
+      type: "extension_ui_response",
+      id: "ask_call_remote",
+      ask: { flow_id: "ask_call_remote", kind: "answer", answers: { q1: { values: ["No"] } } },
+    });
+
+    const res = await executePromise;
+    expect(res.content[0].text).toBe("User selected: No");
+    expect(localSignal?.aborted).toBe(true);
+  });
 });
