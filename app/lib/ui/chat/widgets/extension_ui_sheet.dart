@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:app/protocol/protocol.dart';
+import 'package:app/ui/chat/widgets/agent_markdown.dart';
 import 'package:app/ui/core/themes/themes.dart';
 import 'package:flutter/material.dart';
 
@@ -485,13 +486,15 @@ class _ExtensionUiSheetState extends State<ExtensionUiSheet> {
   Widget _buildDegraded(BuildContext context) {
     final text = Theme.of(context).textTheme;
     final message = widget.request.message ?? widget.request.title ?? '';
-    return Padding(
+    // Scrolls: a message can be long (TeX Guard sends its whole diff). It is
+    // markdown, like the chat, so a ```diff block renders as code.
+    return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           if (message.isNotEmpty) ...[
-            Text(message, style: text.bodyLarge),
+            AgentMarkdown(message, selectable: true),
             const SizedBox(height: 16),
           ],
           switch (widget.request.method) {

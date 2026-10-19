@@ -16,6 +16,18 @@
 //
 // Inert when pi-ask is absent: no events fire, nothing breaks. ask_user without
 // pi-ask doesn't exist, so this bridge is strictly opt-in.
+//
+// Second contract, for any extension whose prompt is a TUI-only component
+// (`ctx.ui.custom`), e.g. TeX Guard's patch review: a yes/no question the
+// paired app answers next to the terminal, first answer wins.
+//
+//   remote-pi:confirm:request { id, title, message }  // the extension emits
+//   remote-pi:confirm:answer  { id, confirmed }       // we emit (app answered)
+//   remote-pi:confirm:closed  { id }                  // the extension emits once
+//                                                     // its prompt resolved
+//
+// `message` is markdown. The app shows it as a `confirm` request whose wire id
+// is `confirm:<id>`; an app cancel answers `confirmed: false`.
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { PlainPeerChannel } from "./transport/peer_channel.js";
@@ -35,6 +47,13 @@ const PI_ASK_COMPLETED = "@eko24ive/pi-ask:completed";
 const PI_ASK_SUBMIT = "@eko24ive/pi-ask:submit";
 const PI_ASK_SUBMIT_RESULT = "@eko24ive/pi-ask:submit-result";
 
+export const CONFIRM_REQUEST = "remote-pi:confirm:request";
+export const CONFIRM_ANSWER = "remote-pi:confirm:answer";
+export const CONFIRM_CLOSED = "remote-pi:confirm:closed";
+const CONFIRM_ID_PREFIX = "confirm:";
+/** Keeps one prompt far below the relay's 4 MiB frame ceiling. */
+const CONFIRM_MESSAGE_MAX = 200_000;
+
 /** Drop a flow from `activeFlows` if pi-ask never resolves it (e.g. a flow
  *  disposed on session_shutdown — pi-ask does not emit `completed` for those).
  *  Bounds memory; generous vs. a human answer time. */
@@ -53,10 +72,11 @@ interface ActiveFlow {
 }
 
 export interface ExtensionUiBridge {
-  /** Route an inbound `extension_ui_response` from a peer back to pi-ask. */
+  /** Route an inbound `extension_ui_response` from a peer back to pi-ask or
+   *  to the extension that asked a `remote-pi:confirm` question. */
   respond(msg: ExtensionUiResponseWire): void;
   /**
-   * Requests for flows still awaiting an answer, for `session_sync` to replay.
+   * Requests still awaiting an answer, for `session_sync` to replay.
    */
   pendingRequests(): ServerMessage[];
   /** Drop all subscriptions + state (best-effort teardown). */
@@ -64,7 +84,7 @@ export interface ExtensionUiBridge {
 }
 
 /**
- * Wire pi-ask's event contract to the relay's extension_ui_request/response
+ * Wire pi-ask's and the confirm event contracts to the relay's extension_ui_request/response
  * frames. Returns `null` only if the SDK exposes no usable `events` bus (defensive
  * — modern Pi always has one); callers stay null-safe.
  */
@@ -199,7 +219,51 @@ export function createExtensionUiBridge(
     });
   });
 
+  // Open confirm prompts by wire id, replayed on session_sync.
+  const openConfirms = new Map<string, ServerMessage>();
+
+  const unsubConfirm = events.on(CONFIRM_REQUEST, (raw: unknown) => {
+    const e = raw as { id?: unknown; title?: unknown; message?: unknown } | null;
+    if (!e || typeof e.id !== "string" || !e.id) return;
+    const message = typeof e.message === "string" ? e.message : "";
+    const req: ServerMessage = {
+      type: "extension_ui_request",
+      id: CONFIRM_ID_PREFIX + e.id,
+      method: "confirm",
+      title: typeof e.title === "string" && e.title ? e.title : "Confirm",
+      message: message.length > CONFIRM_MESSAGE_MAX
+        ? `${message.slice(0, CONFIRM_MESSAGE_MAX)}\n\n… (truncated; the terminal shows the rest)`
+        : message,
+    };
+    openConfirms.set(req.id, req);
+    broadcast(req);
+  });
+
+  function dismissConfirm(wireId: string): void {
+    openConfirms.delete(wireId);
+    broadcast({ type: "extension_ui_request", id: wireId, method: "notify", message: "Answered." });
+  }
+
+  const unsubConfirmClosed = events.on(CONFIRM_CLOSED, (raw: unknown) => {
+    const e = raw as { id?: unknown } | null;
+    if (!e || typeof e.id !== "string") return;
+    const wireId = CONFIRM_ID_PREFIX + e.id;
+    if (openConfirms.has(wireId)) dismissConfirm(wireId);
+  });
+
+  /** An answer to one of our confirm prompts; false when `msg` is not one. */
+  function respondConfirm(msg: ExtensionUiResponseWire): boolean {
+    if (!msg.id.startsWith(CONFIRM_ID_PREFIX)) return false;
+    // Already answered in the terminal (or by another owner): drop it.
+    if (!openConfirms.has(msg.id)) return true;
+    const confirmed = "confirmed" in msg && msg.confirmed === true;
+    dismissConfirm(msg.id);
+    events.emit(CONFIRM_ANSWER, { id: msg.id.slice(CONFIRM_ID_PREFIX.length), confirmed });
+    return true;
+  }
+
   function respond(msg: ExtensionUiResponseWire): void {
+    if (respondConfirm(msg)) return;
     const ask = msg.ask;
     // Explicit cancel — with or without the ask envelope. A strict client
     // (no envelope) only carries the request id, which IS the flowId by this
@@ -276,14 +340,17 @@ export function createExtensionUiBridge(
 
   return {
     respond,
-    pendingRequests: () => [...activeFlows.values()].map(requestForFlow),
+    pendingRequests: () => [...Array.from(activeFlows.values(), requestForFlow), ...openConfirms.values()],
     dispose() {
       unsubStarted();
       unsubCompleted();
       unsubResult();
+      unsubConfirm();
+      unsubConfirmClosed();
       for (const t of flowTimers.values()) clearTimeout(t);
       flowTimers.clear();
       activeFlows.clear();
+      openConfirms.clear();
     },
   };
 }

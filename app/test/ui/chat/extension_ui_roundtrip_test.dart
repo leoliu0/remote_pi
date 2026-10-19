@@ -409,6 +409,27 @@ void main() {
       ]);
     });
 
+    testWidgets('confirm with a long markdown diff scrolls; Yes still answers', (
+      tester,
+    ) async {
+      final diff = [for (var i = 0; i < 120; i++) '+line $i'].join('\n');
+      final sent = await pump(tester, {
+        'type': 'extension_ui_request',
+        'id': 'confirm:r1',
+        'method': 'confirm',
+        'title': 'TeX Guard: apply 1 edit(s) to paper.tex?',
+        'message': 'No scan hits.\n\n```diff\n$diff\n```',
+      });
+      expect(tester.takeException(), isNull);
+      expect(find.textContaining('```'), findsNothing);
+      expect(find.textContaining('+line 0', findRichText: true), findsOneWidget);
+      await tester.tap(button('Yes'));
+      await tester.pump();
+      expect(sent, [
+        {'type': 'extension_ui_response', 'id': 'confirm:r1', 'confirmed': true},
+      ]);
+    });
+
     testWidgets('input → value is the typed text; placeholder as hint', (
       tester,
     ) async {

@@ -177,6 +177,21 @@ future track). Base64 or a field named `ct` is not an E2E confidentiality
 boundary; the current Relay visibility follows the trust model above. Text-only
 messages are unaffected.
 
+### Prompts from other extensions
+
+A prompt drawn with `ctx.ui.custom` lives only in the terminal. An extension
+can also put it on the app as a yes/no question through `pi.events`; the
+first answer, terminal or app, wins:
+
+| Channel | Sent by | Payload |
+|---|---|---|
+| `remote-pi:confirm:request` | the extension, when its prompt opens | `{ id, title, message }` (`message` is markdown) |
+| `remote-pi:confirm:answer` | remote-pi, when the app answers | `{ id, confirmed }` (the app's cancel is `false`) |
+| `remote-pi:confirm:closed` | the extension, once its prompt resolved | `{ id }`, which closes the question on the app |
+
+TeX Guard's patch review uses it, so a `tex_edit` diff can be approved from
+the phone. Without remote-pi loaded the events go nowhere.
+
 ---
 
 ## Install
