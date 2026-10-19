@@ -1,6 +1,7 @@
 import 'package:app/domain/session_state.dart';
 import 'package:app/protocol/protocol.dart';
 import 'package:app/ui/chat/widgets/bash_tool_format.dart';
+import 'package:app/ui/chat/widgets/chat_image.dart';
 import 'package:app/ui/chat/widgets/todo_panel.dart' show todoPillText;
 import 'package:app/ui/core/themes/themes.dart';
 import 'package:flutter/material.dart';
@@ -19,6 +20,15 @@ import 'package:flutter/material.dart';
 // real approval pause we can re-enable the controls. Today it is unused.
 
 import 'package:lucide_icons_flutter/lucide_icons.dart';
+
+/// The extension sends each image block of a tool result (e.g. `read` of a
+/// png) inside the result text as `![image](data:image/…;base64,…)`.
+final _resultImage = RegExp(r'!\[[^\]\n]*\]\((data:image/[^)\s]+)\)');
+
+/// Data URIs of the images in a tool result; empty when it has none.
+List<String> toolResultImages(Object? result) => result is String
+    ? [for (final m in _resultImage.allMatches(result)) m.group(1)!]
+    : const [];
 
 class ToolRequestCard extends StatefulWidget {
   final ToolEvent tool;
@@ -105,6 +115,17 @@ class _ToolRequestCardState extends State<ToolRequestCard> {
   bool get _isBash => tool.tool.toLowerCase() == 'bash';
 
   bool get _isTodo => tool.tool.toLowerCase() == 'todo';
+
+  List<String> get _images =>
+      tool.error == null ? toolResultImages(tool.result) : const [];
+
+  Widget _buildImage(String url) => Padding(
+    padding: const EdgeInsets.only(top: 6),
+    child: ConstrainedBox(
+      constraints: const BoxConstraints(maxHeight: 360),
+      child: ChatImage(url: url, altText: 'image'),
+    ),
+  );
 
   bool get _isRunning =>
       tool.status == ToolEventStatus.pending ||
@@ -270,6 +291,18 @@ class _ToolRequestCardState extends State<ToolRequestCard> {
   }
 
   Widget _buildBriefPill(BuildContext context, Color color) {
+    final images = _images;
+    final pill = _buildBriefRow(context, color);
+    if (images.isEmpty) return pill;
+    // Pictures stay visible without expanding, as in the terminal.
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [pill, for (final url in images) _buildImage(url)],
+    );
+  }
+
+  Widget _buildBriefRow(BuildContext context, Color color) {
     final colors = context.colors;
     final summary = _formatBriefSummary(tool.tool, tool.args);
     final statusIcon = switch (tool.status) {
@@ -467,6 +500,8 @@ class _ToolRequestCardState extends State<ToolRequestCard> {
   Widget? _buildResultBlock(BuildContext context) {
     final output = _extractResultText(tool.result, tool.error);
     if (output == null || output.isEmpty) return null;
+    final images = _images;
+    final text = output.replaceAll(_resultImage, '').trim();
 
     final colors = context.colors;
     final typo = context.typo;
@@ -508,20 +543,23 @@ class _ToolRequestCardState extends State<ToolRequestCard> {
               ),
             ],
           ),
-          const SizedBox(height: 6),
-          ConstrainedBox(
-            constraints: const BoxConstraints(maxHeight: 240),
-            child: SingleChildScrollView(
-              child: SelectableText(
-                output,
-                style: typo.mono.copyWith(
-                  fontSize: 13.5,
-                  height: 1.4,
-                  color: isError ? colors.error : colors.text,
+          if (text.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 240),
+              child: SingleChildScrollView(
+                child: SelectableText(
+                  text,
+                  style: typo.mono.copyWith(
+                    fontSize: 13.5,
+                    height: 1.4,
+                    color: isError ? colors.error : colors.text,
+                  ),
                 ),
               ),
             ),
-          ),
+          ],
+          for (final url in images) _buildImage(url),
         ],
       ),
     );

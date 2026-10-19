@@ -1,4 +1,5 @@
 import 'package:app/domain/session_state.dart';
+import 'package:app/ui/chat/widgets/chat_image.dart';
 import 'package:app/ui/chat/widgets/tool_request_card.dart';
 import 'package:app/ui/core/themes/themes.dart';
 import 'package:flutter/material.dart';
@@ -202,6 +203,46 @@ void main() {
       await tester.tap(find.byIcon(LucideIcons.chevronUp));
       await tester.pumpAndSettle();
       expect(find.text('Output'), findsNothing);
+    });
+
+    group('image in a tool result (read of a png/webp)', () {
+      // The extension embeds image blocks as `![image](data:…)` markdown.
+      const png =
+          'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+      const read = ToolEvent(
+        id: 'tc9',
+        toolCallId: 'tc9',
+        tool: 'read',
+        args: {'path': 'fig.png'},
+        status: ToolEventStatus.completed,
+        result: 'Read image file [image/png]\n![image](data:image/png;base64,$png)\n',
+      );
+
+      testWidgets('brief pill shows the picture without expanding', (tester) async {
+        await tester.pumpWidget(_wrap(const ToolRequestCard(tool: read, brief: true)));
+        expect(find.byType(ChatImage), findsOneWidget);
+        expect(find.textContaining('base64'), findsNothing);
+      });
+
+      testWidgets('full card shows the picture and the text, never the base64', (tester) async {
+        await tester.pumpWidget(_wrap(const ToolRequestCard(tool: read)));
+        expect(find.byType(ChatImage), findsOneWidget);
+        expect(find.text('Read image file [image/png]'), findsOneWidget);
+        expect(find.textContaining('base64'), findsNothing);
+      });
+
+      testWidgets('a failed tool shows no image', (tester) async {
+        const failed = ToolEvent(
+          id: 'tc9',
+          toolCallId: 'tc9',
+          tool: 'read',
+          args: {'path': 'fig.png'},
+          status: ToolEventStatus.failed,
+          error: 'ENOENT: fig.png',
+        );
+        await tester.pumpWidget(_wrap(const ToolRequestCard(tool: failed, brief: true)));
+        expect(find.byType(ChatImage), findsNothing);
+      });
     });
 
     group('bash Full card (terminal / web parity)', () {

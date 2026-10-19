@@ -487,7 +487,9 @@ class _ChatPageState extends State<ChatPage> {
                 'mcp__grep',
                 'mcp__glob',
               };
-              return !readOnlyTools.contains(name);
+              // A read that returned a picture stays: the terminal shows it.
+              return !readOnlyTools.contains(name) ||
+                  toolResultImages(m.result).isNotEmpty;
             }
             return true;
           }

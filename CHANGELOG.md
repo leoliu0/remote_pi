@@ -26,6 +26,7 @@ and 27 (see [`plan/`](plan/) directory for design history).
 
 ### Fixed
 
+- The app now shows images that tools return, such as a `read` of a png or webp, as in the terminal. In brief mode the picture sits under the tool pill, and those `read` calls are no longer hidden. The full card shows the picture instead of its base64 text. The extension already sent the image; only the app changed.
 - `ask` with a paired phone connected no longer leaves the terminal without a selector: the native dialog opens alongside the mobile modal and the first answer wins, dismissing the other. Previously the question went only to the phone and the terminal showed it as plain text.
 - Mobile prompts now inject directly into the interactive terminal editor and input pipeline (`_tryExecuteTerminalInput`), executing natively as interactive turns or steers instead of bypassing the prompt and steering background subagents.
 - Mobile prompts no longer remain queued without starting an idle OMP session.

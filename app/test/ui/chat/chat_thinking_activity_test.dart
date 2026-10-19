@@ -200,6 +200,43 @@ void main() {
     await unmount(tester);
   });
 
+  testWidgets('brief mode keeps a read whose result is an image', (
+    tester,
+  ) async {
+    const png =
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+    final prefs = Preferences(AppDatabase.memory());
+    await pumpChat(
+      tester,
+      state: const ChatReady(
+        messages: [
+          UserMsg(id: 'u1', text: 'show me'),
+          ToolEvent(
+            id: 't1',
+            toolCallId: 't1',
+            tool: 'read',
+            args: {'path': 'notes.md'},
+            status: ToolEventStatus.completed,
+            result: 'plain text',
+          ),
+          ToolEvent(
+            id: 't2',
+            toolCallId: 't2',
+            tool: 'read',
+            args: {'path': 'fig.png'},
+            status: ToolEventStatus.completed,
+            result: 'Read image file [image/png]\n![image](data:image/png;base64,$png)\n',
+          ),
+        ],
+      ),
+      prefs: prefs,
+    );
+    expect(prefs.toolCallDisplay, ToolCallDisplay.brief);
+    expect(find.textContaining('notes.md'), findsNothing);
+    expect(find.textContaining('fig.png'), findsOneWidget);
+    await unmount(tester);
+  });
+
   testWidgets('activity panel sits just above the input bar', (tester) async {
     final prefs = Preferences(AppDatabase.memory());
     await pumpChat(
