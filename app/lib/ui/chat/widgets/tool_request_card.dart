@@ -25,10 +25,37 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 /// png) inside the result text as `![image](data:image/…;base64,…)`.
 final _resultImage = RegExp(r'!\[[^\]\n]*\]\((data:image/[^)\s]+)\)');
 
-/// Data URIs of the images in a tool result; empty when it has none.
-List<String> toolResultImages(Object? result) => result is String
-    ? [for (final m in _resultImage.allMatches(result)) m.group(1)!]
-    : const [];
+/// Data URIs of the pictures a tool returned; empty when it returned none or
+/// failed. The terminal shows these in every tool display mode.
+List<String> toolResultImages(ToolEvent tool) {
+  final result = tool.result;
+  if (tool.error != null || result is! String) return const [];
+  return [for (final m in _resultImage.allMatches(result)) m.group(1)!];
+}
+
+/// The pictures a tool returned, stacked; also shown alone when tool calls
+/// are hidden.
+class ToolResultImages extends StatelessWidget {
+  final List<String> urls;
+
+  const ToolResultImages(this.urls, {super.key});
+
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      for (final url in urls)
+        Padding(
+          padding: const EdgeInsets.only(top: 6),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 360),
+            child: ChatImage(url: url, altText: 'image'),
+          ),
+        ),
+    ],
+  );
+}
 
 class ToolRequestCard extends StatefulWidget {
   final ToolEvent tool;
@@ -115,17 +142,6 @@ class _ToolRequestCardState extends State<ToolRequestCard> {
   bool get _isBash => tool.tool.toLowerCase() == 'bash';
 
   bool get _isTodo => tool.tool.toLowerCase() == 'todo';
-
-  List<String> get _images =>
-      tool.error == null ? toolResultImages(tool.result) : const [];
-
-  Widget _buildImage(String url) => Padding(
-    padding: const EdgeInsets.only(top: 6),
-    child: ConstrainedBox(
-      constraints: const BoxConstraints(maxHeight: 360),
-      child: ChatImage(url: url, altText: 'image'),
-    ),
-  );
 
   bool get _isRunning =>
       tool.status == ToolEventStatus.pending ||
@@ -291,14 +307,14 @@ class _ToolRequestCardState extends State<ToolRequestCard> {
   }
 
   Widget _buildBriefPill(BuildContext context, Color color) {
-    final images = _images;
+    final images = toolResultImages(tool);
     final pill = _buildBriefRow(context, color);
     if (images.isEmpty) return pill;
     // Pictures stay visible without expanding, as in the terminal.
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
-      children: [pill, for (final url in images) _buildImage(url)],
+      children: [pill, ToolResultImages(images)],
     );
   }
 
@@ -500,7 +516,7 @@ class _ToolRequestCardState extends State<ToolRequestCard> {
   Widget? _buildResultBlock(BuildContext context) {
     final output = _extractResultText(tool.result, tool.error);
     if (output == null || output.isEmpty) return null;
-    final images = _images;
+    final images = toolResultImages(tool);
     final text = output.replaceAll(_resultImage, '').trim();
 
     final colors = context.colors;
@@ -559,7 +575,7 @@ class _ToolRequestCardState extends State<ToolRequestCard> {
               ),
             ),
           ],
-          for (final url in images) _buildImage(url),
+          if (images.isNotEmpty) ToolResultImages(images),
         ],
       ),
     );

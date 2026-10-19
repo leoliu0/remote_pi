@@ -18,6 +18,7 @@ import 'package:app/ui/chat/chat_page.dart';
 import 'package:app/ui/chat/states/chat_state.dart';
 import 'package:app/ui/chat/viewmodels/chat_viewmodel.dart';
 import 'package:app/ui/chat/voice/viewmodels/voice_input_viewmodel.dart';
+import 'package:app/ui/chat/widgets/chat_image.dart';
 import 'package:app/ui/chat/widgets/input_bar.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -200,40 +201,52 @@ void main() {
     await unmount(tester);
   });
 
+  // A text read and a read that returned a picture: the extension embeds a
+  // tool result's image blocks as `![image](data:…)` markdown.
+  const png =
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+  const imageReads = ChatReady(
+    messages: [
+      UserMsg(id: 'u1', text: 'show me'),
+      ToolEvent(
+        id: 't1',
+        toolCallId: 't1',
+        tool: 'read',
+        args: {'path': 'notes.md'},
+        status: ToolEventStatus.completed,
+        result: 'plain text',
+      ),
+      ToolEvent(
+        id: 't2',
+        toolCallId: 't2',
+        tool: 'read',
+        args: {'path': 'fig.png'},
+        status: ToolEventStatus.completed,
+        result: 'Read image file [image/png]\n![image](data:image/png;base64,$png)\n',
+      ),
+    ],
+  );
+
   testWidgets('brief mode keeps a read whose result is an image', (
     tester,
   ) async {
-    const png =
-        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
     final prefs = Preferences(AppDatabase.memory());
-    await pumpChat(
-      tester,
-      state: const ChatReady(
-        messages: [
-          UserMsg(id: 'u1', text: 'show me'),
-          ToolEvent(
-            id: 't1',
-            toolCallId: 't1',
-            tool: 'read',
-            args: {'path': 'notes.md'},
-            status: ToolEventStatus.completed,
-            result: 'plain text',
-          ),
-          ToolEvent(
-            id: 't2',
-            toolCallId: 't2',
-            tool: 'read',
-            args: {'path': 'fig.png'},
-            status: ToolEventStatus.completed,
-            result: 'Read image file [image/png]\n![image](data:image/png;base64,$png)\n',
-          ),
-        ],
-      ),
-      prefs: prefs,
-    );
+    await pumpChat(tester, state: imageReads, prefs: prefs);
     expect(prefs.toolCallDisplay, ToolCallDisplay.brief);
     expect(find.textContaining('notes.md'), findsNothing);
     expect(find.textContaining('fig.png'), findsOneWidget);
+    await unmount(tester);
+  });
+
+  testWidgets('hidden mode still shows the picture, without the tool card', (
+    tester,
+  ) async {
+    final prefs = Preferences(AppDatabase.memory());
+    await prefs.setToolCallDisplay(ToolCallDisplay.hidden);
+    await pumpChat(tester, state: imageReads, prefs: prefs);
+    expect(find.byType(ChatImage), findsOneWidget);
+    expect(find.textContaining('fig.png'), findsNothing);
+    expect(find.text('READ'), findsNothing);
     await unmount(tester);
   });
 

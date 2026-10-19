@@ -473,6 +473,9 @@ class _ChatPageState extends State<ChatPage> {
       ChatReady(:final messages, :final streaming) => () {
         final visible = messages.where((m) {
           if (m is ToolEvent) {
+            // A picture a tool returned stays in every mode, as in the
+            // terminal; hidden mode shows only the picture.
+            if (toolResultImages(m).isNotEmpty) return true;
             if (toolDisplay == ToolCallDisplay.hidden) return false;
             if (toolDisplay == ToolCallDisplay.brief) {
               final name = m.tool.toLowerCase();
@@ -487,9 +490,7 @@ class _ChatPageState extends State<ChatPage> {
                 'mcp__grep',
                 'mcp__glob',
               };
-              // A read that returned a picture stays: the terminal shows it.
-              return !readOnlyTools.contains(name) ||
-                  toolResultImages(m.result).isNotEmpty;
+              return !readOnlyTools.contains(name);
             }
             return true;
           }
@@ -570,7 +571,7 @@ class _ChatPageState extends State<ChatPage> {
           streaming: streaming,
           isWorking: vm.isWorking,
           onDecide: (id, decision) => vm.approveTool(id, decision),
-          briefToolCalls: toolDisplay != ToolCallDisplay.full,
+          toolDisplay: toolDisplay,
           showThinking: showThinking,
           workingLabel: workingLabel,
           onCancel: onCancel,
@@ -796,7 +797,7 @@ class _MessageList extends StatelessWidget {
   final StreamingMessage? streaming;
   final bool isWorking;
   final void Function(String, ApproveDecision) onDecide;
-  final bool briefToolCalls;
+  final ToolCallDisplay toolDisplay;
   final bool showThinking;
 
   final String? workingLabel;
@@ -807,7 +808,7 @@ class _MessageList extends StatelessWidget {
     required this.streaming,
     required this.isWorking,
     required this.onDecide,
-    this.briefToolCalls = false,
+    this.toolDisplay = ToolCallDisplay.full,
     this.showThinking = true,
     this.workingLabel,
     this.onCancel,
@@ -856,10 +857,12 @@ class _MessageList extends StatelessWidget {
           child: switch (msg) {
             UserMsg() => UserBubble(msg),
             AssistantMsg() => AssistantBubble(msg, showThinking: showThinking),
+            ToolEvent() when toolDisplay == ToolCallDisplay.hidden =>
+              ToolResultImages(toolResultImages(msg)),
             ToolEvent() => ToolRequestCard(
                 tool: msg,
                 onDecide: onDecide,
-                brief: briefToolCalls,
+                brief: toolDisplay != ToolCallDisplay.full,
               ),
             CompactionMsg() => CompactionBubble(msg),
           },
